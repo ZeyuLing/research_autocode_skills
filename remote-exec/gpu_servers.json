@@ -1,0 +1,73 @@
+{
+  "_doc": "GPU 服务器列表。remote_exec.py 会读取此文件。新增/删除机器只需编辑这里。",
+  "ssh_defaults": {
+    "user": "root",
+    "port": 36000
+  },
+  "servers": [
+    {
+      "name": "A100-0",
+      "ip": "11.216.61.32",
+      "passwd": "rj1fWCdlKlU0fso,",
+      "gpu": "a100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 40
+    },
+    {
+      "name": "A100-1",
+      "ip": "11.216.73.34",
+      "passwd": "zb715XnLTRoflwS,",
+      "gpu": "a100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 40
+    },
+    {
+      "name": "V100-0",
+      "ip": "11.214.27.250",
+      "passwd": "vjbXcpgnP7WmFpJ,",
+      "gpu": "v100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 32
+    },
+    {
+      "name": "V100-1",
+      "ip": "11.213.38.249",
+      "passwd": "LysCzqc2WnnCpSC,",
+      "gpu": "v100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 32
+    },
+    {
+      "name": "A800-0",
+      "ip": "11.216.67.240",
+      "passwd": "t8CF8fOchFPOpT8,",
+      "gpu": "a800",
+      "gpu_count": 8,
+      "gpu_mem_gb": 80
+    },
+    {
+      "name": "A100-2",
+      "ip": "11.220.38.24",
+      "passwd": "dS4cGweZLpNmWcg,",
+      "gpu": "a100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 40
+    },
+    {
+      "name": "A100-3",
+      "ip": "11.220.5.102",
+      "passwd": "xMnFeFzE3h0Uvqh,",
+      "gpu": "a100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 40
+    },
+    {
+      "name": "A100-4",
+      "ip": "11.220.10.240",
+      "passwd": "l5Jv3YoHO9AMNf1,",
+      "gpu": "a100",
+      "gpu_count": 8,
+      "gpu_mem_gb": 40
+    }
+  ]
+}

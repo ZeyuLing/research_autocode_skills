@@ -1,0 +1,23 @@
+# OS & Editor
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Internal / private
+TaijiSkills/
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+
+# Node
+node_modules/
+
+# Nested git repos (already stripped)

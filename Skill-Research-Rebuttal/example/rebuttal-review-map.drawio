@@ -1,0 +1,207 @@
+<mxfile host="Electron" agent="draw.io" version="28.2.7">
+  <diagram name="Review整理" id="rebuttal-map">
+    <mxGraphModel dx="2954" dy="1762" grid="0" gridSize="10" guides="1"
+      tooltips="1" connect="1" arrows="1" fold="1" page="0"
+      pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ============ EDGES (rendered behind boxes) ============ -->
+
+        <!-- Root → Reviewer edges -->
+        <mxCell id="edge-root-r1" style="edgeStyle=orthogonalEdgeStyle;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="root" target="r1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-root-r2" style="edgeStyle=orthogonalEdgeStyle;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="root" target="r2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-root-r3" style="edgeStyle=orthogonalEdgeStyle;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="root" target="r3">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R1 → Category edges -->
+        <mxCell id="edge-r1-just" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1" target="r1-justification">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r1-contrib" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1" target="r1-contribution">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r1-eval" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1" target="r1-eval">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R1 Category → Leaf edges -->
+        <mxCell id="edge-r1-just-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1-justification" target="r1-just-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r1-contrib-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1-contribution" target="r1-contrib-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r1-eval-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r1-eval" target="r1-eval-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R2 → Category edges -->
+        <mxCell id="edge-r2-just" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r2" target="r2-justification">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r2-eval1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r2" target="r2-eval">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R2 Category → Leaf edges -->
+        <mxCell id="edge-r2-just-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r2-justification" target="r2-just-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r2-eval-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r2-eval" target="r2-eval-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r2-eval-leaf2" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r2-eval" target="r2-eval-leaf2">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R3 → Category edges -->
+        <mxCell id="edge-r3-just" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3" target="r3-justification">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r3-method" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3" target="r3-method">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r3-results" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3" target="r3-results">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- R3 Category → Leaf edges -->
+        <mxCell id="edge-r3-just-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3-justification" target="r3-just-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r3-method-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3-method" target="r3-method-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge-r3-results-leaf1" style="edgeStyle=orthogonalEdgeStyle;shape=connector;curved=1;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;entryX=0;entryY=0.5;entryDx=0;entryDy=0;strokeColor=default;align=center;verticalAlign=middle;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;endArrow=classic;" edge="1" parent="1" source="r3-results" target="r3-results-leaf1">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- ============ VERTICES ============ -->
+
+        <!-- Root node -->
+        <mxCell id="root" value="Reviewer&lt;div&gt;Weaknesses&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=13;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="-546" y="832" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ======== REVIEWER 1 (base Y=0) ======== -->
+        <mxCell id="r1" value="R1&lt;div&gt;(5; Cf=4)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="-194" y="174" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- R1 Categories -->
+        <mxCell id="r1-justification" value="Justification拆解" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="-319" width="421" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-contribution" value="贡献不足&lt;div&gt;(方法缺乏新知识：技术已被探索、方法是直接组合)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="-160" width="421" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-eval" value="评测不充分&lt;div&gt;(仅合成数据集，缺乏真实场景)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="0" width="421" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- R1 Leaf nodes -->
+        <mxCell id="r1-just-leaf1" value="R1&lt;div&gt;Novelty不足，&lt;/div&gt;&lt;div&gt;NeRF+Diffusion简单组合&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="-349" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-just-orig1" value="&quot;The method is a straightforward combination of NeRF and diffusion model. The novelty is limited as similar integration has been explored.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="-349" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r1-contrib-leaf1" value="R1&lt;div&gt;类似整合已被探索，&lt;/div&gt;&lt;div&gt;novelty有限&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="-190" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-contrib-orig1" value="&quot;The novelty is limited as similar integration has been explored.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="-190" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r1-eval-leaf1" value="R1&lt;div&gt;仅在合成数据集实验，&lt;/div&gt;&lt;div&gt;缺乏实际价值&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="601" y="-30" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r1-eval-orig1" value="&quot;Experiments are only conducted on synthetic datasets, which limits the practical value of this work.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="-30" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ======== REVIEWER 2 (base Y=850) ======== -->
+        <mxCell id="r2" value="R2&lt;div&gt;(6; Cf=3)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="-194" y="1024" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- R2 Categories -->
+        <mxCell id="r2-justification" value="Justification拆解" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="531" width="421" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-eval" value="评测不充分&lt;div&gt;(缺少重要baseline对比和完整ablation)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="690" width="421" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- R2 Leaf nodes -->
+        <mxCell id="r2-just-leaf1" value="R2&lt;div&gt;缺少Method-X对比&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="501" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-just-orig1" value="&quot;the paper lacks comparison with the recent Method-X (CVPR 2025).&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="501" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r2-eval-leaf1" value="R2&lt;div&gt;缺少Method-X&lt;/div&gt;&lt;div&gt;(CVPR 2025)对比&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="660" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-eval-orig1" value="&quot;the paper lacks comparison with the recent Method-X (CVPR 2025).&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="660" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r2-eval-leaf2" value="R2&lt;div&gt;Ablation不充分，&lt;/div&gt;&lt;div&gt;三模块只消融了一个&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="601" y="740" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r2-eval-orig2" value="&quot;The ablation study is insufficient — only one component is ablated while the method has three major modules.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="740" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- ======== REVIEWER 3 (base Y=1700) ======== -->
+        <mxCell id="r3" value="R3&lt;div&gt;(4; Cf=5)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="-194" y="1874" width="120" height="60" as="geometry" />
+        </mxCell>
+
+        <!-- R3 Categories -->
+        <mxCell id="r3-justification" value="Justification拆解" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="1381" width="421" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-method" value="方法设计有问题&lt;div&gt;(静态场景假设不合理，限制real-world应用)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="1540" width="421" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-results" value="实验效果不够好&lt;div&gt;(PSNR提升仅0.5dB，改进marginal)&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="72" y="1699" width="421" height="80" as="geometry" />
+        </mxCell>
+
+        <!-- R3 Leaf nodes -->
+        <mxCell id="r3-just-leaf1" value="R3&lt;div&gt;静态假设不合理，&lt;/div&gt;&lt;div&gt;限制实际应用&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="1351" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-just-orig1" value="&quot;The assumption that scenes are static is unrealistic for most real-world applications.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="1351" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r3-method-leaf1" value="R3&lt;div&gt;静态场景假设&lt;/div&gt;&lt;div&gt;对real-world不切实际&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;labelBackgroundColor=none;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="601" y="1510" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-method-orig1" value="&quot;The assumption that scenes are static is unrealistic for most real-world applications.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="1510" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="r3-results-leaf1" value="R3&lt;div&gt;仅提升0.5dB PSNR，&lt;/div&gt;&lt;div&gt;改进marginal&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fontFamily=Helvetica;fontSize=11;fontColor=default;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="601" y="1669" width="205" height="60" as="geometry" />
+        </mxCell>
+        <mxCell id="r3-results-orig1" value="&quot;The improvement over the baseline is only 0.5dB PSNR, which is marginal.&quot;" style="text;html=1;whiteSpace=wrap;strokeColor=none;fillColor=none;align=left;verticalAlign=top;rounded=0;fontFamily=Helvetica;fontSize=9;fontColor=#888888;labelBackgroundColor=default;" vertex="1" parent="1">
+          <mxGeometry x="848" y="1669" width="250" height="60" as="geometry" />
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
