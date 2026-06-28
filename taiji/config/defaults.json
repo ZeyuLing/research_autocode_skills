@@ -1,0 +1,39 @@
+{
+    "base_config": {
+        "mount_ceph_business_flag": "AILab_DHA",
+        "extra_plat_business": "AILab_DHC_DD",
+        "is_elasticity": false,
+        "exit_cmd": "",
+        "init_cmd": "",
+        "exec_start_in_all_mpi_pods": true,
+        "enable_evicted_pulled_up": false,
+        "enable_evicted_end_task": true,
+        "keep_alive": false,
+        "cuda_version": "11.0",
+        "report_period": 60,
+        "model_local_file_path": "/apdcephfs_cq11/share_1467498/home/chingshuai/Template/empty",
+        "project_id": 0
+    },
+    "elastic_config": {
+        "is_elasticity": true,
+        "priority_level": "LOW",
+        "enable_evicted_pulled_up": true,
+        "elastic_level": 1
+    },
+    "rdma_config": {
+        "enable_rdma": true,
+        "rdma_in_same_module": true
+    },
+    "hunyuan_envs": {
+        "HUNYUAN_TASK_CATEGORY": "OTHERS",
+        "HUNYUAN_TASK_DESCRIPTION": "训练3D数字人驱动模型",
+        "HUNYUAN_RESOURCE_USAGE": "experiment",
+        "HUNYUAN_OUTPUT_BASE_MODEL": "200M-dense-a2hv0.1",
+        "HUNYUAN_TASK_DETAIL_CATEGORY": "多模态数字人-预训练：3D数字人a2h驱动训练"
+    },
+    "daemon": {
+        "poll_interval": 120,
+        "max_retries": 3,
+        "webhook_url": ""
+    }
+}

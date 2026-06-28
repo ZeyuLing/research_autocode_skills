@@ -1,0 +1,1342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}Orbit — Agent Hub{% endblock %}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+    <style>
+        :root {
+            --bg-cream:#faf8f5; --nav-dark:#111820; --nav-border:#1f2d3d;
+            --accent:#2d7dd2; --accent-green:#2d5a2d; --text-main:#2c2c2c;
+        }
+        body { background:var(--bg-cream); color:var(--text-main); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif; }
+        .navbar { background:var(--nav-dark)!important; border-bottom:1px solid var(--nav-border); }
+        .navbar-brand { font-weight:800; font-size:1.05rem; letter-spacing:-.01em; }
+        .navbar-brand .brand-sub { font-weight:400; font-size:.7rem; color:rgba(255,255,255,.4); letter-spacing:.06em; text-transform:uppercase; margin-left:6px; }
+        .nav-link-custom { color:rgba(255,255,255,.65)!important; font-size:.83rem; }
+        .nav-link-custom:hover,.nav-link-custom.active { color:#fff!important; }
+
+        /* Status badges */
+        .badge-pending{background:#f0ad4e;color:#fff} .badge-in_progress{background:#0d6efd;color:#fff} .badge-idle{background:#8b5cf6;color:#fff}
+        .badge-completed{background:#198754;color:#fff} .badge-failed{background:#dc3545;color:#fff}
+        .badge-decomposed{background:#6c757d;color:#fff}
+        .badge-in_progress{animation:pulse 2s ease-in-out infinite}
+        .badge-idle{animation:pulse 2s ease-in-out infinite}
+        @keyframes pulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+        /* Execution log pills (system messages in conversation) */
+        .log-pill{display:inline-block;padding:3px 12px;border-radius:20px;font-size:.75rem;font-weight:500;letter-spacing:.01em;line-height:1.4}
+        .log-phase      {background:#e3f2fd;color:#1565c0;border:1px solid #90caf9}
+        .log-agent_start{background:#e8f5e9;color:#2e7d32;border:1px solid #a5d6a7}
+        .log-agent_done {background:#e8f5e9;color:#1b5e20;border:1px solid #66bb6a;font-weight:600}
+        .log-agent_fail {background:#ffebee;color:#b71c1c;border:1px solid #ef9a9a}
+        .log-progress   {background:#f3e5f5;color:#6a1b9a;border:1px solid #ce93d8}
+        .log-error      {background:#fff3e0;color:#e65100;border:1px solid #ffcc80}
+        .log-review     {background:#f1f8e9;color:#33691e;border:1px solid #aed581}
+        .log-info       {background:#f5f5f5;color:#757575;border:1px solid #e0e0e0}
+
+        /* Relation badges */
+        .badge-blocks{background:#6f42c1;color:#fff} .badge-conflicts{background:#fd7e14;color:#fff}
+        .badge-related{background:#20c997;color:#fff}
+
+        /* Context entry type badges */
+        .badge-insight{background:#0dcaf0;color:#000} .badge-decision{background:#6f42c1;color:#fff}
+        .badge-warning{background:#ffc107;color:#000} .badge-note{background:#adb5bd;color:#000}
+
+        /* Skill badge */
+        .skill-badge { background:linear-gradient(135deg,#667eea,#764ba2); color:#fff; font-size:.7rem; border-radius:4px; padding:1px 6px; }
+
+        .blocked-indicator{display:inline-flex;align-items:center;gap:4px;background:#fff3cd;color:#856404;border:1px solid #ffc107;border-radius:6px;padding:1px 8px;font-size:.75rem}
+        .conflict-indicator{display:inline-flex;align-items:center;gap:4px;background:#ffe8d6;color:#e65100;border:1px solid #fd7e14;border-radius:6px;padding:1px 8px;font-size:.75rem}
+
+        .progress-overview{height:28px;border-radius:14px;overflow:hidden;background:#e9ecef}
+        .progress-overview .progress-bar{transition:width .5s ease}
+
+        .stat-card{border:none;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.06);transition:transform .15s}
+        .stat-card:hover{transform:translateY(-2px)}
+        .stat-card .stat-num{font-size:2rem;font-weight:700;line-height:1}
+        .stat-card .stat-label{font-size:.85rem;color:#888;margin-top:4px}
+
+        .task-table{background:#fff;border-radius:12px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,.06)}
+        .task-table thead th{background:#f8f9fa;border-bottom:2px solid #dee2e6;font-weight:600;font-size:.85rem;text-transform:uppercase;letter-spacing:.03em;color:#666}
+        .task-row-subtask td:first-child{padding-left:2.5rem!important}
+        .task-row-subtask td:first-child::before{content:"↳ ";color:#aaa}
+        .task-row-blocked{background:#fffbeb!important}
+        .task-row-conflict{background:#fff5ee!important}
+
+        /* IDE-style task creation modal */
+        .create-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:9000;display:none;align-items:flex-start;justify-content:center;padding-top:10vh;}
+        .create-modal-overlay.show{display:flex;}
+        .create-modal{background:#fff;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,.25);width:min(720px,95vw);overflow:hidden;}
+        .create-modal-header{background:#1e2836;padding:12px 16px;display:flex;align-items:center;justify-content:space-between;}
+        .create-modal-header h6{color:#fff;margin:0;font-size:.88rem;display:flex;align-items:center;gap:8px;}
+        .create-modal-body{padding:16px;}
+        .create-modal-footer{padding:10px 16px;background:#f8f9fa;border-top:1px solid #e9ecef;display:flex;align-items:center;gap:10px;justify-content:space-between;}
+
+        /* Project selector in modal */
+        .proj-select-row{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;}
+        .proj-select-chip{display:inline-flex;align-items:center;gap:5px;padding:4px 12px;border-radius:20px;font-size:.78rem;cursor:pointer;border:2px solid transparent;background:#f0f0f0;color:#555;transition:all .12s;white-space:nowrap;}
+        .proj-select-chip:hover{background:#e4e8f0;}
+        .proj-select-chip.active{color:#fff;}
+        .proj-dot{display:inline-block;width:8px;height:8px;border-radius:50%;flex-shrink:0;}
+
+        /* Textarea in modal */
+        #create-desc{font-size:.95rem;line-height:1.6;resize:vertical;min-height:80px;border:1.5px solid #dee2e6;border-radius:8px;padding:10px 12px;font-family:inherit;transition:border-color .15s;}
+        #create-desc:focus{border-color:#2d7dd2;outline:none;box-shadow:0 0 0 3px rgba(45,125,210,.12);}
+
+        /* Slash autocomplete */
+        .slash-dropdown{position:absolute;bottom:100%;left:0;right:0;background:#fff;border:1px solid #dee2e6;border-radius:8px 8px 0 0;box-shadow:0 -4px 12px rgba(0,0,0,.1);max-height:240px;overflow-y:auto;display:none;z-index:100}
+        .slash-dropdown.show{display:block}
+        .slash-item{padding:8px 12px;cursor:pointer;font-size:.9rem;border-bottom:1px solid #f0f0f0}
+        .slash-item:hover,.slash-item.active{background:#f0f7ff}
+        .slash-item .slash-name{font-weight:600;color:var(--accent-green)}
+        .slash-item .slash-desc{font-size:.8rem;color:#888;margin-top:2px}
+
+        /* Quick-create bar (collapsed) */
+        .quick-create-bar{background:#fff;border-radius:10px;box-shadow:0 1px 6px rgba(0,0,0,.08);padding:10px 14px;cursor:pointer;display:flex;align-items:center;gap:10px;border:2px solid transparent;transition:border-color .15s,box-shadow .15s;margin-bottom:18px;}
+        .quick-create-bar:hover{border-color:#2d7dd2;box-shadow:0 2px 12px rgba(45,125,210,.12);}
+        .quick-create-bar .qcb-placeholder{color:#aaa;font-size:.9rem;flex:1;}
+        .quick-create-bar .qcb-hints{display:flex;gap:6px;flex-wrap:wrap;}
+
+        /* Filter tabs */
+        .filter-tabs .nav-link{border-radius:20px;padding:4px 16px;font-size:.9rem;color:#666}
+        .filter-tabs .nav-link.active{background:var(--accent-green);color:#fff}
+        .filter-tabs .nav-link:not(.active):hover{background:#e9ecef}
+
+        .toast-container{position:fixed;top:80px;right:20px;z-index:9999}
+        .elapsed-time{font-family:'Courier New',monospace;font-size:.8rem;color:#0d6efd}
+        .btn-action{padding:2px 8px;font-size:.8rem;border-radius:6px}
+
+        /* Floating task island */
+        .float-island{position:fixed;bottom:20px;right:20px;z-index:1050;width:320px;max-height:360px;background:#fff;border:1px solid #e0e0e0;border-radius:12px;box-shadow:0 4px 24px rgba(0,0,0,.12);font-size:.82rem;overflow:hidden;transition:all .2s ease}
+        .float-island.collapsed .float-island-body{display:none}
+        .float-island.collapsed{width:auto;max-height:none;border-radius:24px}
+        .float-island-header{padding:8px 14px;background:var(--nav-dark);color:#fff;cursor:pointer;display:flex;justify-content:space-between;align-items:center;font-weight:600;font-size:.8rem;user-select:none}
+        .float-island-body{max-height:280px;overflow-y:auto;padding:6px 0}
+        .island-task{display:flex;align-items:center;padding:6px 14px;text-decoration:none;color:var(--text-main);border-bottom:1px solid #f0f0f0;gap:8px;transition:background .15s}
+        .island-task:hover{background:#f8f6f3}
+        .island-task:last-child{border-bottom:none}
+        .island-task-id{font-weight:700;color:var(--accent);white-space:nowrap;font-size:.78rem}
+        .island-task-desc{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .island-dot-running{width:8px;height:8px;border-radius:50%;background:#0d6efd;animation:pulse 2s infinite;flex-shrink:0}
+        .island-dot-idle{width:8px;height:8px;border-radius:50%;background:#8b5cf6;animation:pulse 1.5s infinite;flex-shrink:0}
+        .island-badge-idle{font-size:.65rem;padding:1px 6px;border-radius:8px;background:#8b5cf6;color:#fff;white-space:nowrap;flex-shrink:0}
+
+        .relation-card{border-radius:10px;border:1px solid #e9ecef;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.04)}
+        .relation-item{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid #f0f0f0;font-size:.9rem}
+        .relation-item:last-child{border-bottom:none}
+
+        /* Context panel */
+        .context-entry{padding:6px 12px;border-left:3px solid #dee2e6;margin-bottom:6px;font-size:.85rem;background:#fff;border-radius:0 6px 6px 0}
+        .context-entry.insight{border-left-color:#0dcaf0}
+        .context-entry.decision{border-left-color:#6f42c1}
+        .context-entry.warning{border-left-color:#ffc107}
+        .context-entry.note{border-left-color:#adb5bd}
+
+        /* Project color dot */
+        .proj-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:.7rem;color:#fff;white-space:nowrap;}
+
+        /* Project panel in navbar */
+        .proj-list-item{display:flex;align-items:flex-start;gap:10px;padding:8px 14px;cursor:pointer;border-bottom:1px solid #f0f0f0;transition:background .12s}
+        .proj-list-item:last-child{border-bottom:none}
+        .proj-list-item:hover{background:#f5f9ff}
+        .proj-list-item.active-proj{background:#eef3ff}
+        .proj-minibar{height:4px;border-radius:2px;margin-top:3px;background:#eee;overflow:hidden}
+        .proj-minibar-inner{height:100%;border-radius:2px;transition:width .3s}
+
+        /* Path autocomplete */
+        #path-suggest-box{display:none;position:fixed;z-index:99999;background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:4px 0;min-width:320px;max-height:240px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.15);font-size:.82rem;}
+        #path-suggest-cwd{padding:3px 12px 4px;color:#888;font-size:.7rem;border-bottom:1px solid #f0f0f0;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+        #path-suggest-list{list-style:none;margin:0;padding:0;}
+
+        /* Claude config panel */
+        .cfg-row{display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #f0f0f0;font-size:.82rem;}
+        .cfg-row:last-child{border-bottom:none;}
+        .cfg-key{color:#888;width:130px;flex-shrink:0;}
+        .cfg-val{font-family:monospace;color:#1a2e1a;word-break:break-all;}
+        .cfg-pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:.72rem;background:#e8f0fe;color:#1a3c8a;}
+        .model-tag{display:inline-flex;align-items:center;gap:5px;background:#1e2836;color:#7dd3fc;border-radius:6px;padding:3px 10px;font-family:monospace;font-size:.78rem;}
+    </style>
+    {% block extra_head %}{% endblock %}
+</head>
+<body>
+    <!-- ══ Navbar ══ -->
+    <nav class="navbar navbar-dark navbar-expand-lg mb-4">
+        <div class="container-fluid">
+            <a class="navbar-brand" href="/">
+                <i class="bi bi-asterisk text-info"></i> Orbit
+                <span class="brand-sub">Skip from terminal</span>
+            </a>
+            <div class="d-flex align-items-center gap-2">
+                <a href="/skills?p={{ project_slug }}" class="nav-link-custom {% if request.path == '/skills' %}active{% endif %}"><i class="bi bi-lightning"></i> Skills</a>
+                <a href="/context?p={{ project_slug }}" class="nav-link-custom {% if request.path == '/context' %}active{% endif %}"><i class="bi bi-journal-text"></i> 笔记</a>
+
+                <!-- Claude Config indicator (compact) -->
+                <button class="btn btn-sm btn-outline-light d-flex align-items-center gap-1 px-2" id="cfg-nav-btn"
+                    data-bs-toggle="dropdown" data-bs-auto-close="outside" style="font-size:.75rem;border-color:rgba(255,255,255,.25);">
+                    <i class="bi bi-cpu"></i>
+                    <span id="cfg-model-short" class="text-info" style="font-family:monospace;">…</span>
+                </button>
+                <div class="dropdown-menu dropdown-menu-end shadow p-0" style="min-width:380px;max-height:520px;overflow-y:auto;border-radius:10px;">
+                    <div class="px-3 py-2 border-bottom" style="background:#1e2836;border-radius:10px 10px 0 0;">
+                        <div class="d-flex align-items-center justify-content-between">
+                            <span class="text-white fw-semibold" style="font-size:.85rem;"><i class="bi bi-cpu me-1 text-info"></i>Claude Code 配置</span>
+                            <span class="badge bg-secondary" id="cfg-version-badge" style="font-family:monospace;font-size:.68rem;"></span>
+                        </div>
+                    </div>
+                    <div class="p-3" id="cfg-panel-content">
+                        <div class="text-center text-muted py-3"><i class="bi bi-arrow-repeat"></i> 加载中…</div>
+                    </div>
+                </div>
+
+                <!-- Project management dropdown -->
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-light dropdown-toggle d-flex align-items-center gap-2 px-2"
+                        type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" style="font-size:.8rem;">
+                        <span class="proj-dot" style="background:{{ project_color }};"></span>
+                        <span>{{ project_name }}</span>
+                        {% if all_projects|length > 1 %}<span class="badge bg-secondary ms-1" style="font-size:.65rem;">{{ all_projects|length }}</span>{% endif %}
+                    </button>
+                    <div class="dropdown-menu dropdown-menu-end shadow" style="min-width:340px;max-height:500px;overflow-y:auto;padding:0;">
+                        <div class="px-3 py-2 border-bottom d-flex justify-content-between align-items-center" style="background:#f8f9fa;border-radius:6px 6px 0 0;">
+                            <span class="fw-semibold" style="font-size:.85rem;"><i class="bi bi-folder2-open me-1"></i>项目管理</span>
+                            <small class="text-muted">{{ all_projects|length }} 个</small>
+                        </div>
+                        {% for p in all_projects %}
+                        <div class="proj-list-item {% if p.slug == project_slug %}active-proj{% endif %}" onclick="switchProject('{{ p.slug }}')">
+                            <span class="proj-dot mt-1" style="background:{{ p.color }};"></span>
+                            <div style="flex:1;min-width:0;">
+                                <div class="d-flex justify-content-between align-items-center">
+                                    <strong style="font-size:.85rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="{{ p.path }}">{{ p.name }}</strong>
+                                    <span class="d-flex gap-1 ms-2 flex-shrink-0">
+                                        {% if p.counts.in_progress > 0 %}<span class="badge badge-in_progress" style="font-size:.6rem;">{{ p.counts.in_progress }}</span>{% endif %}
+                                        {% if p.counts.pending > 0 %}<span class="badge badge-pending" style="font-size:.6rem;">{{ p.counts.pending }}</span>{% endif %}
+                                        {% if p.counts.completed > 0 %}<span class="badge badge-completed" style="font-size:.6rem;">{{ p.counts.completed }}</span>{% endif %}
+                                    </span>
+                                </div>
+                                <div class="text-muted" style="font-size:.7rem;font-family:monospace;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{{ p.path }}</div>
+                                {% if p.counts.total > 0 %}
+                                <div class="proj-minibar">
+                                    <div class="proj-minibar-inner" style="width:{{ ((p.counts.completed / p.counts.total * 100)|round|int) if p.counts.total > 0 else 0 }}%;background:{{ p.color }};opacity:.7;"></div>
+                                </div>
+                                {% endif %}
+                            </div>
+                            <button class="btn btn-sm btn-link text-muted p-0 ms-1 flex-shrink-0" title="移除"
+                                onclick="event.stopPropagation();removeProject('{{ p.slug }}','{{ p.name }}')">
+                                <i class="bi bi-x"></i>
+                            </button>
+                        </div>
+                        {% endfor %}
+                        <div class="px-3 py-2 border-top" style="background:#fafafa;">
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" id="add-project-path" placeholder="粘贴路径或按↓浏览目录"
+                                    autocomplete="off"
+                                    onkeydown="projectInputKeydown(event)"
+                                    oninput="projectPathSuggest(this.value)"
+                                    onfocus="if(!this.value)projectPathSuggest('')">
+                                <button class="btn btn-outline-success" onclick="addProject()"><i class="bi bi-folder-plus"></i> 添加</button>
+                            </div>
+                            <div id="path-suggest-box">
+                                <div id="path-suggest-cwd"></div>
+                                <ul id="path-suggest-list"></ul>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <button class="btn btn-sm btn-outline-light px-2" onclick="doSync()" title="Sync"><i class="bi bi-arrow-down-circle"></i></button>
+                <span class="badge bg-light text-dark" id="auto-refresh-badge" style="font-size:.7rem;"><i class="bi bi-arrow-repeat"></i> <span id="refresh-countdown">5</span>s</span>
+            </div>
+        </div>
+    </nav>
+
+    <!-- ══ IDE-style Task Create Modal ══ -->
+    <div class="create-modal-overlay" id="create-modal-overlay" onclick="if(event.target===this)closeCreateModal()">
+        <div class="create-modal" id="create-modal">
+            <div class="create-modal-header">
+                <h6><i class="bi bi-plus-circle text-info"></i> 新建任务
+                    <span class="badge bg-secondary ms-1" style="font-size:.68rem;font-weight:400;">Ctrl+N</span>
+                </h6>
+                <button class="btn btn-sm btn-link text-white p-0" onclick="closeCreateModal()"><i class="bi bi-x-lg"></i></button>
+            </div>
+            <div class="create-modal-body" style="max-height:75vh;overflow-y:auto;">
+
+                <!-- ① Project selector -->
+                <div class="mb-3">
+                    <label class="text-muted mb-1 d-block" style="font-size:.78rem;"><i class="bi bi-folder2 me-1"></i>目标项目</label>
+                    <div class="proj-select-row" id="modal-proj-chips">
+                        {% for p in all_projects %}
+                        <span class="proj-select-chip {% if p.slug == project_slug %}active{% endif %}"
+                            data-slug="{{ p.slug }}" data-name="{{ p.name }}" data-color="{{ p.color }}"
+                            style="{% if p.slug == project_slug %}background:{{ p.color }};color:#fff;{% endif %}"
+                            onclick="modalSelectProject(this,'{{ p.slug }}','{{ p.name }}','{{ p.color }}')">
+                            <span class="proj-dot" style="background:{% if p.slug == project_slug %}rgba(255,255,255,.6){% else %}{{ p.color }}{% endif %};"></span>
+                            {{ p.name }}
+                        </span>
+                        {% endfor %}
+                        <!-- Add project inline -->
+                        <span class="proj-select-chip" id="modal-add-proj-toggle"
+                            style="border:1.5px dashed #bbb;background:transparent;color:#888;"
+                            onclick="toggleModalAddProj()">
+                            <i class="bi bi-plus" style="font-size:.8rem;"></i> 新项目
+                        </span>
+                    </div>
+                    <!-- Inline add-project panel (collapsed by default) -->
+                    <div id="modal-add-proj-panel" style="display:none;margin-top:8px;padding:10px 12px;background:#f8f9fa;border-radius:8px;border:1px solid #e9ecef;">
+                        <div style="font-size:.78rem;color:#555;margin-bottom:6px;"><i class="bi bi-folder-plus me-1"></i>添加新项目目录</div>
+                        <div class="input-group input-group-sm" style="position:relative;">
+                            <input type="text" class="form-control" id="modal-add-proj-path"
+                                placeholder="输入或浏览路径，如 /data/home/zeyuling/myproject"
+                                autocomplete="off"
+                                onkeydown="modalProjInputKeydown(event)"
+                                oninput="modalPathSuggest(this.value)"
+                                onfocus="if(!this.value)modalPathSuggest('')">
+                            <button class="btn btn-outline-success" onclick="modalAddProject()">
+                                <i class="bi bi-check-lg"></i> 添加并选中
+                            </button>
+                        </div>
+                        <div id="modal-path-suggest-box" style="display:none;position:fixed;z-index:99999;background:#fff;border:1px solid #dee2e6;border-radius:6px;padding:4px 0;min-width:320px;max-height:200px;overflow-y:auto;box-shadow:0 6px 20px rgba(0,0,0,.15);font-size:.82rem;">
+                            <div id="modal-path-suggest-cwd" style="padding:3px 12px 4px;color:#888;font-size:.7rem;border-bottom:1px solid #f0f0f0;font-family:monospace;"></div>
+                            <ul id="modal-path-suggest-list" style="list-style:none;margin:0;padding:0;"></ul>
+                        </div>
+                        <div class="mt-1 text-muted" style="font-size:.7rem;">按 <kbd style="font-size:.65rem;">↓</kbd> 浏览 · <kbd style="font-size:.65rem;">Tab</kbd> 补全 · <kbd style="font-size:.65rem;">Enter</kbd> 确认</div>
+                    </div>
+                </div>
+
+                <!-- ② Task description -->
+                <div class="mb-3" style="position:relative;">
+                    <div id="slash-dropdown" class="slash-dropdown"></div>
+                    <label class="text-muted mb-1 d-block" style="font-size:.78rem;"><i class="bi bi-card-text me-1"></i>任务描述</label>
+                    <textarea id="create-desc" class="form-control"
+                        placeholder="描述这个任务，或以 /skill_name 开头调用 skill…&#10;&#10;支持多行、粘贴代码片段、详细需求描述等。"
+                        rows="4" autocomplete="off"></textarea>
+                    <div class="mt-1 text-muted" style="font-size:.73rem;">
+                        <kbd>Enter</kbd> 换行 · <kbd>Ctrl+Enter</kbd> 提交 · <kbd>Esc</kbd> 关闭 · 输入 <code>/</code> 触发 skill 补全
+                    </div>
+                </div>
+
+                <!-- ③ Acceptance Criteria -->
+                <div class="mb-3">
+                    <label class="text-muted mb-1 d-block" style="font-size:.78rem;"><i class="bi bi-patch-check me-1"></i>验收标准 <span class="text-muted" style="font-weight:400;">(可选，留空则由 AI 自动确定)</span></label>
+                    <textarea class="form-control form-control-sm" id="ac-criteria-text" rows="3"
+                        placeholder="描述验收标准，AI 会据此设计自动化测试。例如：&#10;- loss 降到 0.5 以下&#10;- 所有 API 返回 200&#10;- 输出文件存在且大于 1MB&#10;留空则 AI 自动根据任务描述确定测试方式"></textarea>
+                    <div class="text-muted mt-1" style="font-size:.72rem;">
+                        <i class="bi bi-robot me-1"></i>AI 总是会自动验证任务结果（运行测试、检查输出等）。此处可补充具体的验收指标。
+                    </div>
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="ac-human-review">
+                        <label class="form-check-label" for="ac-human-review" style="font-size:.82rem;">
+                            <i class="bi bi-person-check me-1"></i>需要人工审核
+                            <span class="text-muted" style="font-size:.72rem;">— 自动验证通过后，仍需人工在详情页确认</span>
+                        </label>
+                    </div>
+                    <div class="form-check mt-2">
+                        <input class="form-check-input" type="checkbox" id="interactive-mode">
+                        <label class="form-check-label" for="interactive-mode" style="font-size:.82rem;">
+                            <i class="bi bi-chat-dots me-1"></i>💬 交互模式
+                            <span class="text-muted" style="font-size:.72rem;">— 每次回复后等待你的输入，像终端对话</span>
+                        </label>
+                    </div>
+                    <div class="mt-2">
+                        <label class="text-muted d-block" style="font-size:.78rem;"><i class="bi bi-person-badge me-1"></i>执行身份 <span style="font-weight:400;">(可选)</span></label>
+                        <select class="form-select form-select-sm mt-1" id="config-user" style="font-size:.82rem;">
+                            <option value="">默认</option>
+                        </select>
+                    </div>
+                    <div class="mt-2">
+                        <div class="row g-2">
+                            <div class="col">
+                                <label class="text-muted d-block" style="font-size:.78rem;"><i class="bi bi-cpu me-1"></i>模型</label>
+                                <select class="form-select form-select-sm mt-1" id="model-select" style="font-size:.82rem;">
+                                    <option value="sonnet" data-label="Sonnet">Sonnet ($3/M in)</option>
+                                    <option value="opus" data-label="Opus">Opus ($5/M in)</option>
+                                    <option value="haiku" data-label="Haiku">Haiku ($0.8/M in)</option>
+                                </select>
+                            </div>
+                            <div class="col">
+                                <label class="text-muted d-block" style="font-size:.78rem;"><i class="bi bi-lightning me-1"></i>推理强度</label>
+                                <select class="form-select form-select-sm mt-1" id="effort-select" style="font-size:.82rem;">
+                                    <option value="low">Low（快速）</option>
+                                    <option value="medium" selected>Medium（默认）</option>
+                                    <option value="high">High（深度思考）</option>
+                                    <option value="xhigh" data-models="opus">xHigh（仅 Opus）</option>
+                                    <option value="max" data-models="opus">Max（最强，仅 Opus）</option>
+                                </select>
+                            </div>
+                            <div class="col">
+                                <label class="text-muted d-block" style="font-size:.78rem;"><i class="bi bi-coin me-1"></i>成本上限 (USD)</label>
+                                <input type="number" class="form-control form-control-sm mt-1" id="max-cost" value="5" min="0.5" step="0.5" style="font-size:.82rem;">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ④ Tag -->
+                <div>
+                    <label class="text-muted mb-1 d-block" style="font-size:.78rem;"><i class="bi bi-tag me-1"></i>标签 <span class="text-muted" style="font-weight:400;">(可选)</span></label>
+                    <input type="text" class="form-control form-control-sm" id="create-tag"
+                        placeholder="如: urgent / research / bugfix / feature">
+                </div>
+            </div>
+            <div class="create-modal-footer">
+                <div class="d-flex align-items-center gap-2 text-muted" style="font-size:.75rem;">
+                    <span class="proj-dot" id="modal-proj-dot" style="background:{{ project_color }};"></span>
+                    <span id="modal-proj-name-label">{{ project_name }}</span>
+                    <span class="text-muted">·</span>
+                    <span id="modal-accept-summary" style="color:#666;"><i class="bi bi-robot"></i> AI 自动验证</span>
+                    <span class="text-muted">·</span>
+                    <span id="modal-autoexec-summary" style="color:#28a745;"><i class="bi bi-rocket-takeoff"></i> 全托管</span>
+                </div>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" onclick="closeCreateModal()">取消</button>
+                    <button class="btn btn-sm btn-primary" id="create-task-btn" type="button" onclick="createTask()"><i class="bi bi-plus-lg me-1"></i>创建任务</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="toast-container" id="toast-container"></div>
+    <div class="container-fluid px-4">{% block content %}{% endblock %}</div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        // ── App globals ──
+        const P = '{{ project_slug | default("") }}';
+        function pq(extra=''){return `p=${P}${extra?'&'+extra:''}`}
+        function purl(base,slug){const s=slug||P;return base+(base.includes('?')?'&':'?')+`p=${s}`}
+
+        // ── Toast ──
+        function showToast(msg,type='success'){const c=document.getElementById('toast-container');const bg=type==='success'?'text-bg-success':type==='warning'?'text-bg-warning':'text-bg-danger';c.insertAdjacentHTML('beforeend',`<div class="toast align-items-center ${bg} border-0 mb-2" role="alert"><div class="d-flex"><div class="toast-body">${msg}</div><button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast"></button></div></div>`);const el=c.lastElementChild;const t=new bootstrap.Toast(el,{delay:4000});t.show();el.addEventListener('hidden.bs.toast',()=>el.remove())}
+
+        // ── Project navigation ──
+        function switchProject(slug){window.location.href='/?proj='+slug;}
+        async function removeProject(slug,name){
+            if(!confirm(`移除项目 "${name}"？`))return;
+            await fetch('/api/projects/'+slug,{method:'DELETE'});
+            location.reload();
+        }
+
+        async function doSync(){try{const r=await fetch(purl('/api/sync'),{method:'POST'});const d=await r.json();if(d.ok){showToast(`同步：导入 ${d.imported} 条`);refreshData(true)}else showToast(d.error||'失败','error')}catch(e){showToast('失败: '+e.message,'error')}}
+        async function apiCall(url,method='GET',body=null){const opts={method,headers:{'Content-Type':'application/json'}};if(body)opts.body=JSON.stringify(body);return(await fetch(purl(url),opts)).json()}
+
+        // ── Add project ──
+        async function addProject(){
+            const inp=document.getElementById('add-project-path');
+            if(!inp||!inp.value.trim())return;
+            hideSuggest();
+            const path=inp.value.trim().replace(/\/+$/,'');
+            const r=await(await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})})).json();
+            if(r.ok){inp.value='';showToast('项目已添加');window.location.href='/?proj='+r.slug;}
+            else showToast(r.error||'添加失败','error');
+        }
+
+        // ── Path autocomplete ──
+        let _suggestTimer=null, _suggestIdx=-1, _suggestData=[];
+        function hideSuggest(){const box=document.getElementById('path-suggest-box');if(box)box.style.display='none';_suggestIdx=-1;_suggestData=[];}
+        function _positionSuggestBox(){const inp=document.getElementById('add-project-path');const box=document.getElementById('path-suggest-box');if(!inp||!box)return;const r=inp.getBoundingClientRect();box.style.left=r.left+'px';box.style.top=(r.bottom+2)+'px';box.style.width=Math.max(r.width+40,320)+'px';}
+        function _highlightItem(idx){const list=document.getElementById('path-suggest-list');if(!list)return;Array.from(list.children).forEach((li,i)=>{li.style.background=i===idx?'#e8f0fe':'';li.style.color=i===idx?'#1a3c8a':'#2c2c2c';if(i===idx)li.scrollIntoView({block:'nearest'});});}
+        async function projectPathSuggest(val){clearTimeout(_suggestTimer);_suggestTimer=setTimeout(async()=>{try{const r=await(await fetch('/api/path-suggest?q='+encodeURIComponent(val))).json();const box=document.getElementById('path-suggest-box');const cwdEl=document.getElementById('path-suggest-cwd');const list=document.getElementById('path-suggest-list');if(!box||!list)return;if(!r.suggestions||!r.suggestions.length){hideSuggest();return;}_suggestData=r.suggestions;_suggestIdx=-1;if(cwdEl)cwdEl.textContent='📁 '+r.cwd;list.innerHTML='';r.suggestions.forEach((s,i)=>{const li=document.createElement('li');li.innerHTML=`<span style="opacity:.5;margin-right:6px;">📂</span><span>${s.display}</span><span style="color:#aaa;margin-left:6px;font-size:.7rem;">${s.full}</span>`;li.title=s.full;li.style.cssText='padding:5px 12px;cursor:pointer;display:flex;align-items:center;white-space:nowrap;overflow:hidden;';li.onmouseenter=()=>{_suggestIdx=i;_highlightItem(i);};li.onmousedown=(e)=>{e.preventDefault();_acceptSuggestion(s.full);};list.appendChild(li);});_positionSuggestBox();box.style.display='block';}catch(ex){}},80);}
+        function _acceptSuggestion(fullPath){const inp=document.getElementById('add-project-path');if(!inp)return;inp.value=fullPath+'/';hideSuggest();projectPathSuggest(fullPath+'/');inp.focus();}
+        function projectInputKeydown(e){const box=document.getElementById('path-suggest-box');const visible=box&&box.style.display!=='none';const len=_suggestData.length;if(e.key==='ArrowDown'){e.preventDefault();if(!visible){projectPathSuggest(e.target.value);return;}_suggestIdx=Math.min(_suggestIdx+1,len-1);_highlightItem(_suggestIdx);}else if(e.key==='ArrowUp'){e.preventDefault();if(_suggestIdx<=0){_suggestIdx=-1;_highlightItem(-1);return;}_suggestIdx=Math.max(_suggestIdx-1,0);_highlightItem(_suggestIdx);}else if(e.key==='Tab'){e.preventDefault();if(_suggestIdx>=0&&_suggestData[_suggestIdx]){_acceptSuggestion(_suggestData[_suggestIdx].full);}else if(len===1){_acceptSuggestion(_suggestData[0].full);}else if(len>1){const names=_suggestData.map(s=>s.full);let pfx=names[0];for(let i=1;i<names.length;i++){while(!names[i].startsWith(pfx))pfx=pfx.slice(0,-1);}if(pfx.length>e.target.value.length){e.target.value=pfx;projectPathSuggest(pfx);}}}else if(e.key==='Enter'){if(_suggestIdx>=0&&_suggestData[_suggestIdx]){e.preventDefault();_acceptSuggestion(_suggestData[_suggestIdx].full);}else{hideSuggest();addProject();}}else if(e.key==='Escape'){hideSuggest();}}
+        window.addEventListener('resize',()=>{if(document.getElementById('path-suggest-box')?.style.display!=='none')_positionSuggestBox();});
+        document.addEventListener('click',e=>{if(!e.target.closest('#add-project-path')&&!e.target.closest('#path-suggest-box'))hideSuggest();});
+
+        // ── Create modal ──
+        let _modalProjSlug = '{{ project_slug }}';
+        let _modalProjColor = '{{ project_color }}';
+        let _modalProjName = '{{ project_name }}';
+
+        function openCreateModal(){
+            document.getElementById('create-modal-overlay').classList.add('show');
+            // Collapse add-proj panel on open
+            const ap=document.getElementById('modal-add-proj-panel');if(ap)ap.style.display='none';
+            setTimeout(()=>document.getElementById('create-desc')?.focus(),60);
+        }
+        function closeCreateModal(){
+            document.getElementById('create-modal-overlay').classList.remove('show');
+            hideModalSuggest();
+        }
+        function modalSelectProject(el, slug, name, color){
+            _modalProjSlug=slug; _modalProjName=name; _modalProjColor=color;
+            document.querySelectorAll('.proj-select-chip').forEach(c=>{
+                const isMe=c.dataset.slug===slug;
+                c.classList.toggle('active',isMe);
+                c.style.background=isMe?color:'#f0f0f0';
+                c.style.color=isMe?'#fff':'#555';
+                const dot=c.querySelector('.proj-dot');
+                if(dot)dot.style.background=isMe?'rgba(255,255,255,.6)':c.dataset.color;
+            });
+            const dot=document.getElementById('modal-proj-dot');
+            const lbl=document.getElementById('modal-proj-name-label');
+            if(dot)dot.style.background=color;
+            if(lbl)lbl.textContent=name;
+        }
+
+        // ── Modal: inline add-project ──
+        let _modalSuggestTimer=null, _modalSuggestIdx=-1, _modalSuggestData=[];
+
+        function toggleModalAddProj(){
+            const panel=document.getElementById('modal-add-proj-panel');
+            if(!panel)return;
+            const shown=panel.style.display!=='none';
+            panel.style.display=shown?'none':'block';
+            if(!shown) setTimeout(()=>{const inp=document.getElementById('modal-add-proj-path');if(inp){inp.focus();if(!inp.value)modalPathSuggest('');}},60);
+            else hideModalSuggest();
+        }
+
+        function hideModalSuggest(){const box=document.getElementById('modal-path-suggest-box');if(box)box.style.display='none';_modalSuggestIdx=-1;_modalSuggestData=[];}
+
+        function _positionModalSuggest(){
+            const inp=document.getElementById('modal-add-proj-path');
+            const box=document.getElementById('modal-path-suggest-box');
+            if(!inp||!box)return;
+            const r=inp.getBoundingClientRect();
+            box.style.left=r.left+'px';
+            box.style.top=(r.bottom+4)+'px';
+            box.style.width=Math.max(r.width,340)+'px';
+        }
+
+        function _highlightModalItem(idx){
+            const list=document.getElementById('modal-path-suggest-list');if(!list)return;
+            Array.from(list.children).forEach((li,i)=>{li.style.background=i===idx?'#e8f0fe':'';li.style.color=i===idx?'#1a3c8a':'#2c2c2c';if(i===idx)li.scrollIntoView({block:'nearest'});});
+        }
+
+        async function modalPathSuggest(val){
+            clearTimeout(_modalSuggestTimer);
+            _modalSuggestTimer=setTimeout(async()=>{
+                try{
+                    const r=await(await fetch('/api/path-suggest?q='+encodeURIComponent(val))).json();
+                    const box=document.getElementById('modal-path-suggest-box');
+                    const cwdEl=document.getElementById('modal-path-suggest-cwd');
+                    const list=document.getElementById('modal-path-suggest-list');
+                    if(!box||!list)return;
+                    if(!r.suggestions||!r.suggestions.length){hideModalSuggest();return;}
+                    _modalSuggestData=r.suggestions;_modalSuggestIdx=-1;
+                    if(cwdEl)cwdEl.textContent='📁 '+r.cwd;
+                    list.innerHTML='';
+                    r.suggestions.forEach((s,i)=>{
+                        const li=document.createElement('li');
+                        li.innerHTML=`<span style="opacity:.5;margin-right:6px;">📂</span><span>${s.display}</span><span style="color:#aaa;margin-left:6px;font-size:.7rem;">${s.full}</span>`;
+                        li.title=s.full;
+                        li.style.cssText='padding:5px 12px;cursor:pointer;display:flex;align-items:center;white-space:nowrap;overflow:hidden;';
+                        li.onmouseenter=()=>{_modalSuggestIdx=i;_highlightModalItem(i);};
+                        li.onmousedown=(e)=>{e.preventDefault();_acceptModalSuggestion(s.full);};
+                        list.appendChild(li);
+                    });
+                    _positionModalSuggest();box.style.display='block';
+                }catch(ex){}
+            },80);
+        }
+
+        function _acceptModalSuggestion(fullPath){
+            const inp=document.getElementById('modal-add-proj-path');if(!inp)return;
+            inp.value=fullPath+'/';hideModalSuggest();modalPathSuggest(fullPath+'/');inp.focus();
+        }
+
+        function modalProjInputKeydown(e){
+            const box=document.getElementById('modal-path-suggest-box');
+            const visible=box&&box.style.display!=='none';
+            const len=_modalSuggestData.length;
+            if(e.key==='ArrowDown'){e.preventDefault();if(!visible){modalPathSuggest(e.target.value);return;}_modalSuggestIdx=Math.min(_modalSuggestIdx+1,len-1);_highlightModalItem(_modalSuggestIdx);}
+            else if(e.key==='ArrowUp'){e.preventDefault();if(_modalSuggestIdx<=0){_modalSuggestIdx=-1;_highlightModalItem(-1);return;}_modalSuggestIdx=Math.max(_modalSuggestIdx-1,0);_highlightModalItem(_modalSuggestIdx);}
+            else if(e.key==='Tab'){e.preventDefault();if(_modalSuggestIdx>=0&&_modalSuggestData[_modalSuggestIdx]){_acceptModalSuggestion(_modalSuggestData[_modalSuggestIdx].full);}else if(len===1){_acceptModalSuggestion(_modalSuggestData[0].full);}else if(len>1){const names=_modalSuggestData.map(s=>s.full);let pfx=names[0];for(let i=1;i<names.length;i++){while(!names[i].startsWith(pfx))pfx=pfx.slice(0,-1);}if(pfx.length>e.target.value.length){e.target.value=pfx;modalPathSuggest(pfx);}}}
+            else if(e.key==='Enter'){if(_modalSuggestIdx>=0&&_modalSuggestData[_modalSuggestIdx]){e.preventDefault();_acceptModalSuggestion(_modalSuggestData[_modalSuggestIdx].full);}else{hideModalSuggest();modalAddProject();}}
+            else if(e.key==='Escape'){hideModalSuggest();}
+        }
+
+        async function modalAddProject(){
+            const inp=document.getElementById('modal-add-proj-path');
+            if(!inp||!inp.value.trim())return;
+            hideModalSuggest();
+            const path=inp.value.trim().replace(/\/+$/,'');
+            const btn=document.querySelector('#modal-add-proj-panel .btn-outline-success');
+            if(btn){btn.disabled=true;btn.innerHTML='<span class="spinner-border spinner-border-sm"></span>';}
+            try{
+                const r=await(await fetch('/api/projects',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path})})).json();
+                if(r.ok){
+                    inp.value='';
+                    // Inject new chip into modal and auto-select it
+                    const chipRow=document.getElementById('modal-proj-chips');
+                    const toggle=document.getElementById('modal-add-proj-toggle');
+                    const chip=document.createElement('span');
+                    chip.className='proj-select-chip';
+                    chip.dataset.slug=r.slug;chip.dataset.name=r.name;chip.dataset.color=r.color;
+                    chip.innerHTML=`<span class="proj-dot" style="background:${r.color};"></span>${r.name}`;
+                    chip.onclick=()=>modalSelectProject(chip,r.slug,r.name,r.color);
+                    chipRow.insertBefore(chip,toggle);
+                    modalSelectProject(chip,r.slug,r.name,r.color);
+                    document.getElementById('modal-add-proj-panel').style.display='none';
+                    showToast(`项目 "${r.name}" 已添加并选中`);
+                }else showToast(r.error||'添加失败','error');
+            }catch(ex){showToast('添加失败: '+ex.message,'error');}
+            finally{if(btn){btn.disabled=false;btn.innerHTML='<i class="bi bi-check-lg"></i> 添加并选中';}}
+        }
+
+        // Close modal suggest when clicking outside the panel
+        document.addEventListener('click',e=>{
+            if(!e.target.closest('#modal-add-proj-path')&&!e.target.closest('#modal-path-suggest-box'))hideModalSuggest();
+        });
+        window.addEventListener('resize',()=>{if(document.getElementById('modal-path-suggest-box')?.style.display!=='none')_positionModalSuggest();});
+
+        // ── Acceptance criteria ──
+        function _getAcceptanceCriteria(){
+            return document.getElementById('ac-criteria-text')?.value?.trim() || null;
+        }
+        function _isHumanReview(){
+            return document.getElementById('ac-human-review')?.checked || false;
+        }
+        function _resetAcceptance(){
+            const ta=document.getElementById('ac-criteria-text');if(ta)ta.value='';
+            const cb=document.getElementById('ac-human-review');if(cb)cb.checked=false;
+            const ae=document.getElementById('auto-execute');if(ae)ae.checked=true;
+            _updateAcceptSummary();
+            _updateAutoExecSummary();
+        }
+        function _updateAcceptSummary(){
+            const summary=document.getElementById('modal-accept-summary');
+            if(!summary)return;
+            const hr=_isHumanReview();
+            const criteria=_getAcceptanceCriteria();
+            let parts=['<i class="bi bi-robot"></i> AI 自动验证'];
+            if(criteria)parts[0]='<i class="bi bi-robot"></i> AI 验证 (含自定义标准)';
+            if(hr)parts.push('<i class="bi bi-person-check"></i> +人工审核');
+            summary.innerHTML=parts.join(' ');
+        }
+        function _updateAutoExecSummary(){
+            const el=document.getElementById('modal-autoexec-summary');
+            const cb=document.getElementById('auto-execute');
+            if(!el||!cb)return;
+            if(cb.checked){el.innerHTML='<i class="bi bi-rocket-takeoff"></i> 全托管';el.style.color='#28a745';}
+            else{el.innerHTML='<i class="bi bi-pause-circle"></i> 仅创建';el.style.color='#888';}
+        }
+        // Live update summary
+        document.addEventListener('DOMContentLoaded',()=>{
+            const ta=document.getElementById('ac-criteria-text');
+            const cb=document.getElementById('ac-human-review');
+            if(ta)ta.addEventListener('input',_updateAcceptSummary);
+            if(cb)cb.addEventListener('change',_updateAcceptSummary);
+            const aeBox=document.getElementById('auto-execute');
+            if(aeBox)aeBox.addEventListener('change',_updateAutoExecSummary);
+        });
+
+        // ── Slash autocomplete for textarea ──
+        let _skillsList=null;
+        async function loadSkills(){if(!_skillsList){const d=await(await fetch(purl('/api/skills'))).json();_skillsList=d.skills;}return _skillsList;}
+        // Preload skills on page load so autocomplete is instant
+        document.addEventListener('DOMContentLoaded',()=>loadSkills());
+
+        function setupSlashInput(inputId, dropdownId){
+            const inp=document.getElementById(inputId);
+            const dd=document.getElementById(dropdownId);
+            if(!inp||!dd)return;
+
+            // Skill tag bar: shows detected skills as colored badges below textarea
+            const tagBar=document.createElement('div');
+            tagBar.style.cssText='display:flex;flex-wrap:wrap;gap:4px;margin-top:4px;min-height:0;';
+            inp.parentElement.appendChild(tagBar);
+
+            function updateSkillTags(){
+                tagBar.innerHTML='';
+                if(!_skillsList)return;
+                const text=inp.value;
+                const skillNames=_skillsList.map(s=>s.name);
+                const found=new Set();
+                text.replace(/(^|[\s\n])\/([a-zA-Z][\w-]*)/gm,(_,__,name)=>{
+                    if(skillNames.includes(name))found.add(name);
+                });
+                found.forEach(name=>{
+                    const badge=document.createElement('span');
+                    badge.style.cssText='display:inline-flex;align-items:center;gap:3px;padding:2px 8px;border-radius:12px;font-size:.75rem;font-weight:600;background:#ede9fe;color:#6366f1;border:1px solid #c4b5fd;';
+                    badge.innerHTML=`<i class="bi bi-lightning-fill" style="font-size:.65rem;"></i>/${escapeHtml(name)}`;
+                    tagBar.appendChild(badge);
+                });
+            }
+
+            inp.addEventListener('input',async()=>{
+                const val=inp.value;
+                const cursorPos=inp.selectionStart;
+                // Find the slash token at/before cursor
+                const textBefore=val.substring(0,cursorPos);
+                const slashMatch=textBefore.match(/(^|[\s\n])\/([\w-]*)$/);
+                if(slashMatch){
+                    const q=slashMatch[2].toLowerCase();
+                    const skills=await loadSkills();
+                    const matches=q?skills.filter(s=>s.name.toLowerCase().includes(q)):skills;
+                    if(matches.length>0){
+                        dd.innerHTML=matches.slice(0,8).map(s=>`<div class="slash-item" data-name="${s.name}"><div class="slash-name">/${s.name}</div><div class="slash-desc">${escapeHtml(s.short_desc)}</div></div>`).join('');
+                        dd.classList.add('show');
+                        dd.querySelectorAll('.slash-item').forEach(el=>el.addEventListener('click',()=>{
+                            const name=el.dataset.name;
+                            // Replace the /partial with /fullname
+                            const before=textBefore.replace(/(^|[\s\n])\/([\w-]*)$/,'$1/'+name+' ');
+                            inp.value=before+val.substring(cursorPos);
+                            dd.classList.remove('show');
+                            inp.focus();
+                            inp.selectionStart=inp.selectionEnd=before.length;
+                            updateSkillTags();
+                        }));
+                    }else dd.classList.remove('show');
+                }else dd.classList.remove('show');
+                updateSkillTags();
+            });
+            inp.addEventListener('keydown',e=>{
+                if(e.key==='Enter'&&e.ctrlKey){e.preventDefault();if(typeof createTask==='function')createTask();else if(typeof saveEdit==='function')saveEdit();}
+                if(e.key==='Escape'){if(dd.classList.contains('show'))dd.classList.remove('show');}
+                if(e.key==='Tab'&&dd.classList.contains('show')){e.preventDefault();const first=dd.querySelector('.slash-item');if(first)first.click();}
+            });
+            document.addEventListener('click',e=>{if(!inp.contains(e.target)&&!dd.contains(e.target))dd.classList.remove('show');});
+            // Initial tag check
+            setTimeout(updateSkillTags,100);
+        }
+
+        // ── Create task ──
+        // Guard against double-submit (button double-click, Ctrl+Enter×2, duplicate event handlers, …).
+        // Any re-entry while a POST is already in flight is silently ignored.
+        let _creatingTask=false;
+        async function createTask(){
+            if(_creatingTask) return;      // already in flight → drop duplicate
+            const btn=document.getElementById('create-task-btn');
+            const descEl=document.getElementById('create-desc');
+            const tagEl=document.getElementById('create-tag');
+            if(!descEl||!descEl.value.trim())return;
+            _creatingTask=true;
+            if(btn){btn.disabled=true;btn.dataset._origHtml=btn.innerHTML;btn.innerHTML='<span class="spinner-border spinner-border-sm me-1"></span>创建中…';}
+            try{
+                const data={description:descEl.value.trim(),project_slug:_modalProjSlug};
+                if(tagEl&&tagEl.value.trim())data.tag=tagEl.value.trim();
+                const criteria=_getAcceptanceCriteria();
+                if(criteria)data.acceptance_criteria=criteria;
+                if(_isHumanReview())data.human_review=true;
+                const autoExecEl=document.getElementById('auto-execute');
+                data.auto_execute=autoExecEl?autoExecEl.checked:true;
+                const interactiveEl=document.getElementById('interactive-mode');
+                data.interactive=interactiveEl?interactiveEl.checked:false;
+                const cfgUserEl=document.getElementById('config-user');
+                if(cfgUserEl&&cfgUserEl.value)data.config_user=cfgUserEl.value;
+                const maxCostEl=document.getElementById('max-cost');
+                data.max_cost_usd=maxCostEl?parseFloat(maxCostEl.value)||5:5;
+                const modelEl=document.getElementById('model-select');
+                data.model=modelEl?modelEl.value:'sonnet';
+                const effortEl=document.getElementById('effort-select');
+                data.effort=effortEl?effortEl.value:'medium';
+                // Client-side idempotency key → lets the server dedup repeat POSTs in a short window
+                data.client_nonce=(crypto&&crypto.randomUUID?crypto.randomUUID():(Date.now()+'-'+Math.random().toString(36).slice(2)));
+                // Warn if no taiji token configured
+                if(!_hasTaijiToken){
+                    const proceed=await new Promise(resolve=>{
+                        const modal=document.createElement('div');
+                        modal.innerHTML=`<div class="modal fade show" style="display:block;background:rgba(0,0,0,.5);z-index:9999;" tabindex="-1">
+                            <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+                                <div class="modal-header bg-warning"><h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>太极 Token 未配置</h5></div>
+                                <div class="modal-body">
+                                    <p>当前未配置太极平台 Token，任务将<strong>仅在 anydev 本地环境</strong>执行。</p>
+                                    <p class="text-muted small mb-0">如需使用太极 GPU 集群（训练、推理等），请先在右上角配置面板中设置太极 Token。</p>
+                                </div>
+                                <div class="modal-footer">
+                                    <button class="btn btn-secondary" id="_taiji_cancel">取消，去配置 Token</button>
+                                    <button class="btn btn-primary" id="_taiji_proceed">继续，仅用本地环境</button>
+                                </div>
+                            </div></div></div>`;
+                        document.body.appendChild(modal);
+                        modal.querySelector('#_taiji_cancel').onclick=()=>{document.body.removeChild(modal);resolve(false);};
+                        modal.querySelector('#_taiji_proceed').onclick=()=>{document.body.removeChild(modal);resolve(true);};
+                    });
+                    if(!proceed)return;
+                }
+                const r=await(await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})).json();
+                if(r.ok){
+                    const labels=['🤖 AI 自动验证'];
+                    if(_isHumanReview())labels.push('👤 +人工审核');
+                    if(r.auto_started)labels.push('🚀 全托管运行中');
+                    const dupTag=r.deduped?' (去重)':'';
+                    showToast(`#${r.id}${dupTag} 已创建${r.skill?' ('+'/'+r.skill+')':''} → ${_modalProjName} · ${labels.join(' ')}`);
+                    descEl.value='';if(tagEl)tagEl.value='';
+                    _resetAcceptance();
+                    closeCreateModal();refreshData(true);
+                }else showToast(r.error||'创建失败','error');
+            }finally{
+                _creatingTask=false;
+                if(btn){btn.disabled=false; if(btn.dataset._origHtml){btn.innerHTML=btn.dataset._origHtml; delete btn.dataset._origHtml;}}
+            }
+        }
+
+        // ── Duplicate task: fetch full data → pre-fill create modal ──
+        async function duplicateTask(taskId, projSlug){
+            const slug = projSlug || P;
+            try{
+                const r = await(await fetch(`/api/tasks/${taskId}?full=1&p=${slug}`)).json();
+                if(r.error){showToast('获取任务失败: '+r.error,'error');return;}
+                // Open modal
+                openCreateModal();
+                // Pre-fill project
+                const chip = document.querySelector(`.proj-select-chip[data-slug="${slug}"]`);
+                if(chip) chip.click();
+                // Pre-fill description
+                const descEl=document.getElementById('create-desc');
+                if(descEl) descEl.value = r.description || '';
+                // Pre-fill tag
+                const tagEl=document.getElementById('create-tag');
+                if(tagEl) tagEl.value = r.tag || '';
+                // Pre-fill acceptance criteria
+                const acEl=document.getElementById('ac-criteria-text');
+                if(acEl) acEl.value = r.acceptance_criteria || '';
+                // Human review checkbox
+                const hrEl=document.getElementById('ac-human-review');
+                if(hrEl) hrEl.checked = !!r.human_review;
+                // Auto execute checkbox
+                const aeEl=document.getElementById('auto-execute');
+                if(aeEl) aeEl.checked = r.auto_execute !== undefined ? !!r.auto_execute : true;
+                // Config user
+                const cfgEl=document.getElementById('config-user');
+                if(cfgEl && r.config_user){
+                    // Ensure option exists, then select
+                    let found = false;
+                    for(const opt of cfgEl.options){if(opt.value===r.config_user){found=true;break;}}
+                    if(!found){const opt=document.createElement('option');opt.value=r.config_user;opt.textContent=r.config_user;cfgEl.appendChild(opt);}
+                    cfgEl.value = r.config_user;
+                }
+                // Model
+                const modelEl=document.getElementById('model-select');
+                if(modelEl && r.model) modelEl.value = r.model;
+                // Effort
+                const effortEl=document.getElementById('effort-select');
+                if(effortEl && r.effort) effortEl.value = r.effort;
+                // Max cost
+                const costEl=document.getElementById('max-cost');
+                if(costEl && r.max_cost_usd) costEl.value = r.max_cost_usd;
+                // Update summaries
+                if(typeof _updateAcceptSummary==='function') _updateAcceptSummary();
+                if(typeof _updateAutoExecSummary==='function') _updateAutoExecSummary();
+                showToast(`已复制 #${taskId} 的配置，修改后点击创建`,'success');
+            }catch(e){showToast('复制失败: '+e.message,'error');}
+        }
+
+        // ── Auto-refresh ──
+        let refreshInterval=5,countdown=refreshInterval;
+        let currentFilter=new URLSearchParams(window.location.search).get('status')||'all';
+        let currentProjFilter=new URLSearchParams(window.location.search).get('proj')||'all';
+        let currentSort=new URLSearchParams(window.location.search).get('sort')||'newest';
+
+        // ── Effort↔Model gating ──
+        // The real CLI (claude-code) silently downgrades effort if the model
+        // doesn't support it:
+        //   - xhigh: ONLY Opus 4.7
+        //   - max:   ONLY Opus 4.7 (blocked on sonnet-4*, opus-4-0..4-5, haiku)
+        // Mirror that in the UI so users can't "pick" a level that won't apply.
+        function _syncEffortByModel(){
+            const m=document.getElementById('model-select');
+            const e=document.getElementById('effort-select');
+            if(!m||!e) return;
+            const model=m.value;
+            for(const opt of e.options){
+                const req=opt.getAttribute('data-models');
+                if(!req){opt.disabled=false;continue;}
+                const ok=req.split(',').map(s=>s.trim()).includes(model);
+                opt.disabled=!ok;
+                if(!ok) opt.title='此强度仅支持: '+req;
+                else opt.title='';
+            }
+            // Auto-downgrade if selected option is now disabled
+            const sel=e.options[e.selectedIndex];
+            if(sel && sel.disabled){
+                e.value='high';
+            }
+        }
+        document.addEventListener('DOMContentLoaded',()=>{
+            const m=document.getElementById('model-select');
+            if(m){m.addEventListener('change',_syncEffortByModel);}
+            _syncEffortByModel();
+        });
+
+        async function refreshData(force){
+            // Skip poll when tab is hidden — saves DB hits + redraw churn.
+            // Next visibility event kicks an immediate refresh (see below).
+            if(document.hidden && !force){ countdown=refreshInterval; return; }
+            if(force) window.__lastStatsETag=null;
+            try{
+                const url=`/api/stats?status=${currentFilter}&proj=${currentProjFilter}&sort=${currentSort}`;
+                const headers={};
+                if(window.__lastStatsETag) headers['If-None-Match']=window.__lastStatsETag;
+                const resp=await fetch(url,{headers});
+                if(resp.status===304){ countdown=refreshInterval; return; }
+                const et=resp.headers.get('ETag'); if(et) window.__lastStatsETag=et;
+                const d=await resp.json();
+                updateDashboard(d);
+            }catch(e){}
+            countdown=refreshInterval;
+        }
+        document.addEventListener('visibilitychange',()=>{ if(!document.hidden) refreshData(); });
+
+        function updateDashboard(data){
+            const c=data.counts,el=id=>document.getElementById(id);
+            if(el('stat-total'))el('stat-total').textContent=c.active_total;
+            if(el('stat-pending'))el('stat-pending').textContent=c.pending;
+            if(el('stat-in_progress'))el('stat-in_progress').textContent=c.in_progress;
+            if(el('stat-completed'))el('stat-completed').textContent=c.completed;
+            if(el('stat-failed'))el('stat-failed').textContent=c.failed;
+            const at=c.active_total||1;
+            ['completed','in_progress','pending','failed'].forEach(k=>{const e=el('prog-'+k);if(e)e.style.width=(c[k]/at*100)+'%';});
+            const pct=at>0?Math.round(c.completed/at*100):0;
+            if(el('progress-text'))el('progress-text').textContent=`${c.completed}/${at} 完成 (${pct}%)`;
+            if(el('task-tbody')&&data.tasks)updateTaskTable(data.tasks);
+            // Populate config_user dropdown
+            const cfgSel=document.getElementById('config-user');
+            if(cfgSel&&data.config_users){
+                const cur=cfgSel.value;
+                const opts=['<option value="">默认</option>'];
+                data.config_users.forEach(u=>opts.push(`<option value="${escapeHtml(u)}"${u===cur?' selected':''}>${escapeHtml(u)}</option>`));
+                cfgSel.innerHTML=opts.join('');
+            }
+            // Floating island + tab title (global, works on all pages)
+            if(data.tasks){updateFloatIsland(data.tasks);updateTabTitle(data.tasks);}
+        }
+
+        function updateTaskTable(tasks){
+            const tb=document.getElementById('task-tbody');
+            if(!tb)return;
+            // Cheap signature: id|status|cost|tokens|blocked|conflict|desc_len.
+            // If nothing changed since last paint, skip the innerHTML rewrite
+            // entirely — that's the dominant layout thrash on the dashboard.
+            const sig=tasks.map(t=>`${t.id}:${t.status}:${t.cost_usd||''}:${t.total_input_tokens||''}:${t._is_blocked?1:0}:${t._has_active_conflict?1:0}:${(t.description||'').length}:${t.started_at||''}`).join('|');
+            if(window.__lastTableSig===sig){ updateElapsedTimes(); return; }
+            window.__lastTableSig=sig;
+            tb.innerHTML=tasks.length>0?tasks.map(t=>buildTaskRow(t)).join(''):'<tr><td colspan="9" class="text-center text-muted py-5"><i class="bi bi-inbox" style="font-size:2rem;"></i><p class="mt-2 mb-0">暂无任务</p></td></tr>';
+            updateElapsedTimes();
+            updateBatchBar();
+        }
+
+        function buildTaskRow(t){
+            const sub=t.parent_id!==null;
+            let cls=sub?'task-row-subtask':'';
+            if(t._is_blocked)cls+=' task-row-blocked';
+            else if(t._has_active_conflict)cls+=' task-row-conflict';
+            const badgeCls=t.status==='in_progress'&&t.agent_status==='idle'?'badge-idle':'badge-'+t.status;
+            const badge=`<span class="badge ${badgeCls}">${statusLabel(t.status,t)}</span>`;
+            const tag=t.tag?`<span class="badge bg-light text-dark border">${t.tag}</span>`:'';
+            const skill=t.skill?`<span class="skill-badge">/${t.skill}</span>`:'';
+            const elapsed=t.status==='in_progress'&&t.started_at?`<span class="elapsed-time" data-started="${t.started_at}">...</span>`:'';
+            const dur=t.duration_minutes!=null?`${t.duration_minutes}m`:'';
+            let warn='';
+            if(t._is_blocked)warn+='<span class="blocked-indicator"><i class="bi bi-lock-fill"></i>阻塞</span> ';
+            if(t._has_active_conflict)warn+='<span class="conflict-indicator"><i class="bi bi-exclamation-triangle-fill"></i>冲突</span> ';
+            const projBadge=t._project_color?`<span class="proj-badge" style="background:${t._project_color};">${t._project_name||''}</span>`:'';
+            const cost = t.cost_usd ? `$${Number(t.cost_usd).toFixed(2)}` : (t.estimated_cost_usd ? `<span title="估算 = input×单价 + output×单价&#10;Sonnet: $3/$15/M · Opus: $5/$25/M · Haiku: $0.8/$4/M" style="cursor:help;">~$${Number(t.estimated_cost_usd).toFixed(2)}</span>` : '');
+            const maxCost = t.max_cost_usd ? `/${Number(t.max_cost_usd).toFixed(0)}` : '';
+            const tokens = t.total_input_tokens ? `${formatTokens(t.total_input_tokens)} in` : '';
+            const cfgUser = t.config_user ? `<span class="badge bg-info text-dark" style="font-size:.7rem;">${escapeHtml(t.config_user)}</span>` : '';
+            const modelBadge = t.model && t.model !== 'sonnet' ? `<span class="badge ${t.model==='opus'?'bg-warning text-dark':'bg-secondary'}" style="font-size:.65rem;">${t.model}</span>` : '';
+            return`<tr class="${cls}" data-task-id="${t.id}" data-task-slug="${t._project_slug||P}"><td><input type="checkbox" class="task-check" data-id="${t.id}" data-slug="${t._project_slug||P}" data-status="${t.status}" onchange="updateBatchBar()"> <span class="badge bg-light text-dark border" style="font-size:.78rem;cursor:pointer;user-select:all" title="点击复制 ID">${t.id}</span></td><td>${projBadge}</td><td>${escapeHtml(t.description)} ${skill} ${warn}</td><td>${tag} ${cfgUser} ${modelBadge}</td><td>${badge} ${elapsed}</td><td class="small text-muted">${dur}</td><td class="small text-muted">${cost}${maxCost?' <span style="color:#aaa;font-size:.7rem">'+maxCost+'</span>':''}${tokens?' <span style="color:#999;font-size:.7rem">'+tokens+'</span>':''}</td><td>${buildActions(t)}</td></tr>`;
+        }
+
+        function statusLabel(s,t){
+            if(s==='in_progress'&&t&&t.agent_status==='idle')return'💬 等待回复';
+            return{pending:'⏳ 待处理',in_progress:'🔄 进行中',completed:'✅ 完成',failed:'❌ 失败',decomposed:'🔀 已拆解'}[s]||s;
+        }
+
+        function buildActions(t){
+            const slug=t._project_slug||P;
+            let b=`<a href="/task/${t.id}?p=${slug}" class="btn btn-action btn-outline-secondary"><i class="bi bi-eye"></i></a> `;
+            if(t.status==='pending')b+=`<button class="btn btn-action btn-outline-primary" onclick="startTask(${t.id},'${slug}')"><i class="bi bi-play-fill"></i></button> `;
+            if(t.status==='in_progress'){b+=`<button class="btn btn-action btn-outline-success" onclick="completeTask(${t.id},'${slug}')"><i class="bi bi-check-lg"></i></button> `;b+=`<button class="btn btn-action btn-outline-danger" onclick="failTask(${t.id},'${slug}')"><i class="bi bi-x-lg"></i></button> `;}
+            if(t.status==='failed')b+=`<button class="btn btn-action btn-outline-warning" onclick="rerunTask(${t.id},'${slug}')" title="重新执行"><i class="bi bi-arrow-clockwise"></i></button> `;
+            if(t.status==='completed')b+=`<button class="btn btn-action btn-outline-warning" onclick="rerunTask(${t.id},'${slug}')" title="重新执行"><i class="bi bi-arrow-clockwise"></i></button> `;
+            if(t.status!=='in_progress'&&t.status!=='decomposed')b+=`<button class="btn btn-action btn-outline-danger" onclick="deleteTask(${t.id},'${slug}')"><i class="bi bi-trash3"></i></button> `;
+            if(t.status!=='in_progress')b+=`<button class="btn btn-action btn-outline-secondary" onclick="archiveTask(${t.id},'${slug}',${t.archived?0:1})" title="${t.archived?'取消归档':'归档'}"><i class="bi bi-${t.archived?'arrow-counterclockwise':'archive'}"></i></button> `;
+            b+=`<button class="btn btn-action btn-outline-info" onclick="duplicateTask(${t.id},'${slug}')" title="复制任务"><i class="bi bi-copy"></i></button>`;
+            return b;
+        }
+
+        function escapeHtml(s){return s?(s+'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'):''}
+        function formatTokens(n){if(n==null||n===0)return '—';if(n>=1000000)return (n/1000000).toFixed(1)+'M';if(n>=1000)return (n/1000).toFixed(1)+'K';return String(n);}
+        // ── Task actions (slug-aware) ──
+        async function _tapi(id,slug,method,body){const opts={method,headers:{'Content-Type':'application/json'}};if(body)opts.body=JSON.stringify(body);return(await fetch(`/api/tasks/${id}?p=${slug}`,opts)).json();}
+        async function startTask(id,slug){const r=await _tapi(id,slug,'PUT',{status:'in_progress'});if(!r.ok){if(r.error==='blocked'){if(confirm(r.message+':\n'+r.blockers.join('\n')+'\n强制启动？')){await _tapi(id,slug,'PUT',{status:'in_progress',force:true});showToast(`#${id} 强制启动`,'warning');}}else showToast(r.error||'失败','error');}else if(r.warnings)r.warnings.forEach(w=>showToast(w,'warning'));refreshData(true);}
+        async function completeTask(id,slug){await _tapi(id,slug,'PUT',{status:'completed'});showToast(`#${id} 完成`);refreshData(true);}
+        async function failTask(id,slug){await _tapi(id,slug,'PUT',{status:'failed'});showToast(`#${id} 失败`,'error');refreshData(true);}
+        async function retryTask(id,slug){await(await fetch(`/api/tasks/${id}/retry?p=${slug}`,{method:'POST'})).json();showToast(`#${id} 重置`);refreshData(true);}
+        async function rerunTask(id,slug){if(!confirm('重新全托管执行此任务？'))return;const r=await(await fetch(`/api/tasks/${id}/execute?p=${slug}`,{method:'POST'})).json();if(r.ok)showToast(`#${id} 重新执行中`);else showToast(r.error||'失败','error');refreshData(true);}
+        async function deleteTask(id,slug){if(!confirm('确定删除？'))return;await(await fetch(`/api/tasks/${id}?p=${slug}`,{method:'DELETE'})).json();showToast(`#${id} 已删除`);refreshData(true);}
+        async function stopTask(id,slug){await(await fetch(`/api/tasks/${id}/stop?p=${slug}`,{method:'POST'})).json();showToast(`#${id} 已停止`);refreshData(true);}
+
+        // ── Batch selection ──
+        function getSelectedTasks(){
+            const checks=document.querySelectorAll('.task-check:checked');
+            return Array.from(checks).map(c=>({id:parseInt(c.dataset.id),slug:c.dataset.slug,status:c.dataset.status}));
+        }
+        function updateBatchBar(){
+            const sel=getSelectedTasks();
+            const bar=document.getElementById('batch-bar');
+            if(!bar)return;
+            if(sel.length===0){bar.style.display='none';return;}
+            bar.style.display='flex';
+            document.getElementById('batch-count').textContent=`已选 ${sel.length} 项`;
+            // Show stop button only if any selected task is in_progress
+            const stopBtn=document.getElementById('batch-stop-btn');
+            if(stopBtn) stopBtn.style.display=sel.some(t=>t.status==='in_progress')?'inline-block':'none';
+        }
+        function toggleSelectAll(master){
+            document.querySelectorAll('.task-check').forEach(c=>{c.checked=master.checked;});
+            updateBatchBar();
+        }
+        function clearSelection(){
+            document.querySelectorAll('.task-check').forEach(c=>{c.checked=false;});
+            const sa=document.getElementById('select-all');if(sa)sa.checked=false;
+            updateBatchBar();
+        }
+        async function batchAction(action){
+            const sel=getSelectedTasks();
+            if(!sel.length)return;
+            const labels={delete:'删除',restart:'重启',stop:'停止'};
+            if(!confirm(`确定${labels[action]||action} ${sel.length} 个任务？`))return;
+            let ok=0,fail=0;
+            for(const t of sel){
+                try{
+                    if(action==='delete'){
+                        if(t.status==='in_progress')await fetch(`/api/tasks/${t.id}/stop?p=${t.slug}`,{method:'POST'});
+                        await fetch(`/api/tasks/${t.id}?p=${t.slug}`,{method:'DELETE'});
+                    }else if(action==='stop'){
+                        if(t.status==='in_progress')await fetch(`/api/tasks/${t.id}/stop?p=${t.slug}`,{method:'POST'});
+                    }else if(action==='restart'){
+                        if(t.status==='in_progress')await fetch(`/api/tasks/${t.id}/stop?p=${t.slug}`,{method:'POST'});
+                        await fetch(`/api/tasks/${t.id}/execute?p=${t.slug}`,{method:'POST'});
+                    }
+                    ok++;
+                }catch(e){fail++;}
+            }
+            showToast(`批量${labels[action]}：${ok} 成功${fail?', '+fail+' 失败':''}`);
+            clearSelection();refreshData(true);
+        }
+
+        // ── Relation helpers ──
+        async function addRelation(src,tgt,type,note){const r=await apiCall('/api/relations','POST',{source_id:src,target_id:tgt,relation_type:type,note:note||null});if(r.ok)showToast('关系已添加');else showToast(r.error||'添加失败','error');return r;}
+        async function deleteRelation(relId){await apiCall(`/api/relations/${relId}`,'DELETE');showToast('关系已删除');}
+
+        // ── Elapsed time ──
+        function updateElapsedTimes(){document.querySelectorAll('.elapsed-time').forEach(el=>{const s=el.dataset.started;if(!s)return;const d=Date.now()-new Date(s.replace(' ','T'));if(d<0)return;const m=Math.floor(d/60000),h=Math.floor(m/60);el.textContent=h>0?`${h}h ${m%60}m`:`${m}m`;});}
+
+        // ── Claude config panel ──
+        let _cfgData = null;
+
+        async function loadClaudeConfig(){
+            try{
+                const d = await(await fetch('/api/claude-config')).json();
+                _cfgData = d;
+                // Update model short in navbar
+                const short = document.getElementById('cfg-model-short');
+                if(short) short.textContent = (d.active_model||'').replace('claude-','').slice(0,12)||'?';
+                const ver = document.getElementById('cfg-version-badge');
+                if(ver && d.version) ver.textContent = 'v'+d.version;
+
+                const panel = document.getElementById('cfg-panel-content');
+                if(!panel) return;
+
+                const row = (k,v) => `<div class="cfg-row"><span class="cfg-key">${k}</span><span class="cfg-val">${v}</span></div>`;
+                const pill = v => `<span class="cfg-pill">${escapeHtml(String(v))}</span>`;
+                const modelTag = (icon,v) => `<span class="model-tag"><i class="bi bi-${icon}"></i>${escapeHtml(v)}</span>`;
+
+                // Model switcher rows
+                const models = [
+                    {role:'Sonnet', icon:'stars', key:'model_sonnet', val:d.model_sonnet},
+                    {role:'Opus',   icon:'gem',   key:'model_opus',   val:d.model_opus},
+                    {role:'Haiku',  icon:'feather',key:'model_haiku', val:d.model_haiku},
+                ];
+
+                let html = '';
+
+                // ── Models section ──
+                html += `<div class="mb-3">
+                  <div class="d-flex justify-content-between align-items-center mb-1">
+                    <span class="text-muted" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;">模型</span>
+                    <span class="text-muted" style="font-size:.7rem;">点击型号可切换</span>
+                  </div>`;
+
+                // Current active model override (from settings.json)
+                const override = d.model_override;
+                html += `<div class="mb-2 p-2 rounded" style="background:#f8f9fa;border:1px solid #e9ecef;">
+                  <div class="d-flex align-items-center justify-content-between">
+                    <span style="font-size:.78rem;color:#555;">当前使用</span>
+                    <div class="model-tag" id="active-model-tag"><i class="bi bi-cpu"></i>${escapeHtml(override||d.active_model||'default')}</div>
+                  </div>
+                  <div class="text-muted mt-1" style="font-size:.7rem;">在 settings.json 中设置 "model" 字段可覆盖默认模型</div>
+                </div>`;
+
+                models.forEach(m => {
+                    if(!m.val) return;
+                    const isActive = (override||d.active_model||'') === m.val;
+                    html += `<div class="cfg-row" style="cursor:pointer;border-radius:6px;padding:5px 6px;transition:background .1s;"
+                        onmouseenter="this.style.background='#f0f7ff'" onmouseleave="this.style.background=''"
+                        onclick="switchModel('${escapeHtml(m.val)}','${m.role}')">
+                        <span class="cfg-key">${m.role}</span>
+                        <span class="cfg-val d-flex align-items-center justify-content-between" style="flex:1;">
+                            ${modelTag(m.icon, m.val)}
+                            ${isActive ? '<span class="badge bg-success ms-2" style="font-size:.65rem;">● 当前</span>' : '<span class="text-muted ms-2" style="font-size:.7rem;">点击切换</span>'}
+                        </span>
+                    </div>`;
+                });
+
+                // Custom model input
+                html += `<div class="mt-2 d-flex gap-1">
+                  <input type="text" id="custom-model-input" class="form-control form-control-sm" style="font-family:monospace;font-size:.78rem;"
+                    placeholder="自定义模型名，如 claude-opus-4-6" value="${escapeHtml(override||'')}">
+                  <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="applyCustomModel()">应用</button>
+                  ${override ? `<button class="btn btn-sm btn-outline-secondary flex-shrink-0" onclick="clearModelOverride()" title="恢复默认">✕</button>` : ''}
+                </div>`;
+
+                html += '</div>';
+
+                // ── Runtime section ──
+                html += `<div class="mb-2"><div class="text-muted mb-1" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;">运行时</div>`;
+                if(d.base_url) html += row('Base URL', `<span style="font-size:.7rem;font-family:monospace;color:#666;word-break:break-all;">${escapeHtml(d.base_url)}</span>`);
+                if(d.entrypoint) html += row('入口', pill(d.entrypoint));
+                if(d.is_internal) html += row('内网版', '<span class="badge bg-success" style="font-size:.7rem;">✓ 是</span>');
+                if(d.active_sessions.length) html += row('活跃进程', `<span class="badge bg-primary">${d.active_sessions.length}</span>`);
+                html += '</div>';
+
+                // ── Settings section ──
+                html += `<div class="mb-2"><div class="text-muted mb-1" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;">全局设置</div>`;
+                if(d.theme) html += row('主题', pill(d.theme));
+                if(d.small_fast_llm) html += row('快速模型', pill(d.small_fast_llm));
+                if(d.max_thinking != null) html += row('MaxThinking', pill(d.max_thinking));
+                if(d.allow_list.length) html += row('允许工具', `<div style="display:flex;flex-wrap:wrap;gap:3px;">${d.allow_list.slice(0,6).map(pill).join('')}${d.allow_list.length>6?`<span class="cfg-pill">+${d.allow_list.length-6}</span>`:''}</div>`);
+                if(Object.keys(d.hooks||{}).length) html += row('Hooks', `<span class="badge bg-warning text-dark">${Object.keys(d.hooks).length} 个</span>`);
+                if(!d.theme && !d.small_fast_llm && d.max_thinking==null && !d.allow_list.length && !Object.keys(d.hooks||{}).length){
+                    html += `<div class="text-muted" style="font-size:.78rem;padding:4px 0;">无额外设置（使用默认值）</div>`;
+                }
+                html += '</div>';
+
+                // ── Taiji Token section ──
+                html += `<div class="mb-2"><div class="text-muted mb-1" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;">太极平台</div>`;
+                html += `<div id="taiji-token-section">加载中…</div></div>`;
+
+                // ── Storage info ──
+                html += `<div class="text-muted" style="font-size:.68rem;border-top:1px solid #f0f0f0;padding-top:6px;margin-top:4px;">
+                  <i class="bi bi-hdd me-1"></i>配置目录：<span style="font-family:monospace;">${escapeHtml(d.settings_dir)}</span>
+                </div>`;
+
+                panel.innerHTML = html;
+
+                // Load taiji token status
+                loadTaijiTokenUI();
+
+                // Keep the create-task model dropdown in sync with the live config
+                try{
+                    const sel=document.getElementById('model-select');
+                    if(sel){
+                        const realId={sonnet:d.model_sonnet, opus:d.model_opus, haiku:d.model_haiku};
+                        const price ={sonnet:'$3/M', opus:'$5/M', haiku:'$0.8/M'};
+                        for(const opt of sel.options){
+                            const k=opt.value; if(!realId[k]) continue;
+                            const label=opt.getAttribute('data-label')||opt.text.split(' ')[0];
+                            opt.text=`${label} · ${realId[k]} (${price[k]} in)`;
+                            opt.title=realId[k];
+                        }
+                    }
+                }catch(_){ }
+            }catch(e){
+                const panel = document.getElementById('cfg-panel-content');
+                if(panel) panel.innerHTML = '<div class="text-muted small p-2">加载失败</div>';
+            }
+        }
+
+        async function switchModel(modelName, roleLabel){
+            try{
+                const r = await(await fetch('/api/claude-config', {
+                    method:'PUT',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({model: modelName})
+                })).json();
+                if(r.ok){
+                    showToast(`模型已切换为 ${roleLabel}: ${modelName}`);
+                    loadClaudeConfig();  // refresh panel
+                } else showToast(r.error||'切换失败','error');
+            }catch(e){ showToast('切换失败: '+e.message,'error'); }
+        }
+
+        async function applyCustomModel(){
+            const val = document.getElementById('custom-model-input')?.value?.trim();
+            if(!val) return;
+            await switchModel(val, '自定义');
+        }
+
+        async function clearModelOverride(){
+            try{
+                const r = await(await fetch('/api/claude-config', {
+                    method:'PUT',
+                    headers:{'Content-Type':'application/json'},
+                    body: JSON.stringify({model: ''})
+                })).json();
+                if(r.ok){ showToast('已恢复默认模型'); loadClaudeConfig(); }
+                else showToast(r.error||'操作失败','error');
+            }catch(e){ showToast('操作失败','error'); }
+        }
+
+        // ── Taiji Token management ──
+        let _hasTaijiToken = false;
+        async function loadTaijiTokenUI(){
+            try{
+                const d = await(await fetch('/api/taiji-token')).json();
+                _hasTaijiToken = d.has_token;
+                const sec = document.getElementById('taiji-token-section');
+                if(!sec) return;
+                if(d.has_token){
+                    sec.innerHTML = `<div class="d-flex align-items-center justify-content-between mb-1">
+                        <span style="font-size:.78rem;">Token</span>
+                        <span class="badge bg-success" style="font-size:.7rem;"><i class="bi bi-check-circle me-1"></i>已配置</span>
+                    </div>
+                    <div class="d-flex gap-1 align-items-center">
+                        <code style="font-size:.75rem;flex:1;background:#f8f9fa;padding:3px 6px;border-radius:4px;">${escapeHtml(d.masked)}</code>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="showTaijiTokenEdit()" title="修改"><i class="bi bi-pencil"></i></button>
+                    </div>
+                    <div id="taiji-token-edit" style="display:none;" class="mt-2">
+                        <div class="d-flex gap-1">
+                            <input type="text" id="taiji-token-input" class="form-control form-control-sm" style="font-family:monospace;font-size:.78rem;" placeholder="输入新 Token">
+                            <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="saveTaijiToken()">保存</button>
+                            <button class="btn btn-sm btn-outline-secondary flex-shrink-0" onclick="document.getElementById('taiji-token-edit').style.display='none'">✕</button>
+                        </div>
+                    </div>`;
+                }else{
+                    sec.innerHTML = `<div class="d-flex align-items-center justify-content-between mb-1">
+                        <span style="font-size:.78rem;">Token</span>
+                        <span class="badge bg-warning text-dark" style="font-size:.7rem;"><i class="bi bi-exclamation-triangle me-1"></i>未配置</span>
+                    </div>
+                    <div class="d-flex gap-1 mt-1">
+                        <input type="text" id="taiji-token-input" class="form-control form-control-sm" style="font-family:monospace;font-size:.78rem;" placeholder="输入太极 Token">
+                        <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="saveTaijiToken()">保存</button>
+                    </div>
+                    <div class="text-muted mt-1" style="font-size:.7rem;">未配置 Token 时，任务将仅在 anydev 本地执行</div>`;
+                }
+            }catch(e){
+                const sec = document.getElementById('taiji-token-section');
+                if(sec) sec.innerHTML = '<div class="text-muted small">加载失败</div>';
+            }
+        }
+
+        function showTaijiTokenEdit(){
+            const el = document.getElementById('taiji-token-edit');
+            if(el) el.style.display = '';
+        }
+
+        async function saveTaijiToken(){
+            const inp = document.getElementById('taiji-token-input');
+            const val = inp?.value?.trim();
+            if(!val){showToast('请输入 Token','error');return;}
+            try{
+                const r = await(await fetch('/api/taiji-token',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:val})})).json();
+                if(r.ok){showToast('太极 Token 已保存');_hasTaijiToken=true;loadTaijiTokenUI();}
+                else showToast(r.error||'保存失败','error');
+            }catch(e){showToast('保存失败','error');}
+        }
+
+        // Also check taiji token on page load for warning dialog
+        (async()=>{try{const d=await(await fetch('/api/taiji-token')).json();_hasTaijiToken=d.has_token;}catch(e){}})();
+
+        // Load config when dropdown is opened
+        document.getElementById('cfg-nav-btn')?.addEventListener('show.bs.dropdown',loadClaudeConfig);
+
+        // Also load model name on page load for the navbar badge
+        (async()=>{try{
+            const d=await(await fetch('/api/claude-config')).json();
+            const s=document.getElementById('cfg-model-short');
+            if(s)s.textContent=(d.active_model||'').replace('claude-','').slice(0,12)||'?';
+            // Sync the create-task model dropdown labels with actual env-resolved IDs,
+            // and default-select the currently active model so it matches the navbar.
+            const sel=document.getElementById('model-select');
+            if(sel){
+                const realId={sonnet:d.model_sonnet, opus:d.model_opus, haiku:d.model_haiku};
+                const price ={sonnet:'$3/M', opus:'$5/M', haiku:'$0.8/M'};
+                for(const opt of sel.options){
+                    const k=opt.value; if(!realId[k]) continue;
+                    const label=opt.getAttribute('data-label')||opt.text.split(' ')[0];
+                    opt.text=`${label} · ${realId[k]} (${price[k]} in)`;
+                    opt.title=realId[k];
+                }
+                // Pick the default that matches the currently-active model
+                const active=(d.model_override||d.active_model||'').toLowerCase();
+                let match=null;
+                if(active){
+                    if(d.model_opus && active===d.model_opus.toLowerCase()) match='opus';
+                    else if(d.model_sonnet && active===d.model_sonnet.toLowerCase()) match='sonnet';
+                    else if(d.model_haiku && active===d.model_haiku.toLowerCase()) match='haiku';
+                    else if(active.includes('opus')) match='opus';
+                    else if(active.includes('haiku')) match='haiku';
+                    else if(active.includes('sonnet')) match='sonnet';
+                }
+                if(match){ sel.value=match; if(typeof _syncEffortByModel==='function') _syncEffortByModel(); }
+            }
+        }catch(e){}})();
+
+        // ── Floating Island + Tab Title ──
+        function updateFloatIsland(tasks){
+            const inProgress=(tasks||[]).filter(t=>t.status==='in_progress');
+            const countEl=document.getElementById('island-count');
+            const bodyEl=document.getElementById('island-body');
+            const island=document.getElementById('float-island');
+            if(!countEl||!bodyEl||!island)return;
+            countEl.textContent=inProgress.length;
+            if(inProgress.length===0){island.style.display='none';return;}
+            island.style.display='';
+            // Sort: idle (待回复) first, then running
+            inProgress.sort((a,b)=>{
+                if(a.agent_status==='idle'&&b.agent_status!=='idle')return -1;
+                if(b.agent_status==='idle'&&a.agent_status!=='idle')return 1;
+                return 0;
+            });
+            bodyEl.innerHTML=inProgress.map(t=>{
+                const slug=t._project_slug||(typeof P!=='undefined'?P:'');
+                const isIdle=t.agent_status==='idle';
+                const indicator=isIdle
+                    ?'<span class="island-badge-idle">待回复</span>'
+                    :'<span class="island-dot-running"></span>';
+                const desc=escapeHtml((t.description||'').substring(0,36));
+                return`<a class="island-task" href="/task/${t.id}?p=${slug}"><span class="island-task-id">#${t.id}</span><span class="island-task-desc">${desc}</span>${indicator}</a>`;
+            }).join('');
+        }
+        function toggleIsland(){
+            const el=document.getElementById('float-island');
+            if(!el)return;
+            el.classList.toggle('collapsed');
+            const icon=document.getElementById('island-toggle-icon');
+            if(icon)icon.style.transform=el.classList.contains('collapsed')?'rotate(180deg)':'';
+            localStorage.setItem('island-collapsed',el.classList.contains('collapsed')?'1':'0');
+        }
+        function updateTabTitle(tasks){
+            const idleCount=(tasks||[]).filter(t=>t.status==='in_progress'&&t.agent_status==='idle').length;
+            if(!window.__origTitle)window.__origTitle=document.title.replace(/^\(\d+ 待回复\) /,'');
+            document.title=idleCount>0?`(${idleCount} 待回复) ${window.__origTitle}`:window.__origTitle;
+        }
+        // Restore island collapse state
+        document.addEventListener('DOMContentLoaded',()=>{
+            if(localStorage.getItem('island-collapsed')==='1'){
+                const el=document.getElementById('float-island');
+                if(el){el.classList.add('collapsed');const ic=document.getElementById('island-toggle-icon');if(ic)ic.style.transform='rotate(180deg)';}
+            }
+        });
+
+        // ── Timers ──
+        setInterval(()=>{countdown--;const e=document.getElementById('refresh-countdown');if(e)e.textContent=Math.max(0,countdown);if(countdown<=0)refreshData();},1000);
+        setInterval(updateElapsedTimes,10000);
+
+        // ── Global keyboard shortcuts ──
+        document.addEventListener('keydown',e=>{
+            if(e.ctrlKey&&e.key==='n'){e.preventDefault();openCreateModal();}
+        });
+
+        document.addEventListener('DOMContentLoaded',()=>{
+            setupSlashInput('create-desc','slash-dropdown');
+            updateElapsedTimes();
+            refreshData(true);  // Immediate first poll — no 5s delay for floating island
+        });
+    </script>
+    {% block extra_scripts %}{% endblock %}
+    <!-- Floating Task Island -->
+    <div id="float-island" class="float-island" style="display:none;">
+        <div class="float-island-header" onclick="toggleIsland()">
+            <span>🔄 进行中 <span id="island-count" class="badge bg-primary" style="font-size:.7rem;">0</span></span>
+            <i id="island-toggle-icon" class="bi bi-chevron-down" style="font-size:.7rem;transition:transform .2s"></i>
+        </div>
+        <div id="island-body" class="float-island-body"></div>
+    </div>
+</body>
+</html>

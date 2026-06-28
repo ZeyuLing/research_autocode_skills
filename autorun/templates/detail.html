@@ -1,0 +1,1364 @@
+{% extends "base.html" %}
+{% block title %}任务 #{{ task.id }} — TODO Dashboard{% endblock %}
+
+{% block extra_head %}
+<!-- Markdown rendering -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css">
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<style>
+    /* ChatGPT-style markdown in chat bubbles */
+    .msg-markdown { font-size:.88rem; line-height:1.65; word-break:break-word; }
+    .msg-markdown p { margin:0 0 .5em; }
+    .msg-markdown p:last-child { margin-bottom:0; }
+    .msg-markdown pre { background:#1e1e2e; color:#cdd6f4; border-radius:8px; padding:12px 14px; overflow-x:auto; font-size:.82rem; margin:.6em 0; position:relative; }
+    .msg-markdown code { font-family:'Fira Code',Consolas,'Courier New',monospace; font-size:.84em; }
+    .msg-markdown :not(pre)>code { background:rgba(0,0,0,.06); padding:1px 5px; border-radius:4px; }
+    .msg-markdown ul, .msg-markdown ol { padding-left:1.4em; margin:.4em 0; }
+    .msg-markdown li { margin:.15em 0; }
+    .msg-markdown h1,.msg-markdown h2,.msg-markdown h3,.msg-markdown h4 { margin:.6em 0 .3em; font-weight:600; }
+    .msg-markdown h1 { font-size:1.15em; } .msg-markdown h2 { font-size:1.08em; } .msg-markdown h3 { font-size:1em; }
+    .msg-markdown blockquote { border-left:3px solid #d0d7de; padding-left:12px; color:#656d76; margin:.5em 0; }
+    .msg-markdown table { border-collapse:collapse; margin:.5em 0; font-size:.85em; width:100%; }
+    .msg-markdown th,.msg-markdown td { border:1px solid #d0d7de; padding:4px 8px; }
+    .msg-markdown th { background:#f6f8fa; font-weight:600; }
+    .msg-markdown a { color:#2d7dd2; text-decoration:underline; }
+    .msg-markdown img { max-width:100%; border-radius:6px; }
+    /* Copy button on code blocks */
+    .code-copy-btn { position:absolute; top:6px; right:6px; background:rgba(255,255,255,.15); border:none; color:#cdd6f4; border-radius:4px; padding:2px 8px; font-size:.7rem; cursor:pointer; opacity:0; transition:opacity .15s; }
+    .msg-markdown pre:hover .code-copy-btn { opacity:1; }
+    .code-copy-btn:hover { background:rgba(255,255,255,.3); }
+    /* User bubble markdown override — white text links */
+    .msg-user-bubble .msg-markdown :not(pre)>code { background:rgba(255,255,255,.18); color:#fff; }
+    .msg-user-bubble .msg-markdown a { color:#7dd3fc; }
+    .msg-user-bubble .msg-markdown blockquote { border-left-color:rgba(255,255,255,.35); color:rgba(255,255,255,.8); }
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Breadcrumb -->
+<nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+        <li class="breadcrumb-item"><a href="/">Dashboard</a></li>
+        {% if parent %}<li class="breadcrumb-item"><a href="/task/{{ parent.id }}">任务 #{{ parent.id }}</a></li>{% endif %}
+        <li class="breadcrumb-item active">任务 #{{ task.id }}</li>
+    </ol>
+</nav>
+
+<div class="row g-4">
+    <!-- Main Info -->
+    <div class="col-lg-8">
+        <!-- Task Card -->
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-3">
+                    <div>
+                        <span class="badge bg-secondary" style="font-size:.82rem;cursor:pointer;user-select:all" title="任务 ID: {{ task.id }}">#{{ task.id }}</span>
+                        {% if task.tag %}<span class="badge bg-light text-dark border ms-2">{{ task.tag }}</span>{% endif %}
+                        {% if task.skill %}<span class="skill-badge ms-2">/{{ task.skill }}</span>{% endif %}
+                        {% if task.config_user %}<span class="badge bg-info text-dark ms-2" style="font-size:.7rem;"><i class="bi bi-person-badge me-1"></i>{{ task.config_user }}</span>{% endif %}
+                    </div>
+                    <span id="top-status-badge" class="badge {% if task.status == 'in_progress' and task.agent_status == 'idle' %}badge-idle{% else %}badge-{{ task.status }}{% endif %} fs-6">
+                        {% if task.status == 'in_progress' and task.agent_status == 'idle' %}💬 等待回复
+                        {% elif task.status == 'pending' %}⏳ 待处理{% elif task.status == 'in_progress' %}🔄 进行中
+                        {% elif task.status == 'completed' %}✅ 完成{% elif task.status == 'failed' %}❌ 失败
+                        {% elif task.status == 'decomposed' %}🔀 已拆解{% endif %}
+                    </span>
+                </div>
+
+                <h4 class="mb-3">{{ task.description }}</h4>
+
+                {% if parent %}
+                <div class="text-muted small mb-2">
+                    <i class="bi bi-diagram-3"></i> 子任务，隶属于
+                    <a href="/task/{{ parent.id }}">#{{ parent.id }} {{ parent.description }}</a>
+                </div>
+                {% endif %}
+
+                <!-- Blocked / Conflict warnings -->
+                {% if blockers %}
+                <div class="alert alert-warning py-2 d-flex align-items-center gap-2 mb-3">
+                    <i class="bi bi-lock-fill"></i>
+                    <div>
+                        <strong>此任务被阻塞</strong>，以下任务必须先完成：
+                        <ul class="mb-0 mt-1">
+                        {% for b in blockers %}
+                            <li><a href="/task/{{ b.id }}">#{{ b.id }}</a> {{ b.description }}
+                                <span class="badge badge-{{ b.status }} ms-1">{{ b.status }}</span></li>
+                        {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if conflicts_active %}
+                <div class="alert alert-warning py-2 d-flex align-items-center gap-2 mb-3" style="background:#fff3e0;border-color:#fd7e14;">
+                    <i class="bi bi-exclamation-triangle-fill text-warning"></i>
+                    <div>
+                        <strong>存在活跃冲突</strong>，以下冲突任务正在执行：
+                        <ul class="mb-0 mt-1">
+                        {% for c in conflicts_active %}
+                            <li><a href="/task/{{ c.id }}">#{{ c.id }}</a> {{ c.description }}</li>
+                        {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+                {% endif %}
+
+                <!-- Inline Edit Form -->
+                <div class="mt-3 p-3 bg-light rounded" id="edit-section" style="display:none;">
+                    <div class="mb-2" style="position:relative;">
+                        <div id="edit-slash-dropdown" class="slash-dropdown"></div>
+                        <label class="form-label small fw-bold"><i class="bi bi-card-text me-1"></i>描述</label>
+                        <textarea class="form-control form-control-sm" id="edit-desc" rows="3" style="resize:vertical;" autocomplete="off">{{ task.description }}</textarea>
+                        <div class="mt-1 text-muted" style="font-size:.7rem;">输入 <code>/</code> 触发 skill 补全</div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold"><i class="bi bi-tag me-1"></i>标签</label>
+                        <input type="text" class="form-control form-control-sm" id="edit-tag" value="{{ task.tag or '' }}" placeholder="如: urgent / research / bugfix">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold"><i class="bi bi-patch-check me-1"></i>验收标准 <span class="text-muted fw-normal">(可选，留空则由 AI 自动确定)</span></label>
+                        <textarea class="form-control form-control-sm" id="edit-acceptance" rows="3" style="resize:vertical;"
+                            placeholder="描述验收标准，AI 会据此设计自动化测试。例如：&#10;- loss 降到 0.5 以下&#10;- 所有 API 返回 200">{{ task.acceptance_criteria or '' }}</textarea>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold"><i class="bi bi-sticky me-1"></i>备注</label>
+                        <textarea class="form-control form-control-sm" id="edit-notes" rows="2">{{ task.notes or '' }}</textarea>
+                    </div>
+                    <div class="mb-2 d-flex gap-3">
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit-human-review"{% if task.human_review %} checked{% endif %}>
+                            <label class="form-check-label" for="edit-human-review" style="font-size:.82rem;">
+                                <i class="bi bi-person-check me-1"></i>需要人工审核
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit-auto-execute"{% if task.auto_execute %} checked{% endif %}>
+                            <label class="form-check-label" for="edit-auto-execute" style="font-size:.82rem;">
+                                <i class="bi bi-rocket-takeoff me-1"></i>全托管执行
+                            </label>
+                        </div>
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="edit-interactive"{% if task.interactive %} checked{% endif %}>
+                            <label class="form-check-label" for="edit-interactive" style="font-size:.82rem;">
+                                <i class="bi bi-chat-dots me-1"></i>💬 交互模式
+                            </label>
+                        </div>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label small fw-bold"><i class="bi bi-person-badge me-1"></i>执行身份（扣费账户）</label>
+                        <select class="form-select form-select-sm" id="edit-config-user">
+                            <option value=""{% if not task.config_user %} selected{% endif %}>默认</option>
+                            {% for u in config_users %}
+                            <option value="{{ u }}"{% if task.config_user == u %} selected{% endif %}>{{ u }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="row g-2 mb-2">
+                        <div class="col">
+                            <label class="form-label small fw-bold"><i class="bi bi-cpu me-1"></i>模型</label>
+                            <select class="form-select form-select-sm" id="edit-model">
+                                <option value="sonnet"{% if task.model == 'sonnet' %} selected{% endif %}>Sonnet ($3/M in)</option>
+                                <option value="opus"{% if task.model == 'opus' %} selected{% endif %}>Opus 4.7 ($5/M in)</option>
+                                <option value="haiku"{% if task.model == 'haiku' %} selected{% endif %}>Haiku ($0.8/M in)</option>
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label small fw-bold"><i class="bi bi-lightning me-1"></i>推理强度</label>
+                            <select class="form-select form-select-sm" id="edit-effort">
+                                <option value="low"{% if task.effort == 'low' %} selected{% endif %}>Low（快速）</option>
+                                <option value="medium"{% if task.effort == 'medium' or not task.effort %} selected{% endif %}>Medium（默认）</option>
+                                <option value="high"{% if task.effort == 'high' %} selected{% endif %}>High（深度思考）</option>
+                                <option value="xhigh" data-models="opus"{% if task.effort == 'xhigh' %} selected{% endif %}>xHigh（仅 Opus 4.7）</option>
+                                <option value="max" data-models="opus"{% if task.effort == 'max' %} selected{% endif %}>Max（最强，仅 Opus 4.7）</option>
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label small fw-bold"><i class="bi bi-currency-dollar me-1"></i>成本上限 (USD)</label>
+                            <input type="number" class="form-control form-control-sm" id="edit-max-cost" step="0.5" min="0.1" value="{{ task.max_cost_usd or 5.0 }}">
+                        </div>
+                    </div>
+                    <button class="btn btn-sm btn-success" onclick="saveEdit()"><i class="bi bi-check"></i> 保存</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleEdit()">取消</button>
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="mt-3 d-flex gap-2 flex-wrap">
+                    <button class="btn btn-outline-secondary btn-sm" onclick="toggleEdit()"><i class="bi bi-pencil"></i> 编辑</button>
+                    {% if task.status == 'pending' %}
+                    <button class="btn btn-primary btn-sm" onclick="executeTask({{ task.id }})" id="btn-execute">
+                        <i class="bi bi-rocket-takeoff"></i> 全托管执行</button>
+                    <button class="btn btn-outline-primary btn-sm" onclick="startTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                        <i class="bi bi-play-fill"></i> 标记开始</button>
+                    {% endif %}
+                    {% if task.status == 'in_progress' %}
+                    <button class="btn btn-outline-danger btn-sm" onclick="stopExecution({{ task.id }})" id="btn-stop-exec"
+                        style="display:none;">
+                        <i class="bi bi-stop-circle"></i> 终止</button>
+                    <button class="btn btn-success btn-sm" onclick="completeTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                        <i class="bi bi-check-lg"></i> 标记完成</button>
+                    <button class="btn btn-danger btn-sm" onclick="failTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                        <i class="bi bi-x-lg"></i> 标记失败</button>
+                    {% endif %}
+                    {% if task.status == 'failed' %}
+                    <button class="btn btn-primary btn-sm" onclick="executeTask({{ task.id }})" id="btn-execute">
+                        <i class="bi bi-rocket-takeoff"></i> 重新执行</button>
+                    {% if task.session_id %}
+                    <button class="btn btn-success btn-sm" onclick="resumeTask({{ task.id }})" id="btn-resume">
+                        <i class="bi bi-skip-forward-fill"></i> 追加预算并继续</button>
+                    {% endif %}
+                    <button class="btn btn-warning btn-sm" onclick="retryTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                        <i class="bi bi-arrow-clockwise"></i> 重置</button>
+                    {% endif %}
+                    {% if task.status == 'completed' %}
+                    <button class="btn btn-outline-warning btn-sm" onclick="executeTask({{ task.id }})" id="btn-execute">
+                        <i class="bi bi-arrow-clockwise"></i> 重新执行</button>
+                    {% if task.session_id %}
+                    <button class="btn btn-success btn-sm" onclick="resumeTask({{ task.id }})">
+                        <i class="bi bi-chat-dots"></i> 继续对话</button>
+                    {% endif %}
+                    {% endif %}
+                    {% if task.status != 'in_progress' and task.status != 'decomposed' %}
+                    <button class="btn btn-outline-danger btn-sm" onclick="if(confirm('确定删除？')){deleteTask({{ task.id }}); setTimeout(()=>location.href='/', 500);}">
+                        <i class="bi bi-trash3"></i> 删除</button>
+                    {% endif %}
+                    <button class="btn btn-outline-info btn-sm" onclick="duplicateTask({{ task.id }})">
+                        <i class="bi bi-copy"></i> 复制任务</button>
+                </div>
+
+                <!-- Auto-execution status banner (both hidden by default, JS controls visibility) -->
+                {% if task.status == 'in_progress' %}
+                <div class="alert alert-info py-2 px-3 mt-3 mb-0" style="font-size:.82rem;border-radius:8px;display:none;" id="autoexec-banner">
+                    <div class="d-flex align-items-center gap-2">
+                        <div class="spinner-border spinner-border-sm text-primary" role="status" id="autoexec-spinner">
+                            <span class="visually-hidden">执行中...</span>
+                        </div>
+                        <span id="exec-status-label">🚀 <strong>运行中</strong></span>
+                        <span class="ms-auto d-flex align-items-center gap-3" style="font-size:.78rem;color:#555;">
+                            <span id="exec-cost-label" title="当前花费 / 上限">💰 --</span>
+                            <span id="exec-activity-label" title="JSONL 最后写入时间">📡 --</span>
+                            <span id="exec-pid-label" title="CC 进程 PID" style="font-family:monospace;">PID --</span>
+                        </span>
+                    </div>
+                </div>
+                <div class="alert alert-warning py-2 px-3 mt-3 mb-0 d-flex align-items-center gap-2" style="font-size:.82rem;border-radius:8px;display:none;" id="orphan-banner">
+                    <i class="bi bi-exclamation-triangle-fill text-warning"></i>
+                    <span>⚠️ <strong>进程已断开</strong> — 任务标记为进行中，但没有 Claude Code 进程在运行</span>
+                    <button class="btn btn-sm btn-primary ms-auto" onclick="executeTask({{ task.id }})">
+                        <i class="bi bi-rocket-takeoff me-1"></i>重新托管执行
+                    </button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="failTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                        标记失败
+                    </button>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+
+        <!-- Relations Section -->
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-3"><i class="bi bi-diagram-3"></i> 任务关系</h6>
+
+                {% macro relation_list(items, label, badge_cls, direction) %}
+                {% if items %}
+                <div class="mb-3">
+                    <div class="small fw-bold text-muted mb-1">{{ label }}</div>
+                    {% for item in items %}
+                    <div class="relation-item">
+                        <span class="badge {{ badge_cls }}">{{ direction }}</span>
+                        <a href="/task/{{ item.task_id }}">#{{ item.task_id }}</a>
+                        <span>{{ item.description }}</span>
+                        <span class="badge badge-{{ item.status }} ms-auto">{{ item.status }}</span>
+                        {% if item.note %}<small class="text-muted ms-1">({{ item.note }})</small>{% endif %}
+                        <button class="btn btn-sm text-danger p-0 ms-1" onclick="removeRelation({{ item.relation_id }})" title="删除">
+                            <i class="bi bi-x-circle"></i></button>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+                {% endmacro %}
+
+                {{ relation_list(relations.blocks, '阻塞（此任务完成后才能开始的任务）', 'badge-blocks', '→ blocks') }}
+                {{ relation_list(relations.blocked_by, '被阻塞（必须先完成的前置任务）', 'badge-blocks', '← blocked by') }}
+                {{ relation_list(relations.conflicts, '冲突（修改相同文件，不能并行执行）', 'badge-conflicts', '⟷ conflicts') }}
+                {{ relation_list(relations.related, '关联（相关但无调度约束）', 'badge-related', '↔ related') }}
+
+                {% if not relations.blocks and not relations.blocked_by and not relations.conflicts and not relations.related %}
+                <p class="text-muted small mb-3">暂无关系</p>
+                {% endif %}
+
+                <!-- Add Relation Form -->
+                <div class="border-top pt-3 mt-2">
+                    <div class="row g-2 align-items-end">
+                        <div class="col-auto">
+                            <label class="form-label small">关系类型</label>
+                            <select class="form-select form-select-sm" id="rel-type">
+                                <option value="blocks">阻塞 (此任务 → 目标)</option>
+                                <option value="conflicts">冲突 (双向)</option>
+                                <option value="related">关联 (双向)</option>
+                            </select>
+                        </div>
+                        <div class="col">
+                            <label class="form-label small">目标任务</label>
+                            <select class="form-select form-select-sm" id="rel-target">
+                                <option value="">-- 选择任务 --</option>
+                                {% for t in all_tasks %}
+                                <option value="{{ t.id }}">#{{ t.id }} {% if t.tag %}[{{ t.tag }}] {% endif %}{{ t.description[:60] }}</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-auto" style="width:150px;">
+                            <label class="form-label small">备注 (可选)</label>
+                            <input type="text" class="form-control form-control-sm" id="rel-note" placeholder="如：同文件">
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-sm btn-outline-primary" onclick="addRelationFromForm()">
+                                <i class="bi bi-plus"></i> 添加
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Conclusion -->
+        {% if task.conclusion %}
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-2"><i class="bi bi-chat-square-text"></i> 结论</h6>
+                <p class="mb-0" style="white-space:pre-wrap;">{{ task.conclusion }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Modified Files -->
+        {% if task.parsed_files %}
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-2"><i class="bi bi-file-earmark-diff"></i> 修改文件</h6>
+                <ul class="list-unstyled mb-0">
+                {% for f in task.parsed_files %}
+                    <li class="mb-1">
+                        {% if f is mapping %}<code>{{ f.path or f }}</code>{% if f.desc %}<small class="text-muted"> — {{ f.desc }}</small>{% endif %}
+                        {% else %}<code>{{ f }}</code>{% endif %}
+                    </li>
+                {% endfor %}
+                </ul>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Notes -->
+        {% if task.notes %}
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-2"><i class="bi bi-sticky"></i> 备注</h6>
+                <p class="mb-0" style="white-space:pre-wrap;">{{ task.notes }}</p>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- ══ Conversation Panel ══ -->
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;" id="conv-panel">
+            <div class="card-body pb-2">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h6 class="text-muted mb-0">
+                        <i class="bi bi-chat-dots"></i> 对话 &amp; 消息
+                        <span id="conv-status-badge" class="badge ms-2" style="font-size:.65rem;">
+                        {% if task.status == 'in_progress' and task.agent_status == 'idle' %}
+                            <span class="badge badge-idle" style="font-size:.65rem;animation:pulse 2s infinite;">💬 等待回复</span>
+                        {% elif task.status == 'in_progress' %}
+                            <span class="badge badge-in_progress" style="font-size:.65rem;animation:pulse 2s infinite;">🔄 执行中</span>
+                        {% elif task.status == 'completed' %}
+                            <span class="badge bg-secondary" style="font-size:.65rem;">✅ 已完成</span>
+                        {% elif task.status == 'failed' %}
+                            <span class="badge bg-danger" style="font-size:.65rem;">❌ 已失败</span>
+                        {% elif task.status == 'pending' %}
+                            <span class="badge bg-light text-muted" style="font-size:.65rem;">待执行</span>
+                        {% endif %}
+                        </span>
+                    </h6>
+                </div>
+
+                <!-- Status explanation banner -->
+                {% if task.status == 'in_progress' and not task.agent_id %}
+                <div class="alert alert-info py-2 px-3 mb-3" style="font-size:.82rem;border-radius:8px;">
+                    <i class="bi bi-info-circle me-1"></i>
+                    任务正在全托管执行中。你发送的消息会被保存，在任务下次执行时作为上下文注入。
+                </div>
+                {% elif task.status not in ('in_progress', 'completed') and not task.agent_id %}
+                <div class="alert alert-light py-2 px-3 mb-3" style="font-size:.82rem;border-radius:8px;border:1px solid #e0e0e0;">
+                    <i class="bi bi-chat-square-text me-1"></i>
+                    写下你对这个任务的要求、补充信息或追问。Agent 执行时会读取这些消息作为上下文。
+                </div>
+                {% endif %}
+
+                <!-- Message bubbles -->
+                <div id="conv-msgs" style="max-height:420px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;padding:4px 0 8px;">
+                    {% if has_more_msgs %}
+                    <div id="load-more-msgs" style="text-align:center;padding:6px 0;">
+                        <button class="btn btn-sm btn-outline-secondary" onclick="loadOlderMessages()" id="btn-load-more">
+                            <i class="bi bi-arrow-up-circle"></i> 加载更早的消息
+                        </button>
+                        <span id="load-more-spinner" style="display:none;" class="spinner-border spinner-border-sm text-muted"></span>
+                    </div>
+                    {% endif %}
+                    {% if messages %}
+                    {% for m in messages %}
+                    <div class="d-flex {% if m.role == 'user' %}justify-content-end{% else %}justify-content-start{% endif %}">
+                        <div style="max-width:80%;">
+                            {% if m.role == 'system' %}
+                            {# System messages = execution log pills or agent text #}
+                            {% set _raw = m.content %}
+                            {% if '[phase]' in _raw %}{% set _ev='phase' %}{% set _txt=_raw|replace('[phase]','')|trim %}
+                            {% elif '[agent_start]' in _raw %}{% set _ev='agent_start' %}{% set _txt=_raw|replace('[agent_start]','')|trim %}
+                            {% elif '[agent_done]' in _raw %}{% set _ev='agent_done' %}{% set _txt=_raw|replace('[agent_done]','')|trim %}
+                            {% elif '[agent_fail]' in _raw %}{% set _ev='agent_fail' %}{% set _txt=_raw|replace('[agent_fail]','')|trim %}
+                            {% elif '[assistant]' in _raw %}{% set _ev='assistant' %}{% set _txt=_raw|replace('[assistant]','')|trim %}
+                            {% elif '[tool_use]' in _raw %}{% set _ev='tool_use' %}{% set _txt=_raw|replace('[tool_use]','')|trim %}
+                            {% elif '[tool_result]' in _raw %}{% set _ev='tool_result' %}{% set _txt=_raw|replace('[tool_result]','')|trim %}
+                            {% elif '[thinking]' in _raw %}{% set _ev='thinking' %}{% set _txt=_raw|replace('[thinking]','')|trim %}
+                            {% elif '[progress]' in _raw %}{% set _ev='progress' %}{% set _txt=_raw|replace('[progress]','')|trim %}
+                            {% elif '[error]' in _raw %}{% set _ev='error' %}{% set _txt=_raw|replace('[error]','')|trim %}
+                            {% elif '[review]' in _raw %}{% set _ev='review' %}{% set _txt=_raw|replace('[review]','')|trim %}
+                            {% else %}{% set _ev='info' %}{% set _txt=_raw %}
+                            {% endif %}
+                            {% if _ev == 'assistant' %}
+                            {# Full assistant streaming text — prominent chat bubble #}
+                            <div style="background:#f8f9fa;color:#1a1a1a;border-radius:16px 16px 16px 4px;padding:12px 16px;max-width:90%;border-left:3px solid #6366f1;">
+                                <div class="msg-markdown msg-render">{{ _txt }}</div>
+                            </div>
+                            <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                                🤖 Claude · {{ m.created_at[11:16] if m.created_at else '' }}
+                            </div>
+                            {% elif _ev == 'tool_use' %}
+                            {# Tool invocation — dark terminal style #}
+                            <div style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:8px 12px;font-family:'Fira Code',monospace;font-size:.82rem;max-width:90%;border-left:3px solid #89b4fa;">
+                                <div class="msg-markdown msg-render">{{ _txt }}</div>
+                            </div>
+                            <div style="font-size:.65rem;color:#aaa;margin-top:2px;">⚡ Tool · {{ m.created_at[11:16] if m.created_at else '' }}</div>
+                            {% elif _ev == 'tool_result' %}
+                            {# Tool output — collapsible #}
+                            <details style="background:#f5f5f5;border-radius:6px;padding:4px 10px;font-size:.8rem;max-width:90%;border:1px solid #e0e0e0;">
+                                <summary style="cursor:pointer;color:#666;font-size:.75rem;"><i class="bi bi-terminal"></i> 输出 ({{ _txt|length }} chars) · {{ m.created_at[11:16] if m.created_at else '' }}</summary>
+                                <pre style="max-height:300px;overflow-y:auto;margin-top:4px;white-space:pre-wrap;font-size:.78rem;">{{ _txt }}</pre>
+                            </details>
+                            {% elif _ev == 'thinking' %}
+                            {# Thinking — collapsed by default #}
+                            <details style="background:#fefce8;border-radius:6px;padding:4px 10px;font-size:.8rem;max-width:90%;border:1px solid #fde68a;">
+                                <summary style="cursor:pointer;color:#92400e;font-size:.75rem;"><i class="bi bi-lightbulb"></i> 思考过程 · {{ m.created_at[11:16] if m.created_at else '' }}</summary>
+                                <div class="msg-markdown msg-render" style="max-height:400px;overflow-y:auto;margin-top:4px;color:#78350f;">{{ _txt }}</div>
+                            </details>
+                            {% elif _ev == 'info' and _txt|length > 80 %}
+                            {# Long info messages = Claude agent text output → render as markdown bubble #}
+                            <div style="background:#f4f4f5;color:#1a1a1a;border-radius:16px 16px 16px 4px;padding:10px 14px;max-width:85%;">
+                                <div class="msg-markdown msg-render">{{ _txt }}</div>
+                            </div>
+                            <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                                🤖 Agent · {{ m.created_at[11:16] if m.created_at else '' }}
+                            </div>
+                            {% elif _ev in ('agent_fail', 'error') %}
+                            {# Error messages → render as prominent error block #}
+                            <div style="background:#fff0f0;border:1px solid #ffcdd2;border-left:4px solid #e53935;color:#b71c1c;border-radius:8px;padding:10px 14px;max-width:90%;font-size:.85rem;">
+                                <div style="font-weight:600;margin-bottom:4px;"><i class="bi bi-exclamation-triangle-fill" style="color:#e53935;"></i> {{ '执行失败' if _ev == 'agent_fail' else '错误' }}</div>
+                                <div class="msg-markdown msg-render" style="color:#c62828;">{{ _txt }}</div>
+                            </div>
+                            <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                                ⚠️ System · {{ m.created_at[11:16] if m.created_at else '' }}
+                            </div>
+                            {% else %}
+                            <div style="text-align:center;padding:2px 0;">
+                                <span class="log-pill log-{{ _ev }}">{{ _txt }}</span>
+                                <span style="color:#bbb;font-size:.65rem;margin-left:5px;">{{ m.created_at[11:16] if m.created_at else '' }}</span>
+                            </div>
+                            {% endif %}
+                            {% elif m.role == 'user' %}
+                            <div class="msg-user-bubble" style="background:#1a3c8a;color:#fff;border-radius:16px 16px 4px 16px;padding:10px 14px;">
+                                <div class="msg-markdown msg-render">{{ m.content }}</div>
+                            </div>
+                            <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:right;">
+                                🧑 你 · {{ m.created_at }}
+                                {% if m.status == 'pending_send' %}<span style="color:#f0a500;">⏳ 待发送给 Agent</span>
+                                {% elif m.status == 'sending' %}<span style="color:#2196f3;">📤 发送中</span>
+                                {% else %}<span style="color:#aaa;">✓ 已存入</span>{% endif %}
+                            </div>
+                            {% else %}
+                            <div style="background:#f4f4f5;color:#1a1a1a;border-radius:16px 16px 16px 4px;padding:10px 14px;">
+                                <div class="msg-markdown msg-render">{{ m.content }}</div>
+                            </div>
+                            <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                                🤖 Agent · {{ m.created_at }}
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                    {% else %}
+                    <div class="text-center text-muted py-4" style="font-size:.85rem;" id="conv-empty">
+                        <i class="bi bi-chat-square-dots" style="font-size:2rem;opacity:.3;"></i><br>
+                        暂无对话记录。执行任务后，Agent 的输出会显示在这里。<br>
+                        你也可以现在写下问题，下次执行时 Agent 会看到。
+                    </div>
+                    {% endif %}
+                </div>
+
+                <!-- Input bar -->
+                <div class="border-top pt-3 mt-1">
+                    {% set _task_ended = task.status in ('completed', 'failed') %}
+                    {% if _task_ended and not task.session_id %}
+                    <div style="text-align:center;padding:12px 0;color:#999;font-size:.85rem;">
+                        <i class="bi bi-check-circle"></i> 任务已{{ '完成' if task.status == 'completed' else '结束' }}，如需继续请重新执行任务
+                    </div>
+                    {% elif _task_ended and task.session_id %}
+                    <div style="text-align:center;padding:8px 0;color:#888;font-size:.82rem;margin-bottom:8px;">
+                        <i class="bi bi-{% if task.status == 'completed' %}check-circle{% else %}x-circle{% endif %}"></i>
+                        任务已{{ '完成' if task.status == 'completed' else '失败' }}。
+                        输入消息后点击上方「{% if task.status == 'completed' %}继续对话{% else %}追加预算并继续{% endif %}」可恢复会话。
+                    </div>
+                    <div style="display:flex;gap:8px;align-items:flex-end;position:relative;">
+                        <div id="conv-slash-dropdown" class="slash-dropdown"></div>
+                        <textarea id="conv-input" rows="2"
+                            class="form-control form-control-sm"
+                            placeholder="输入消息，然后点击「{% if task.status == 'completed' %}继续对话{% else %}追加预算并继续{% endif %}」恢复会话…"
+                            style="resize:vertical;min-height:60px;flex:1;font-size:.88rem;"
+                            autocomplete="off"
+                            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){sendConvMsg();event.preventDefault();}"></textarea>
+                        <button class="btn btn-primary btn-sm" onclick="sendConvMsg()" id="conv-send-btn"
+                            style="height:60px;white-space:nowrap;min-width:56px;">
+                            <i class="bi bi-send-fill"></i><br><span style="font-size:.7rem;">发送</span>
+                        </button>
+                    </div>
+                    {% else %}
+                    <div style="display:flex;gap:8px;align-items:flex-end;position:relative;">
+                        <div id="conv-slash-dropdown" class="slash-dropdown"></div>
+                        <textarea id="conv-input" rows="2"
+                            class="form-control form-control-sm"
+                            placeholder="{% if task.agent_id %}给 Agent 发消息… (Ctrl+Enter 发送){% elif task.status == 'in_progress' %}补充要求或问题… (Ctrl+Enter 发送){% else %}给 Agent 留言，执行时会作为上下文注入…{% endif %}"
+                            style="resize:vertical;min-height:60px;flex:1;font-size:.88rem;"
+                            autocomplete="off"
+                            onkeydown="if((event.ctrlKey||event.metaKey)&&event.key==='Enter'){sendConvMsg();event.preventDefault();}"></textarea>
+                        <button class="btn btn-primary btn-sm" onclick="sendConvMsg()" id="conv-send-btn"
+                            style="height:60px;white-space:nowrap;min-width:56px;">
+                            <i class="bi bi-send-fill"></i><br><span style="font-size:.7rem;">发送</span>
+                        </button>
+                    </div>
+                    <div class="d-flex gap-2 mt-2 flex-wrap">
+                        <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;"
+                            onclick="insertQuick('请继续上次的工作')">继续上次</button>
+                        <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;"
+                            onclick="insertQuick('请修改：')">修改方案</button>
+                        <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;"
+                            onclick="insertQuick('请解释一下你的做法')">解释做法</button>
+                        <button class="btn btn-outline-secondary btn-sm" style="font-size:.75rem;"
+                            onclick="insertQuick('这里有个问题：')">反馈问题</button>
+                    </div>
+                    <!-- Confirmation area: shown after send -->
+                    <div id="conv-confirm" style="display:none;margin-top:8px;padding:8px 12px;border-radius:8px;font-size:.82rem;"></div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Task Context Entries (collapsed by default if messages exist) -->
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2" style="cursor:pointer;" onclick="toggleCtxPanel()">
+                    <h6 class="text-muted mb-0"><i class="bi bi-journal-text"></i> 上下文记录</h6>
+                    <i class="bi bi-chevron-down" id="ctx-chevron"></i>
+                </div>
+                <div id="ctx-panel" {% if messages %}style="display:none;"{% endif %}>
+                {% if task_context %}
+                {% for e in task_context %}
+                <div class="context-entry {{ e.entry_type }} mb-2">
+                    <span class="badge badge-{{ e.entry_type }}" style="font-size:.65rem;">{{ e.entry_type }}</span>
+                    <span class="small text-muted ms-1">{{ e.created_at }}</span>
+                    <div class="mt-1 small" style="white-space:pre-wrap;">{{ e.content }}</div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="text-muted small mb-2">暂无此任务的上下文记录</p>
+                {% endif %}
+                <div class="mt-2">
+                    <div class="input-group input-group-sm">
+                        <select class="form-select form-select-sm" id="detail-ctx-type" style="max-width:100px;">
+                            <option value="note">📝 笔记</option>
+                            <option value="insight">💡 洞察</option>
+                            <option value="decision">🔮 决策</option>
+                            <option value="warning">⚠️ 警告</option>
+                        </select>
+                        <input type="text" class="form-control" id="detail-ctx-input" placeholder="添加上下文...">
+                        <button class="btn btn-outline-secondary" onclick="addTaskContext()"><i class="bi bi-plus"></i></button>
+                    </div>
+                </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Subtasks -->
+        {% if subtasks %}
+        <div class="card border-0 shadow-sm mb-4" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-3"><i class="bi bi-diagram-3"></i> 子任务 ({{ subtasks|length }})</h6>
+                <div class="list-group list-group-flush">
+                {% for st in subtasks %}
+                    <a href="/task/{{ st.id }}" class="list-group-item list-group-item-action d-flex justify-content-between align-items-center">
+                        <div><span class="text-muted small me-2">#{{ st.id }}</span>{{ st.description }}</div>
+                        <span class="badge badge-{{ st.status }}">
+                            {% if st.status == 'pending' %}⏳{% elif st.status == 'in_progress' %}🔄
+                            {% elif st.status == 'completed' %}✅{% elif st.status == 'failed' %}❌{% endif %}
+                        </span>
+                    </a>
+                {% endfor %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <!-- Sidebar: Timeline -->
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-3"><i class="bi bi-clock-history"></i> 时间线</h6>
+                <div class="d-flex flex-column gap-3">
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="text-center" style="width:32px;"><i class="bi bi-plus-circle text-secondary" style="font-size:1.2rem;"></i></div>
+                        <div><div class="small fw-bold">创建</div><div class="small text-muted">{{ task.created_at or '—' }}</div></div>
+                    </div>
+                    {% if task.started_at %}
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="text-center" style="width:32px;"><i class="bi bi-play-circle text-primary" style="font-size:1.2rem;"></i></div>
+                        <div><div class="small fw-bold">开始</div><div class="small text-muted">{{ task.started_at }}</div></div>
+                    </div>
+                    {% endif %}
+                    {% if task.completed_at %}
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="text-center" style="width:32px;"><i class="bi bi-check-circle text-success" style="font-size:1.2rem;"></i></div>
+                        <div><div class="small fw-bold">完成</div><div class="small text-muted">{{ task.completed_at }}</div></div>
+                    </div>
+                    {% endif %}
+                    {% if task.duration_minutes is not none %}
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="text-center" style="width:32px;"><i class="bi bi-stopwatch text-info" style="font-size:1.2rem;"></i></div>
+                        <div><div class="small fw-bold">耗时</div>
+                        <div class="small text-muted">{% if task.duration_minutes >= 60 %}{{ (task.duration_minutes / 60) | round(1) }} 小时{% else %}{{ task.duration_minutes }} 分钟{% endif %}</div></div>
+                    </div>
+                    {% endif %}
+                    {% if task.status == 'in_progress' and task.started_at %}
+                    <div class="d-flex gap-3 align-items-start">
+                        <div class="text-center" style="width:32px;"><i class="bi bi-hourglass-split text-primary" style="font-size:1.2rem;"></i></div>
+                        <div><div class="small fw-bold">已进行</div>
+                        <div class="elapsed-time" data-started="{{ task.started_at }}" style="font-size:1.1rem;">...</div></div>
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Execution Info Card -->
+        <div class="card border-0 shadow-sm mt-3" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-3"><i class="bi bi-gear"></i> 执行信息</h6>
+                <table class="table table-sm table-borderless mb-0" style="font-size:.82rem;">
+                    <tbody>
+                        <tr>
+                            <td class="text-muted" style="width:40%;">模型</td>
+                            <td>
+                                {% if task.model == 'opus' %}<span class="badge bg-danger">Opus</span>
+                                {% elif task.model == 'haiku' %}<span class="badge bg-success">Haiku</span>
+                                {% else %}<span class="badge bg-primary">Sonnet</span>{% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">推理强度</td>
+                            <td>
+                                {% if task.effort == 'low' %}<span class="badge bg-secondary">Low</span>
+                                {% elif task.effort == 'high' %}<span class="badge bg-warning text-dark">High</span>
+                                {% elif task.effort == 'xhigh' %}<span class="badge bg-danger">xHigh</span>
+                                {% elif task.effort == 'max' %}<span class="badge bg-danger">Max</span>
+                                {% else %}<span class="badge bg-info text-dark">Medium</span>{% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">成本上限</td>
+                            <td>${{ "%.1f"|format(task.max_cost_usd or 5.0) }}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted" style="cursor:help;" title="任务执行完成后的最终成本，与估算成本相同但仅在完成后写入">
+                                实际成本 <i class="bi bi-info-circle" style="font-size:.7rem;color:#aaa;"></i>
+                            </td>
+                            <td>{% if task.cost_usd is not none %}${{ "%.4f"|format(task.cost_usd) }}{% else %}—{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted" style="cursor:help;" title="估算成本 = 输入tokens × 输入单价 + 输出tokens × 输出单价&#10;&#10;定价 (每百万 tokens):&#10;  Sonnet: $3 输入 / $15 输出&#10;  Opus: $5 输入 / $25 输出&#10;  Haiku: $0.80 输入 / $4 输出&#10;&#10;从 session JSONL 实时解析 usage 累加">
+                                估算成本 <i class="bi bi-info-circle" style="font-size:.7rem;color:#aaa;"></i>
+                            </td>
+                            <td>{% if task.estimated_cost_usd is not none %}${{ "%.4f"|format(task.estimated_cost_usd) }} <small class="text-muted">(实时)</small>{% else %}—{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">输入 tokens</td>
+                            <td>{% if task.total_input_tokens %}{% if task.total_input_tokens >= 1000000 %}{{ "%.1f"|format(task.total_input_tokens / 1000000) }}M{% elif task.total_input_tokens >= 1000 %}{{ "%.1f"|format(task.total_input_tokens / 1000) }}K{% else %}{{ task.total_input_tokens }}{% endif %}{% else %}—{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">输出 tokens</td>
+                            <td>{% if task.total_output_tokens %}{% if task.total_output_tokens >= 1000000 %}{{ "%.1f"|format(task.total_output_tokens / 1000000) }}M{% elif task.total_output_tokens >= 1000 %}{{ "%.1f"|format(task.total_output_tokens / 1000) }}K{% else %}{{ task.total_output_tokens }}{% endif %}{% else %}—{% endif %}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">执行身份</td>
+                            <td>{{ task.config_user or "默认" }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- Quick Relation Summary in Sidebar -->
+        {% set rel_count = (relations.blocks|length) + (relations.blocked_by|length) + (relations.conflicts|length) + (relations.related|length) %}
+        {% if rel_count > 0 %}
+        <div class="card border-0 shadow-sm mt-3" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-2"><i class="bi bi-link-45deg"></i> 关系概览</h6>
+                <div class="d-flex flex-wrap gap-2">
+                    {% if relations.blocked_by %}
+                    <span class="badge badge-blocks">← 被 {{ relations.blocked_by|length }} 个任务阻塞</span>
+                    {% endif %}
+                    {% if relations.blocks %}
+                    <span class="badge badge-blocks">→ 阻塞 {{ relations.blocks|length }} 个任务</span>
+                    {% endif %}
+                    {% if relations.conflicts %}
+                    <span class="badge badge-conflicts">⟷ {{ relations.conflicts|length }} 个冲突</span>
+                    {% endif %}
+                    {% if relations.related %}
+                    <span class="badge badge-related">↔ {{ relations.related|length }} 个关联</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+        {% endif %}
+
+        <!-- Acceptance Criteria -->
+        <div class="card border-0 shadow-sm mt-3" style="border-radius:12px;">
+            <div class="card-body">
+                <!-- Auto Verification (always present) -->
+                <h6 class="text-muted mb-2">
+                    <i class="bi bi-robot me-1"></i> 自动验证
+                    <span class="badge bg-info text-dark ms-1" style="font-size:.65rem;">🤖 AI 自动</span>
+                </h6>
+                {% if task.acceptance_criteria %}
+                <div class="mb-2">
+                    <div class="text-muted" style="font-size:.72rem;margin-bottom:4px;">用户指定的验收标准：</div>
+                    <pre style="background:#f0f7ff;border-radius:6px;padding:8px 10px;font-size:.8rem;margin-bottom:0;white-space:pre-wrap;word-break:break-word;border:1px solid #b3d4fc;">{{ task.acceptance_criteria }}</pre>
+                </div>
+                {% else %}
+                <div class="text-muted small mb-2" style="background:#f8f9fa;padding:6px 10px;border-radius:6px;">
+                    <i class="bi bi-info-circle me-1"></i>未指定验收标准，AI 将根据任务描述自动确定测试方式（如运行测试、检查输出、验证指标等）。
+                </div>
+                {% endif %}
+
+                <!-- Human Review (optional overlay) -->
+                <div class="mt-2 pt-2 border-top">
+                    <h6 class="text-muted mb-1" style="font-size:.82rem;">
+                        <i class="bi bi-person-check me-1"></i> 人工审核
+                        {% if task.human_review %}
+                        <span class="badge bg-warning text-dark ms-1" style="font-size:.65rem;">👤 需要人工确认</span>
+                        {% else %}
+                        <span class="badge bg-light text-muted ms-1" style="font-size:.65rem;">已跳过</span>
+                        {% endif %}
+                    </h6>
+                    {% if task.human_review %}
+                    <div class="text-muted small">AI 自动验证通过后，仍需人工在此确认最终结果。</div>
+                        {% if task.status == 'in_progress' or task.status == 'completed' %}
+                    <div class="mt-2">
+                        <button class="btn btn-success btn-sm w-100" onclick="completeTask({{ task.id }}); setTimeout(()=>location.reload(), 500);">
+                            <i class="bi bi-check-circle me-1"></i>确认人工审核通过
+                        </button>
+                    </div>
+                        {% endif %}
+                    {% else %}
+                    <div class="text-muted small" style="font-size:.75rem;">此任务无需人工审核，AI 自动验证通过即完成。</div>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    function toggleEdit() {
+        const s = document.getElementById('edit-section');
+        s.style.display = s.style.display === 'none' ? 'block' : 'none';
+    }
+    async function saveEdit() {
+        const desc = document.getElementById('edit-desc').value.trim();
+        const tag = document.getElementById('edit-tag').value.trim();
+        const notes = document.getElementById('edit-notes').value.trim();
+        const acceptance = document.getElementById('edit-acceptance').value.trim();
+        const configUser = document.getElementById('edit-config-user').value;
+        const model = document.getElementById('edit-model').value;
+        const effort = document.getElementById('edit-effort').value;
+        const maxCost = parseFloat(document.getElementById('edit-max-cost').value) || 5.0;
+        const humanReview = document.getElementById('edit-human-review').checked ? 1 : 0;
+        const autoExecute = document.getElementById('edit-auto-execute').checked ? 1 : 0;
+        const interactive = document.getElementById('edit-interactive').checked ? 1 : 0;
+        if (!desc) return;
+        await apiCall('/api/tasks/{{ task.id }}', 'PUT', {
+            description: desc, tag: tag||null, notes: notes||null,
+            acceptance_criteria: acceptance||null,
+            human_review: humanReview, auto_execute: autoExecute, interactive: interactive,
+            config_user: configUser||null, model: model, effort: effort, max_cost_usd: maxCost
+        });
+        showToast('任务已更新');
+        setTimeout(() => location.reload(), 500);
+    }
+    async function addRelationFromForm() {
+        const type = document.getElementById('rel-type').value;
+        const targetId = parseInt(document.getElementById('rel-target').value);
+        const note = document.getElementById('rel-note').value.trim();
+        if (!targetId) { showToast('请选择目标任务', 'error'); return; }
+        const result = await addRelation({{ task.id }}, targetId, type, note);
+        if (result.ok) setTimeout(() => location.reload(), 500);
+    }
+    async function removeRelation(relId) {
+        await deleteRelation(relId);
+        setTimeout(() => location.reload(), 500);
+    }
+    async function resumeTask(taskId) {
+        const newBudget = prompt('设置新的成本上限 (USD)：', '{{ (task.max_cost_usd or 5.0) * 2 }}');
+        if (newBudget === null) return;
+        const val = parseFloat(newBudget);
+        if (isNaN(val) || val <= 0) { showToast('无效金额', 'error'); return; }
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${taskId}/resume`), {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({max_cost_usd: val})
+            })).json();
+            if (r.ok) {
+                showToast('💬 会话已恢复' + (r.interactive ? '，发送消息继续对话' : '，正在恢复执行…'));
+                _taskStatus = 'in_progress';
+                // Reload to refresh action buttons (hide resume/retry, show stop/running banner)
+                setTimeout(() => location.reload(), 1200);
+            }
+            else showToast(r.error || '恢复失败', 'error');
+        } catch(e) { showToast('请求失败', 'error'); }
+    }
+    async function addTaskContext() {
+        const content = document.getElementById('detail-ctx-input').value.trim();
+        const type = document.getElementById('detail-ctx-type').value;
+        if (!content) return;
+        await apiCall('/api/context', 'POST', { content, entry_type: type, task_id: {{ task.id }} });
+        showToast('上下文已添加');
+        setTimeout(() => location.reload(), 500);
+    }
+    function toggleCtxPanel() {
+        const p = document.getElementById('ctx-panel');
+        const c = document.getElementById('ctx-chevron');
+        const hidden = p.style.display === 'none';
+        p.style.display = hidden ? '' : 'none';
+        c.className = hidden ? 'bi bi-chevron-up' : 'bi bi-chevron-down';
+    }
+
+    // ── Conversation ──
+    const TASK_ID = {{ task.id }};
+    let _taskStatus = '{{ task.status }}';
+    let _orphanCheckCount = 0;
+    let _firstMsgId = {{ messages[0].id if messages else 0 }};
+
+    // Load older messages (before the currently displayed ones)
+    async function loadOlderMessages() {
+        const btn = document.getElementById('btn-load-more');
+        const spinner = document.getElementById('load-more-spinner');
+        if (btn) btn.style.display = 'none';
+        if (spinner) spinner.style.display = 'inline-block';
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${TASK_ID}/messages?before=${_firstMsgId}&limit=200`))).json();
+            const older = r.messages || [];
+            if (older.length === 0) {
+                // No more messages
+                const container = document.getElementById('load-more-msgs');
+                if (container) container.remove();
+                return;
+            }
+            // Update _firstMsgId
+            _firstMsgId = older[0].id;
+            // Insert messages at the top (after the load-more button)
+            const convBox = document.getElementById('conv-msgs');
+            const loadMoreDiv = document.getElementById('load-more-msgs');
+            const refNode = loadMoreDiv ? loadMoreDiv.nextSibling : convBox.firstChild;
+            // Remember scroll position
+            const prevScrollHeight = convBox.scrollHeight;
+            older.forEach(m => {
+                const el = _buildBubbleElement(m);
+                convBox.insertBefore(el, refNode);
+            });
+            // Maintain scroll position (keep viewing the same content)
+            convBox.scrollTop = convBox.scrollHeight - prevScrollHeight;
+            addCodeCopyButtons();
+            // If fewer than 200, no more to load
+            if (older.length < 200) {
+                const container = document.getElementById('load-more-msgs');
+                if (container) container.remove();
+            }
+        } catch(e) {
+            console.error('Failed to load older messages:', e);
+        } finally {
+            if (btn) btn.style.display = '';
+            if (spinner) spinner.style.display = 'none';
+        }
+    }
+
+    function insertQuick(text) {
+        const inp = document.getElementById('conv-input');
+        inp.value = text;
+        inp.focus();
+        inp.setSelectionRange(text.length, text.length);
+    }
+
+    function _scrollConv() {
+        const box = document.getElementById('conv-msgs');
+        if (box) box.scrollTop = box.scrollHeight;
+    }
+
+    // ── Markdown rendering ──
+    function renderMarkdown(text) {
+        if (!text) return '';
+        if (typeof marked !== 'undefined') {
+            try {
+                return marked.parse(text);
+            } catch(e) {
+                return escapeHtml(text).replace(/\n/g, '<br>');
+            }
+        }
+        // Fallback: simple newline→br
+        return escapeHtml(text).replace(/\n/g, '<br>');
+    }
+
+    function addCodeCopyButtons() {
+        document.querySelectorAll('.msg-markdown pre').forEach(pre => {
+            if (pre.querySelector('.code-copy-btn')) return;
+            const btn = document.createElement('button');
+            btn.className = 'code-copy-btn';
+            btn.textContent = '复制';
+            btn.onclick = function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                const code = pre.querySelector('code');
+                const text = code ? code.textContent : pre.textContent;
+                // Fallback for non-HTTPS (navigator.clipboard requires secure context)
+                if (navigator.clipboard && window.isSecureContext) {
+                    navigator.clipboard.writeText(text).then(() => {
+                        btn.textContent = '✓ 已复制';
+                        setTimeout(() => btn.textContent = '复制', 1500);
+                    }).catch(() => _fallbackCopy(text, btn));
+                } else {
+                    _fallbackCopy(text, btn);
+                }
+            };
+            pre.style.position = 'relative';
+            pre.appendChild(btn);
+        });
+    }
+    function _fallbackCopy(text, btn) {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.cssText = 'position:fixed;left:-9999px;top:-9999px;opacity:0;';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+            document.execCommand('copy');
+            btn.textContent = '✓ 已复制';
+            setTimeout(() => btn.textContent = '复制', 1500);
+        } catch(e) {
+            btn.textContent = '❌ 失败';
+            setTimeout(() => btn.textContent = '复制', 1500);
+        }
+        document.body.removeChild(ta);
+    }
+
+    function _buildBubbleElement(msg) {
+        const wrap = document.createElement('div');
+
+        if (msg.role === 'system') {
+            const m = (msg.content || '').match(/^\[(\w+)\]\s*([\s\S]*)/);
+            const evType = m ? m[1] : 'info';
+            const evText = m ? m[2] : msg.content;
+            const timeStr = (msg.created_at || '').slice(11, 16);
+            if (evType === 'info' && evText.length > 80) {
+                const rendered = renderMarkdown(evText);
+                wrap.innerHTML = `<div style="max-width:85%;">
+                    <div style="background:#f4f4f5;color:#1a1a1a;border-radius:16px 16px 16px 4px;padding:10px 14px;">
+                        <div class="msg-markdown">${rendered}</div>
+                    </div>
+                    <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                        🤖 Agent · ${timeStr}
+                    </div>
+                </div>`;
+            } else if (evType === 'assistant') {
+                const rendered = renderMarkdown(evText);
+                wrap.innerHTML = `<div style="max-width:90%;">
+                    <div style="background:#f8f9fa;color:#1a1a1a;border-radius:16px 16px 16px 4px;padding:12px 16px;border-left:3px solid #6366f1;">
+                        <div class="msg-markdown">${rendered}</div>
+                    </div>
+                    <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                        🤖 Claude · ${timeStr}
+                    </div>
+                </div>`;
+            } else if (evType === 'tool_use') {
+                const rendered = renderMarkdown(evText);
+                wrap.innerHTML = `<div style="max-width:90%;">
+                    <div style="background:#1e1e2e;color:#cdd6f4;border-radius:8px;padding:8px 12px;font-family:'Fira Code',monospace;font-size:.82rem;border-left:3px solid #89b4fa;">
+                        <div class="msg-markdown">${rendered}</div>
+                    </div>
+                    <div style="font-size:.65rem;color:#aaa;margin-top:2px;">⚡ Tool · ${timeStr}</div>
+                </div>`;
+            } else if (evType === 'tool_result') {
+                const rendered = renderMarkdown('```\n'+evText+'\n```');
+                wrap.innerHTML = `<div style="max-width:90%;">
+                    <details style="background:#f5f5f5;border-radius:6px;padding:4px 10px;font-size:.8rem;border:1px solid #e0e0e0;">
+                        <summary style="cursor:pointer;color:#666;font-size:.75rem;"><i class="bi bi-terminal"></i> 输出 (${evText.length} chars) · ${timeStr}</summary>
+                        <div class="msg-markdown" style="max-height:300px;overflow-y:auto;margin-top:4px;">${rendered}</div>
+                    </details>
+                </div>`;
+            } else if (evType === 'thinking') {
+                const rendered = renderMarkdown(evText);
+                wrap.innerHTML = `<div style="max-width:90%;">
+                    <details style="background:#fefce8;border-radius:6px;padding:4px 10px;font-size:.8rem;border:1px solid #fde68a;">
+                        <summary style="cursor:pointer;color:#92400e;font-size:.75rem;"><i class="bi bi-lightbulb"></i> 思考过程 · ${timeStr}</summary>
+                        <div class="msg-markdown" style="max-height:400px;overflow-y:auto;margin-top:4px;color:#78350f;">${rendered}</div>
+                    </details>
+                </div>`;
+            } else if (evType === 'agent_fail' || evType === 'error') {
+                const errorLabel = evType === 'agent_fail' ? '执行失败' : '错误';
+                const rendered = renderMarkdown(evText);
+                wrap.innerHTML = `<div style="max-width:90%;">
+                    <div style="background:#fff0f0;border:1px solid #ffcdd2;border-left:4px solid #e53935;color:#b71c1c;border-radius:8px;padding:10px 14px;font-size:.85rem;">
+                        <div style="font-weight:600;margin-bottom:4px;"><i class="bi bi-exclamation-triangle-fill" style="color:#e53935;"></i> ${escapeHtml(errorLabel)}</div>
+                        <div class="msg-markdown" style="color:#c62828;">${rendered}</div>
+                    </div>
+                    <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:left;">
+                        ⚠️ System · ${timeStr}
+                    </div>
+                </div>`;
+            } else {
+                wrap.style.cssText = 'text-align:center;padding:2px 0;';
+                wrap.innerHTML = `<span class="log-pill log-${evType}">${escapeHtml(evText)}</span>` +
+                                 (timeStr ? `<span style="color:#bbb;font-size:.65rem;margin-left:5px;">${timeStr}</span>` : '');
+            }
+        } else {
+            wrap.className = 'd-flex ' + (msg.role === 'user' ? 'justify-content-end' : 'justify-content-start');
+            wrap.dataset.msgId = msg.id;
+            const statusLabel = msg.status === 'pending_send'
+                ? '<span style="color:#f0a500;">\u23f3 \u5f85\u53d1\u9001</span>'
+                : msg.status === 'sending'
+                ? '<span style="color:#2196f3;">\ud83d\udce4 \u53d1\u9001\u4e2d</span>'
+                : (msg.role === 'user' ? '<span style="color:#aaa;">\u2713 \u5df2\u5b58\u5165</span>' : '');
+            const isUser = msg.role === 'user';
+            const rendered = renderMarkdown(msg.content);
+            wrap.innerHTML = `<div style="max-width:80%;">
+                <div ${isUser ? 'class="msg-user-bubble"' : ''} style="
+                    background:${isUser ? '#1a3c8a' : '#f4f4f5'};
+                    color:${isUser ? '#fff' : '#1a1a1a'};
+                    border-radius:${isUser ? '16px 16px 4px 16px' : '16px 16px 16px 4px'};
+                    padding:10px 14px;">
+                    <div class="msg-markdown">${rendered}</div>
+                </div>
+                <div style="font-size:.68rem;color:#aaa;margin-top:3px;text-align:${isUser ? 'right' : 'left'};">
+                    ${isUser ? '\ud83e\uddd1 \u4f60' : '\ud83e\udd16 Agent'} \u00b7 ${msg.created_at} ${statusLabel}
+                </div></div>`;
+        }
+        return wrap;
+    }
+
+    function _appendBubble(msg) {
+        const empty = document.getElementById('conv-empty');
+        if (empty) empty.remove();
+        const box = document.getElementById('conv-msgs');
+        const wrap = _buildBubbleElement(msg);
+        box.appendChild(wrap);
+        addCodeCopyButtons();
+        _scrollConv();
+    }
+
+    // \u2015 Real-time polling: runs whenever task is in_progress OR has a live agent \u2015
+    {% if task.status == 'in_progress' or task.agent_id or task.interactive %}
+    let _lastMsgId = {{ messages[-1].id if messages else 0 }};
+    let _pollErrors = 0;
+    const _pollMs = {% if task.agent_id %}1000{% else %}1500{% endif %};
+
+    const _poller = setInterval(async () => {
+        if (_sendingMsg) return;  // Skip poll while user is sending a message
+        // Only poll when task is active
+        if (_taskStatus !== 'in_progress') return;
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${TASK_ID}/messages?after=${_lastMsgId}`))).json();
+            _pollErrors = 0;
+            const newMsgs = r.messages || [];
+            newMsgs.forEach(m => { _appendBubble(m); if (m.id > _lastMsgId) _lastMsgId = m.id; });
+            if (newMsgs.some(m => m.role === 'agent')) showToast('\ud83e\udd16 Agent \u5df2\u56de\u590d');
+
+            // Check task status for completion
+            const taskR = await (await fetch(purl(`/api/tasks/${TASK_ID}`))).json();
+            if (taskR && taskR.status && taskR.status !== _taskStatus) {
+                _taskStatus = taskR.status;
+                if (taskR.status === 'completed' && !taskR.interactive) {
+                    showToast('\u2705 \u4efb\u52a1\u5df2\u5b8c\u6210\uff01');
+                    clearInterval(_poller);
+                    setTimeout(() => location.reload(), 1800);
+                } else if (taskR.status === 'failed' && !taskR.interactive) {
+                    showToast('\u274c \u4efb\u52a1\u6267\u884c\u5931\u8d25', 'error');
+                    clearInterval(_poller);
+                    setTimeout(() => location.reload(), 1800);
+                } else if (taskR.status === 'completed' && taskR.interactive) {
+                    showToast('\u2705 \u4f1a\u8bdd\u5df2\u7ed3\u675f\uff0c\u53ef\u70b9\u300c\u7ee7\u7eed\u5bf9\u8bdd\u300d\u6062\u590d');
+                } else if (taskR.status === 'failed' && taskR.interactive) {
+                    showToast('\u274c \u6267\u884c\u5931\u8d25\uff0c\u53ef\u70b9\u300c\u8ffd\u52a0\u9884\u7b97\u5e76\u7ee7\u7eed\u300d\u6062\u590d', 'error');
+                }
+            }
+            // Also refresh execution status (stop button visibility)
+            checkExecStatus();
+        } catch(e) {
+            if (++_pollErrors >= 8) clearInterval(_poller);
+        }
+    }, _pollMs);
+    {% endif %}
+
+    document.addEventListener('DOMContentLoaded', () => {
+        // Initialize marked.js with highlight.js
+        if (typeof marked !== 'undefined') {
+            marked.setOptions({
+                highlight: function(code, lang) {
+                    if (typeof hljs !== 'undefined' && lang && hljs.getLanguage(lang)) {
+                        try { return hljs.highlight(code, {language: lang}).value; } catch(e) {}
+                    }
+                    if (typeof hljs !== 'undefined') {
+                        try { return hljs.highlightAuto(code).value; } catch(e) {}
+                    }
+                    return code;
+                },
+                breaks: true,
+                gfm: true
+            });
+        }
+        // Render all server-side message bubbles
+        document.querySelectorAll('.msg-render').forEach(el => {
+            const raw = el.textContent;
+            el.innerHTML = renderMarkdown(raw);
+        });
+        // Add copy buttons to code blocks
+        addCodeCopyButtons();
+        updateElapsedTimes();
+        _scrollConv();
+        checkExecStatus();
+        // Setup slash autocomplete for edit-desc textarea
+        if(typeof setupSlashInput==='function') setupSlashInput('edit-desc','edit-slash-dropdown');
+        // Setup slash autocomplete for chat input
+        if(typeof setupSlashInput==='function') setupSlashInput('conv-input','conv-slash-dropdown');
+        // ── Effort-by-model gating (与 Claude Code CLI 保持一致：xhigh/max 仅 Opus 4.7) ──
+        (function(){
+            const m = document.getElementById('edit-model');
+            const e = document.getElementById('edit-effort');
+            if (!m || !e) return;
+            function syncEffort(){
+                const model = m.value;
+                for (const opt of e.options){
+                    const req = opt.getAttribute('data-models');
+                    if (!req){ opt.disabled = false; opt.title=''; continue; }
+                    const ok = req.split(',').map(s=>s.trim()).includes(model);
+                    opt.disabled = !ok;
+                    opt.title = ok ? '' : ('此强度仅支持: '+req);
+                }
+                const sel = e.options[e.selectedIndex];
+                if (sel && sel.disabled) { e.value = 'high'; }
+            }
+            m.addEventListener('change', syncEffort);
+            syncEffort();
+        })();
+    });
+
+    // ── Send conversation message ──
+    let _sendingMsg = false;  // Lock to pause poller during send
+    async function sendConvMsg() {
+        const inp = document.getElementById('conv-input');
+        const content = inp.value.trim();
+        if (!content) return;
+        const btn = document.getElementById('conv-send-btn');
+        btn.disabled = true;
+        _sendingMsg = true;
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${TASK_ID}/messages`), {
+                method: 'POST', headers: {'Content-Type':'application/json'},
+                body: JSON.stringify({content})
+            })).json();
+            if (r.ok) {
+                _appendBubble({id: r.id, role: 'user', content, status: r.status, created_at: new Date().toLocaleString('sv-SE',{hour12:false}).slice(0,16)});
+                // Update _lastMsgId so the poller won't re-fetch this message
+                if (typeof _lastMsgId !== 'undefined' && r.id > _lastMsgId) _lastMsgId = r.id;
+                inp.value = '';
+                if (r.auto_resumed) {
+                    showToast('📤 消息已发送，会话自动恢复中…');
+                    // Update task status so the poller starts working
+                    _taskStatus = 'in_progress';
+                } else if (r.queued_for_agent) {
+                    showToast('📤 消息已发送给 Agent');
+                } else {
+                    showToast('✓ 消息已保存');
+                }
+            } else {
+                showToast(r.error || '发送失败', 'error');
+            }
+        } catch(e) {
+            showToast('发送失败', 'error');
+        }
+        btn.disabled = false;
+        _sendingMsg = false;
+    }
+
+    // ── Auto-execution controls ──
+    async function executeTask(id) {
+        const btn = document.getElementById('btn-execute');
+        if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span> 启动中...'; }
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${id}/execute`), {method:'POST'})).json();
+            if (r.ok) {
+                showToast('🚀 全托管执行已启动');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(r.error || '启动失败', 'error');
+                if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 全托管执行'; }
+            }
+        } catch(e) {
+            showToast('启动失败', 'error');
+            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="bi bi-rocket-takeoff"></i> 全托管执行'; }
+        }
+    }
+
+    async function stopExecution(id) {
+        if (!confirm('确定要终止当前托管执行？')) return;
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${id}/stop`), {method:'POST'})).json();
+            if (r.ok) {
+                showToast('⏹️ 执行已停止');
+                setTimeout(() => location.reload(), 1000);
+            } else {
+                showToast(r.error || '停止失败', 'error');
+            }
+        } catch(e) {
+            showToast('停止失败', 'error');
+        }
+    }
+
+    async function checkExecStatus() {
+        const banner = document.getElementById('autoexec-banner');
+        const orphanBanner = document.getElementById('orphan-banner');
+        const stopBtn = document.getElementById('btn-stop-exec');
+
+        // If task is no longer in_progress, hide everything
+        if (_taskStatus !== 'in_progress') {
+            if (banner) banner.style.display = 'none';
+            if (orphanBanner) orphanBanner.style.display = 'none';
+            if (stopBtn) stopBtn.style.display = 'none';
+            return;
+        }
+
+        try {
+            const r = await (await fetch(purl(`/api/tasks/${TASK_ID}/execution-status`))).json();
+            if (r.running) {
+                _orphanCheckCount = 0;  // reset on success
+                if (stopBtn) stopBtn.style.display = '';
+                if (banner) {
+                    banner.style.display = '';
+                    // Update status label
+                    const lbl = document.getElementById('exec-status-label');
+                    const spinner = document.getElementById('autoexec-spinner');
+                    if (lbl) {
+                        if (r.agent_status === 'idle') {
+                            lbl.innerHTML = '💬 <strong>等待你的回复</strong>';
+                            banner.className = banner.className.replace('alert-info','alert-warning').replace('alert-danger','alert-warning');
+                            if (spinner) spinner.style.display = 'none';
+                        } else if (r.pid && r.jsonl_age_seconds != null && r.jsonl_age_seconds > 120) {
+                            // CC process alive but no JSONL writes — likely waiting for
+                            // a tool (Bash/Agent) to finish, not waiting for API.
+                            lbl.innerHTML = `🔧 <strong>工具执行中</strong> <span style="color:#999;">(${Math.floor(r.jsonl_age_seconds/60)}m${r.jsonl_age_seconds%60}s)</span>`;
+                            banner.className = banner.className.replace('alert-warning','alert-info').replace('alert-danger','alert-info');
+                            if (spinner) spinner.style.display = '';
+                        } else {
+                            lbl.innerHTML = '🚀 <strong>执行中</strong>';
+                            banner.className = banner.className.replace('alert-warning','alert-info').replace('alert-danger','alert-info');
+                            if (spinner) spinner.style.display = '';
+                        }
+                    }
+                    // Update cost
+                    const costLbl = document.getElementById('exec-cost-label');
+                    if (costLbl && r.cost_usd != null) {
+                        costLbl.textContent = `💰 $${r.cost_usd.toFixed(2)} / $${r.max_cost_usd.toFixed(0)}`;
+                    }
+                    // Update activity
+                    const actLbl = document.getElementById('exec-activity-label');
+                    if (actLbl) {
+                        if (r.jsonl_age_seconds != null) {
+                            const age = r.jsonl_age_seconds;
+                            const ageStr = age < 60 ? `${age}s ago` : `${Math.floor(age/60)}m${age%60}s ago`;
+                            actLbl.textContent = `📡 ${r.jsonl_last_activity} (${ageStr})`;
+                            actLbl.style.color = age > 120 ? '#e65100' : age > 30 ? '#f57c00' : '#388e3c';
+                        } else {
+                            actLbl.textContent = '📡 --';
+                        }
+                    }
+                    // Update PID
+                    const pidLbl = document.getElementById('exec-pid-label');
+                    if (pidLbl) pidLbl.textContent = r.pid ? `PID ${r.pid}` : 'PID --';
+                    // Sync conv panel status badge
+                    const convBadge = document.getElementById('conv-status-badge');
+                    const topBadge = document.getElementById('top-status-badge');
+                    if (r.agent_status === 'idle') {
+                        if (convBadge) convBadge.innerHTML = '<span class="badge badge-idle" style="font-size:.65rem;animation:pulse 2s infinite;">💬 等待回复</span>';
+                        if (topBadge) { topBadge.className = 'badge badge-idle fs-6'; topBadge.textContent = '💬 等待回复'; }
+                    } else {
+                        if (convBadge) convBadge.innerHTML = '<span class="badge badge-in_progress" style="font-size:.65rem;animation:pulse 2s infinite;">🔄 执行中</span>';
+                        if (topBadge) { topBadge.className = 'badge badge-in_progress fs-6'; topBadge.textContent = '🔄 进行中'; }
+                    }
+                }
+                if (orphanBanner) orphanBanner.style.display = 'none';
+            } else {
+                // Double-check: task may have just finished — re-fetch status
+                try {
+                    const taskR = await (await fetch(purl(`/api/tasks/${TASK_ID}`))).json();
+                    if (taskR && taskR.status && taskR.status !== 'in_progress') {
+                        _taskStatus = taskR.status;
+                        if (stopBtn) stopBtn.style.display = 'none';
+                        if (banner) banner.style.display = 'none';
+                        if (orphanBanner) orphanBanner.style.display = 'none';
+                        // Don't auto-reload for interactive tasks — the user is
+                        // actively chatting and a reload would be disruptive.
+                        // Only reload for non-interactive completed/failed.
+                        if (!taskR.interactive) {
+                            setTimeout(() => location.reload(), 800);
+                        }
+                        return;
+                    }
+                } catch(e2) {}
+                // Only show orphan banner after multiple consecutive non-running checks
+                // This avoids false positives during task startup or brief process gaps
+                _orphanCheckCount = (_orphanCheckCount || 0) + 1;
+                if (_orphanCheckCount >= 3) {
+                    if (stopBtn) stopBtn.style.display = 'none';
+                    if (banner) banner.style.display = 'none';
+                    if (orphanBanner) orphanBanner.style.display = '';
+                }
+                // Before threshold, just hide banners (don't show orphan yet)
+                else {
+                    if (banner) banner.style.display = '';
+                    if (orphanBanner) orphanBanner.style.display = 'none';
+                }
+            }
+        } catch(e) {
+            // On error, hide both to avoid confusion
+            if (banner) banner.style.display = 'none';
+            if (orphanBanner) orphanBanner.style.display = 'none';
+        }
+    }
+</script>
+{% endblock %}

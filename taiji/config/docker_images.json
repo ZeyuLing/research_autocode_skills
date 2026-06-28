@@ -1,0 +1,30 @@
+{
+    "images": {
+        "mocap": {
+            "full_name": "mirrors.tencent.com/leotungtrain/easymocap:0726",
+            "description": "EasyMoCap 动作捕捉环境"
+        },
+        "mocap2": {
+            "full_name": "mirrors.tencent.com/zyp-virtualman/easymocapa1_alg:0711",
+            "description": "EasyMoCap A1 算法环境"
+        },
+        "hallo": {
+            "full_name": "mirrors.tencent.com/sdh/videogen:latest",
+            "description": "视频生成环境"
+        },
+        "megasam": {
+            "full_name": "mirrors.tencent.com/zephyrkwang/cu118_py310_pyt201_conda:camera_pose",
+            "description": "MegaSAM 相机姿态环境"
+        },
+        "t2m": {
+            "full_name": "mirrors.tencent.com/jeffryli/tlinux3.2-python3.10-cuda11.8:v0.2",
+            "description": "Text-to-Motion v0.2 训练环境"
+        },
+        "t2m3": {
+            "full_name": "mirrors.tencent.com/jeffryli/tlinux3.2-python3.10-cuda11.8:v0.3",
+            "description": "Text-to-Motion v0.3 训练环境"
+        }
+    },
+    "default": "mirrors.tencent.com/kdkd006/centos8-gpu-conda:update_ninja",
+    "default_description": "CentOS8 GPU Conda 通用环境"
+}

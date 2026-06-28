@@ -1,0 +1,28 @@
+# 运行时数据 / 日志
+__pycache__/
+*.pyc
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.log
+logs/
+orbit.log
+.runtime/
+sessions/
+pids/
+.pids/
+tasks/
+.tasks/
+
+# 缓存
+.cache/
+.pytest_cache/
+
+# IDE / 系统
+.DS_Store
+.idea/
+.vscode/
+
+# Node
+node_modules/

@@ -1,0 +1,155 @@
+{% extends "base.html" %}
+{% block title %}项目笔记 — TODO Dashboard{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h4><i class="bi bi-journal-text"></i> 项目笔记</h4>
+        <p class="text-muted">项目级别的共享知识库。Agent 完成任务时可以写入 insight / decision / warning，后续任务的 Agent 可以读取这些信息。</p>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Context Log (left) -->
+    <div class="col-lg-8">
+        <div class="card border-0 shadow-sm" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-3">上下文记录 ({{ entries|length }})</h6>
+
+                <!-- Add entry form -->
+                <div class="mb-3 p-3 bg-light rounded">
+                    <div class="row g-2 align-items-end">
+                        <div class="col">
+                            <input type="text" class="form-control form-control-sm" id="ctx-content" placeholder="添加上下文条目...">
+                        </div>
+                        <div class="col-auto">
+                            <select class="form-select form-select-sm" id="ctx-type">
+                                <option value="note">📝 笔记</option>
+                                <option value="insight">💡 洞察</option>
+                                <option value="decision">🔮 决策</option>
+                                <option value="warning">⚠️ 警告</option>
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <select class="form-select form-select-sm" id="ctx-task">
+                                <option value="">— 无关联任务 —</option>
+                                <!-- Will be populated via JS -->
+                            </select>
+                        </div>
+                        <div class="col-auto">
+                            <button class="btn btn-sm btn-success" onclick="addEntry()"><i class="bi bi-plus"></i> 添加</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Entries list -->
+                {% if entries %}
+                {% for e in entries %}
+                <div class="context-entry {{ e.entry_type }} mb-2">
+                    <div class="d-flex justify-content-between align-items-start">
+                        <div>
+                            <span class="badge badge-{{ e.entry_type }}" style="font-size:.7rem;">
+                                {% if e.entry_type == 'insight' %}💡 洞察{% elif e.entry_type == 'decision' %}🔮 决策{% elif e.entry_type == 'warning' %}⚠️ 警告{% else %}📝 笔记{% endif %}
+                            </span>
+                            {% if e.task_id %}
+                            <a href="/task/{{ e.task_id }}" class="small ms-1">#{{ e.task_id }} {{ e.task_desc[:30] if e.task_desc else '' }}</a>
+                            {% endif %}
+                        </div>
+                        <small class="text-muted">{{ e.created_at }}</small>
+                    </div>
+                    <div class="mt-1" style="white-space:pre-wrap;">{{ e.content }}</div>
+                </div>
+                {% endfor %}
+                {% else %}
+                <p class="text-center text-muted py-4"><i class="bi bi-journal" style="font-size:2rem;"></i><br>暂无上下文记录</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+
+    <!-- Project Brief (right) -->
+    <div class="col-lg-4">
+        <div class="card border-0 shadow-sm" style="border-radius:12px;">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="text-muted mb-0"><i class="bi bi-file-earmark-text"></i> 项目简报</h6>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleBriefEdit()" id="brief-edit-btn">
+                        <i class="bi bi-pencil"></i>
+                    </button>
+                </div>
+                <p class="small text-muted mb-2">持久化的项目级别知识摘要，保存在 <code>.claude/project_context.md</code></p>
+
+                <!-- View mode -->
+                <div id="brief-view" style="white-space:pre-wrap;font-size:.9rem;">{{ context_md or '（空）' }}</div>
+
+                <!-- Edit mode -->
+                <div id="brief-edit" style="display:none;">
+                    <textarea class="form-control form-control-sm mb-2" id="brief-textarea" rows="12" style="font-family:monospace;font-size:.85rem;">{{ context_md }}</textarea>
+                    <button class="btn btn-sm btn-success" onclick="saveBrief()"><i class="bi bi-check"></i> 保存</button>
+                    <button class="btn btn-sm btn-outline-secondary" onclick="toggleBriefEdit()">取消</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- How it works -->
+        <div class="card border-0 shadow-sm mt-3" style="border-radius:12px;">
+            <div class="card-body">
+                <h6 class="text-muted mb-2"><i class="bi bi-info-circle"></i> 上下文如何传递</h6>
+                <div class="small">
+                    <p><strong>任务间上下文传递有 3 层机制：</strong></p>
+                    <ol class="ps-3 mb-0">
+                        <li class="mb-1"><strong>项目简报</strong> — 持久化的 Markdown 文件，所有任务的 agent 启动时读取</li>
+                        <li class="mb-1"><strong>上下文记录</strong> — 结构化日志（insight/decision/warning/note），可关联到具体任务</li>
+                        <li class="mb-1"><strong>任务结论</strong> — 每个已完成任务的 conclusion + modified_files + notes 字段</li>
+                    </ol>
+                    <hr class="my-2">
+                    <p class="mb-0 text-muted">Agent 执行任务时，autorun 的 prompt 会注入：<br>
+                    ① 项目简报全文<br>
+                    ② 相关任务（blocked_by / related）的 conclusion<br>
+                    ③ 最近 10 条上下文记录</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // Populate task dropdown
+    (async()=>{
+        const d=await(await fetch('/api/stats')).json();
+        const sel=document.getElementById('ctx-task');
+        d.tasks.forEach(t=>{
+            const o=document.createElement('option');
+            o.value=t.id;
+            o.textContent=`#${t.id} ${t.description.slice(0,40)}`;
+            sel.appendChild(o);
+        });
+    })();
+
+    async function addEntry(){
+        const content=document.getElementById('ctx-content').value.trim();
+        const type=document.getElementById('ctx-type').value;
+        const taskId=document.getElementById('ctx-task').value||null;
+        if(!content)return;
+        await apiCall('/api/context','POST',{content,entry_type:type,task_id:taskId?parseInt(taskId):null});
+        showToast('上下文已添加');
+        location.reload();
+    }
+
+    function toggleBriefEdit(){
+        const view=document.getElementById('brief-view');
+        const edit=document.getElementById('brief-edit');
+        if(edit.style.display==='none'){edit.style.display='block';view.style.display='none'}
+        else{edit.style.display='none';view.style.display='block'}
+    }
+
+    async function saveBrief(){
+        const content=document.getElementById('brief-textarea').value;
+        await apiCall('/api/context/brief','PUT',{content});
+        showToast('项目简报已保存');
+        location.reload();
+    }
+</script>
+{% endblock %}

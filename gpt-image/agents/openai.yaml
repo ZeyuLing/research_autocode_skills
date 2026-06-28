@@ -1,0 +1,4 @@
+interface:
+  display_name: "GPT Image"
+  short_description: "Shape GPT Image-style prompts, then delegate to the system imagegen skill"
+  default_prompt: "Use $gpt-image to analyze my image request, search the Reference Gallery/craft files, shape the final prompt, then use the system $imagegen skill and its built-in image_gen tool. Do not call the packaged gpt-image CLI, OpenAI client code, uvx, or scripts/generate.py for normal image requests."

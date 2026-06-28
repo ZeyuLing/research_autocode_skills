@@ -1,0 +1,4 @@
+interface:
+  display_name: "AI Literature Survey"
+  short_description: "Exhaustive AI literature discovery workflow"
+  default_prompt: "Use $ai-literature-survey to survey all relevant literature for my research topic."

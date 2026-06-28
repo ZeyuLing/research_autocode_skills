@@ -1,0 +1,301 @@
+{% extends "base.html" %}
+{% block title %}Orbit — Agent Hub{% endblock %}
+
+{% block extra_head %}
+<style>
+    /* Project filter chips */
+    .proj-filter-chip{display:inline-flex;align-items:center;gap:6px;padding:4px 14px;border-radius:20px;font-size:.85rem;cursor:pointer;border:2px solid transparent;transition:all .15s;white-space:nowrap;background:#f0f0f0;color:#555;}
+    .proj-filter-chip:hover{background:#e0e0e0;}
+    .proj-filter-chip.active{color:#fff;}
+    .proj-filter-chip .proj-dot{width:9px;height:9px;border-radius:50%;}
+    .proj-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:10px;font-size:.7rem;color:#fff;white-space:nowrap;}
+
+    /* Quick create bar */
+    .quick-create-bar{background:#fff;border-radius:10px;box-shadow:0 1px 8px rgba(0,0,0,.09);padding:12px 16px;cursor:pointer;display:flex;align-items:center;gap:12px;border:2px solid #2d7dd2;transition:border-color .15s,box-shadow .15s,background .12s;margin-bottom:18px;}
+    .quick-create-bar:hover{background:#f5f9ff;box-shadow:0 3px 16px rgba(45,125,210,.18);}
+    .qcb-icon{width:32px;height:32px;border-radius:8px;background:#2d7dd2;display:flex;align-items:center;justify-content:center;color:#fff;flex-shrink:0;font-size:1rem;}
+    .qcb-text{flex:1;}
+    .qcb-placeholder{color:#1a2e4a;font-size:.92rem;font-weight:500;}
+    .qcb-sub{font-size:.72rem;color:#888;margin-top:2px;}
+</style>
+{% endblock %}
+
+{% block content %}
+<!-- Progress Bar -->
+<div class="row mb-4">
+    <div class="col-12">
+        <div class="d-flex justify-content-between align-items-center mb-2">
+            <h5 class="mb-0"><i class="bi bi-bar-chart-line"></i> 全局进度</h5>
+            <span class="text-muted" id="progress-text">{{ counts.completed }}/{{ counts.active_total }} 完成 ({{ ((counts.completed / counts.active_total * 100)|round|int) if counts.active_total > 0 else 0 }}%)</span>
+        </div>
+        <div class="progress progress-overview">
+            <div class="progress-bar bg-success" id="prog-completed" style="width:{{ (counts.completed/counts.active_total*100) if counts.active_total>0 else 0 }}%"></div>
+            <div class="progress-bar bg-primary" id="prog-in_progress" style="width:{{ (counts.in_progress/counts.active_total*100) if counts.active_total>0 else 0 }}%"></div>
+            <div class="progress-bar bg-warning" id="prog-pending" style="width:{{ (counts.pending/counts.active_total*100) if counts.active_total>0 else 0 }}%"></div>
+            <div class="progress-bar bg-danger" id="prog-failed" style="width:{{ (counts.failed/counts.active_total*100) if counts.active_total>0 else 0 }}%"></div>
+        </div>
+    </div>
+</div>
+
+<!-- Stat Cards -->
+<div class="row mb-4 g-3">
+    {% for key, val, label, tcls, bc in [('total',counts.active_total,'总计','',''),('pending',counts.pending,'待处理','text-warning','#f0ad4e'),('in_progress',counts.in_progress,'进行中','text-primary','#0d6efd'),('completed',counts.completed,'已完成','text-success','#198754'),('failed',counts.failed,'失败','text-danger','#dc3545')] %}
+    <div class="col"><div class="card stat-card text-center p-3" {% if bc %}style="border-left:4px solid {{ bc }}"{% endif %}><div class="stat-num {{ tcls }}" id="stat-{{ key }}">{{ val }}</div><div class="stat-label">{{ label }}</div></div></div>
+    {% endfor %}
+</div>
+
+<!-- Quick Create Bar (IDE-style, click to open modal) -->
+<div class="quick-create-bar" onclick="openCreateModal()" id="quick-create-bar">
+    <div class="qcb-icon"><i class="bi bi-plus-lg"></i></div>
+    <div class="qcb-text">
+        <div class="qcb-placeholder">新建任务… 或输入 /skill 调用 skill</div>
+        <div class="qcb-sub">
+            <kbd style="background:#f0f0f0;border:1px solid #ddd;border-radius:3px;padding:0 4px;font-size:.68rem;">Ctrl+N</kbd>
+            打开任务编辑器 · 支持多行描述、详细需求、代码片段
+        </div>
+    </div>
+    <div class="d-flex gap-1 align-items-center flex-shrink-0">
+        {% for s in skills[:4] %}
+        <span class="skill-badge" style="cursor:default;">/{{ s.name }}</span>
+        {% endfor %}
+        {% if skills|length > 4 %}<span class="text-muted" style="font-size:.72rem;">+{{ skills|length-4 }}</span>{% endif %}
+    </div>
+</div>
+
+<!-- Filters Row -->
+<div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
+    <!-- Project filter chips -->
+    <div class="d-flex flex-wrap gap-2" id="proj-filter-chips">
+        <span class="proj-filter-chip {% if project_filter == 'all' %}active{% endif %}"
+            style="{% if project_filter == 'all' %}background:#555;color:#fff;{% endif %}"
+            onclick="switchProjFilter('all')">
+            <i class="bi bi-layers"></i> 全部项目
+        </span>
+        {% for p in projects_meta %}
+        <span class="proj-filter-chip {% if project_filter == p.slug %}active{% endif %}"
+            style="{% if project_filter == p.slug %}background:{{ p.color }};color:#fff;{% endif %}"
+            data-slug="{{ p.slug }}" data-color="{{ p.color }}"
+            onclick="switchProjFilter('{{ p.slug }}','{{ p.color }}')">
+            <span class="proj-dot" style="background:{% if project_filter == p.slug %}rgba(255,255,255,.6){% else %}{{ p.color }}{% endif %};"></span>
+            {{ p.name }}
+            {% if p.counts.in_progress > 0 %}<span class="badge bg-white text-dark ms-1" style="font-size:.65rem;">{{ p.counts.in_progress }}</span>{% endif %}
+        </span>
+        {% endfor %}
+    </div>
+    <!-- Status filter + Sort toggle -->
+    <div class="d-flex align-items-center gap-2">
+        <!-- Sort toggle -->
+        <div class="btn-group btn-group-sm" role="group" style="border-radius:8px;">
+            <button type="button" class="btn {% if sort_order == 'newest' %}btn-dark{% else %}btn-outline-secondary{% endif %}" onclick="switchSort('newest')" title="最新优先" style="font-size:.78rem;padding:3px 10px;border-radius:8px 0 0 8px;">
+                <i class="bi bi-sort-down"></i> 最新
+            </button>
+            <button type="button" class="btn {% if sort_order == 'position' %}btn-dark{% else %}btn-outline-secondary{% endif %}" onclick="switchSort('position')" title="按位置排序" style="font-size:.78rem;padding:3px 10px;border-radius:0 8px 8px 0;">
+                <i class="bi bi-sort-numeric-down"></i> 顺序
+            </button>
+        </div>
+    </div>
+</div>
+<div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+    <ul class="nav filter-tabs gap-1" id="filter-tabs">
+        {% for key, label in [('all','全部'),('pending','⏳ 待处理'),('in_progress','🔄 进行中'),('completed','✅ 完成'),('failed','❌ 失败')] %}
+        <li class="nav-item">
+            <a class="nav-link {% if current_filter==key %}active{% endif %}" href="#" onclick="switchFilter(event,'{{ key }}')">{{ label }}
+                {% if key=='pending' %}<span class="badge bg-white text-dark ms-1">{{ counts.pending }}</span>{% endif %}
+                {% if key=='in_progress' %}<span class="badge bg-white text-dark ms-1">{{ counts.in_progress }}</span>{% endif %}
+            </a>
+        </li>
+        {% endfor %}
+        <li class="nav-item ms-auto">
+            <a class="nav-link {% if show_archived %}active{% endif %}" href="#" onclick="toggleArchived(event)" style="font-size:.78rem;">
+                <i class="bi bi-archive me-1"></i>{% if show_archived %}隐藏已归档{% else %}显示已归档{% endif %}
+            </a>
+        </li>
+    </ul>
+</div>
+
+<!-- Task Table -->
+<div class="task-table mb-4">
+    <table class="table table-hover mb-0 align-middle">
+        <thead><tr>
+            <th style="width:48px"><input type="checkbox" id="select-all" onchange="toggleSelectAll(this)" title="全选/取消"> ID</th>
+            <th style="width:110px">项目</th>
+            <th>描述</th>
+            <th style="width:90px">标签</th>
+            <th style="width:160px">状态</th>
+            <th style="width:65px">耗时</th>
+            <th style="width:70px">Cost</th>
+            <th style="width:160px">操作</th>
+        </tr></thead>
+        <tbody id="task-tbody">
+            {% for t in tasks %}
+            <tr class="{% if t.parent_id %}task-row-subtask{% endif %}{% if t._is_blocked %} task-row-blocked{% endif %}{% if t._has_active_conflict %} task-row-conflict{% endif %}{% if t.archived %} opacity-50{% endif %}" data-task-id="{{ t.id }}">
+                <td class="text-muted small">#{{ t.id }}</td>
+                <td><span class="proj-badge" style="background:{{ t._project_color }};">{{ t._project_name }}</span></td>
+                <td>
+                    {{ t.description }}
+                    {% if t.skill %}<span class="skill-badge">/{{ t.skill }}</span>{% endif %}
+                    {% if t._is_blocked %}<span class="blocked-indicator"><i class="bi bi-lock-fill"></i>阻塞</span>{% endif %}
+                    {% if t._has_active_conflict %}<span class="conflict-indicator"><i class="bi bi-exclamation-triangle-fill"></i>冲突</span>{% endif %}
+                </td>
+                <td>{% if t.tag %}<span class="badge bg-light text-dark border">{{ t.tag }}</span>{% endif %}{% if t.effort and t.effort != 'medium' %}<span class="badge {% if t.effort == 'high' %}bg-warning text-dark{% elif t.effort == 'xhigh' %}bg-danger{% elif t.effort == 'max' %}bg-danger{% else %}bg-secondary{% endif %} ms-1" style="font-size:.65rem;">{{ t.effort }}</span>{% endif %}</td>
+                <td>
+                    <span class="badge {% if t.status=='in_progress' and t.agent_status=='idle' %}badge-idle{% else %}badge-{{ t.status }}{% endif %}">{% if t.status=='in_progress' and t.agent_status=='idle' %}💬 等待回复{% elif t.status=='pending' %}⏳ 待处理{% elif t.status=='in_progress' %}🔄 进行中{% elif t.status=='completed' %}✅ 完成{% elif t.status=='failed' %}❌ 失败{% elif t.status=='decomposed' %}🔀 已拆解{% endif %}</span>
+                    {% if t.status=='in_progress' and t.started_at %}<span class="elapsed-time" data-started="{{ t.started_at }}">...</span>{% endif %}
+                </td>
+                <td class="small text-muted">{% if t.duration_minutes %}{{ t.duration_minutes }}m{% endif %}</td>
+                <td class="small text-muted">{% if t.cost_usd %}${{ "%.2f"|format(t.cost_usd) }}{% elif t.estimated_cost_usd %}~${{ "%.2f"|format(t.estimated_cost_usd) }}{% endif %}</td>
+                <td>
+                    <a href="/task/{{ t.id }}?p={{ t._project_slug }}" class="btn btn-action btn-outline-secondary"><i class="bi bi-eye"></i></a>
+                    <button class="btn btn-action btn-outline-info" onclick="duplicateTask({{ t.id }},'{{ t._project_slug }}')" title="复制任务"><i class="bi bi-copy"></i></button>
+                    {% if t.status=='pending' %}<button class="btn btn-action btn-outline-primary" onclick="startTask({{ t.id }},'{{ t._project_slug }}')"><i class="bi bi-play-fill"></i></button>{% endif %}
+                    {% if t.status=='in_progress' %}<button class="btn btn-action btn-outline-success" onclick="completeTask({{ t.id }},'{{ t._project_slug }}')"><i class="bi bi-check-lg"></i></button><button class="btn btn-action btn-outline-danger" onclick="failTask({{ t.id }},'{{ t._project_slug }}')"><i class="bi bi-x-lg"></i></button>{% endif %}
+                    {% if t.status=='failed' %}<button class="btn btn-action btn-outline-warning" onclick="retryTask({{ t.id }},'{{ t._project_slug }}')"><i class="bi bi-arrow-clockwise"></i></button>{% endif %}
+                    {% if t.status!='in_progress' and t.status!='decomposed' %}<button class="btn btn-action btn-outline-danger" onclick="deleteTask({{ t.id }},'{{ t._project_slug }}')"><i class="bi bi-trash3"></i></button>{% endif %}
+                    {% if t.status!='in_progress' %}<button class="btn btn-action btn-outline-secondary" onclick="archiveTask({{ t.id }},'{{ t._project_slug }}',{{ 0 if t.archived else 1 }})" title="{% if t.archived %}取消归档{% else %}归档{% endif %}"><i class="bi bi-{% if t.archived %}arrow-counterclockwise{% else %}archive{% endif %}"></i></button>{% endif %}
+                </td>
+            </tr>
+            {% endfor %}
+            {% if not tasks %}
+            <tr><td colspan="9" class="text-center text-muted py-5">
+                <i class="bi bi-inbox" style="font-size:2rem;"></i>
+                <p class="mt-2 mb-0">暂无任务</p>
+                <small>点击上方输入框或按 <kbd>Ctrl+N</kbd> 创建任务</small>
+            </td></tr>
+            {% endif %}
+        </tbody>
+    </table>
+</div>
+
+<!-- Batch action bar (floating) -->
+<div id="batch-bar" style="display:none;position:fixed;bottom:24px;left:50%;transform:translateX(-50%);z-index:8000;background:#1e2836;color:#fff;border-radius:12px;padding:10px 20px;box-shadow:0 8px 32px rgba(0,0,0,.3);display:none;align-items:center;gap:14px;font-size:.88rem;">
+    <span id="batch-count" style="font-weight:600;"></span>
+    <button class="btn btn-sm btn-outline-light" onclick="batchAction('stop')" id="batch-stop-btn"><i class="bi bi-stop-fill"></i> 停止</button>
+    <button class="btn btn-sm btn-outline-warning" onclick="batchAction('restart')"><i class="bi bi-arrow-clockwise"></i> 重启</button>
+    <button class="btn btn-sm btn-outline-danger" onclick="batchAction('delete')"><i class="bi bi-trash3"></i> 删除</button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()"><i class="bi bi-x-lg"></i></button>
+</div>
+
+<!-- Per-project mini cards (all-projects view) -->
+{% if project_filter == 'all' and projects_meta|length > 1 %}
+<div class="row g-3 mb-4">
+    {% for p in projects_meta %}
+    <div class="col-md-3 col-sm-6">
+        <div class="card border-0 shadow-sm" style="border-radius:12px;cursor:pointer;border-left:4px solid {{ p.color }}!important;" onclick="switchProjFilter('{{ p.slug }}','{{ p.color }}')">
+            <div class="card-body py-3 px-3">
+                <div class="d-flex align-items-center gap-2 mb-2">
+                    <span style="width:10px;height:10px;border-radius:50%;background:{{ p.color }};flex-shrink:0;"></span>
+                    <strong style="font-size:.88rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="{{ p.path }}">{{ p.name }}</strong>
+                </div>
+                <div class="d-flex gap-2 flex-wrap">
+                    {% if p.counts.in_progress > 0 %}<span class="badge badge-in_progress">{{ p.counts.in_progress }} 进行中</span>{% endif %}
+                    {% if p.counts.pending > 0 %}<span class="badge badge-pending">{{ p.counts.pending }} 待处理</span>{% endif %}
+                    {% if p.counts.completed > 0 %}<span class="badge badge-completed">{{ p.counts.completed }} 完成</span>{% endif %}
+                    {% if p.counts.total == 0 %}<span class="text-muted" style="font-size:.78rem;">暂无任务</span>{% endif %}
+                </div>
+                {% if p.counts.total > 0 %}
+                <div class="mt-2" style="height:4px;border-radius:2px;background:#eee;overflow:hidden;">
+                    <div style="width:{{ ((p.counts.completed/p.counts.total*100)|round|int) if p.counts.total>0 else 0 }}%;height:100%;background:{{ p.color }};opacity:.7;border-radius:2px;"></div>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+{% endif %}
+
+<!-- Skills row -->
+<div class="card border-0 shadow-sm" style="border-radius:12px;">
+    <div class="card-body py-2 px-3">
+        <div class="d-flex justify-content-between align-items-center mb-1">
+            <h6 class="text-muted mb-0 small"><i class="bi bi-lightning"></i> 可用 Skills</h6>
+            <a href="/skills?p={{ project_slug }}" class="small">{{ skills|length }} 个 →</a>
+        </div>
+        <div class="d-flex flex-wrap gap-1">
+            {% for s in skills %}
+            <span class="skill-badge" title="{{ s.short_desc }}" style="cursor:pointer;"
+                onclick="openCreateModalWithSkill('/{{ s.name }}')">/{{ s.name }}</span>
+            {% endfor %}
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+    // ── Project filter ──
+    function switchSort(order){
+        const url=new URL(window.location);
+        url.searchParams.set('sort',order);
+        window.location.href=url.toString();
+    }
+
+    function switchFilter(e,key){
+        e.preventDefault();currentFilter=key;
+        document.querySelectorAll('#filter-tabs .nav-link').forEach(el=>el.classList.remove('active'));
+        e.target.closest('.nav-link').classList.add('active');
+        const url=new URL(window.location);url.searchParams.set('status',key);window.history.replaceState({},'',url);
+        refreshData();
+    }
+
+    function switchProjFilter(slug,color){
+        currentProjFilter=slug;
+        document.querySelectorAll('.proj-filter-chip').forEach(el=>{
+            const elSlug=el.dataset.slug||'all';
+            const isActive=elSlug===slug||(slug==='all'&&!el.dataset.slug);
+            el.classList.toggle('active',isActive);
+            if(isActive){el.style.background=slug==='all'?'#555':(color||el.dataset.color||'#555');el.style.color='#fff';}
+            else{el.style.background='#f0f0f0';el.style.color='#555';const dot=el.querySelector('.proj-dot');if(dot)dot.style.background=el.dataset.color||'#999';}
+        });
+        const url=new URL(window.location);url.searchParams.set('proj',slug);window.history.replaceState({},'',url);
+        refreshData();
+    }
+
+    // ── Open modal with pre-filled skill ──
+    function openCreateModalWithSkill(skillPrefix){
+        openCreateModal();
+        setTimeout(()=>{
+            const ta=document.getElementById('create-desc');
+            if(ta){ta.value=skillPrefix+' ';ta.focus();ta.dispatchEvent(new Event('input'));}
+        },80);
+    }
+
+    async function archiveTask(id, slug, archived){
+        const p = slug || P;
+        await fetch(`/api/tasks/${id}/archive?p=${p}`, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({archived: !!archived})});
+        showToast(archived ? '已归档' : '已取消归档');
+        refreshData(true);
+    }
+
+    function toggleArchived(e){
+        e.preventDefault();
+        const url=new URL(window.location);
+        const cur=url.searchParams.get('archived')==='1';
+        if(cur) url.searchParams.delete('archived');
+        else url.searchParams.set('archived','1');
+        window.location.href=url.toString();
+    }
+
+    document.addEventListener('DOMContentLoaded',()=>{
+        updateElapsedTimes();
+        // Restore last selected project from localStorage
+        try{
+            const s=localStorage.getItem('lastProjSlug');
+            const n=localStorage.getItem('lastProjName');
+            const c=localStorage.getItem('lastProjColor');
+            if(s&&n&&c){
+                // Check chip exists (project still registered)
+                const chip=document.querySelector(`.proj-select-chip[data-slug="${s}"]`);
+                if(chip) modalSelectProject(chip,s,n,c);
+            }
+        }catch(e){}
+    });
+
+    // Save project selection to localStorage when picked in modal
+    const _origModalSelect=window.modalSelectProject||function(){};
+    window.modalSelectProject=function(el,slug,name,color){
+        _origModalSelect(el,slug,name,color);
+        try{localStorage.setItem('lastProjSlug',slug);localStorage.setItem('lastProjName',name);localStorage.setItem('lastProjColor',color);}catch(e){}
+    };
+</script>
+{% endblock %}

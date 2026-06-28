@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}Skills — TODO Dashboard{% endblock %}
+
+{% block content %}
+<div class="row mb-4">
+    <div class="col-12">
+        <h4><i class="bi bi-lightning"></i> 可用 Skills ({{ skills|length }})</h4>
+        <p class="text-muted">在任务输入框中输入 <code>/skill_name</code> 来创建绑定 Skill 的任务。Agent 执行时会自动加载对应的 Skill 指令。</p>
+        <p class="text-muted small"><i class="bi bi-folder2-open"></i> Skills 目录: <code>{{ project_root }}/.claude/skills/</code></p>
+    </div>
+</div>
+
+<div class="row g-3">
+    {% for s in skills %}
+    <div class="col-lg-4 col-md-6">
+        <div class="card border-0 shadow-sm h-100" style="border-radius:12px;border-left:4px solid #764ba2!important;">
+            <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                    <h6 class="mb-0">
+                        <span class="skill-badge" style="font-size:.85rem;">/{{ s.name }}</span>
+                    </h6>
+                    <button class="btn btn-sm btn-outline-primary" onclick="useSkill('{{ s.name }}')" title="使用此 Skill">
+                        <i class="bi bi-play-fill"></i>
+                    </button>
+                </div>
+                <p class="small text-muted mb-0" style="white-space:pre-line;">{{ s.description[:300] }}{% if s.description|length > 300 %}...{% endif %}</p>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+
+    {% if not skills %}
+    <div class="col-12 text-center text-muted py-5">
+        <i class="bi bi-lightning" style="font-size:3rem;"></i>
+        <p class="mt-2">未找到 Skills</p>
+        <small>检查 <code>.claude/skills/</code> 目录是否存在 SKILL.md 文件</small>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+function useSkill(name) {
+    window.location.href = '/?focus=input#';
+    // Small delay to allow navigation, then set input
+    setTimeout(() => {
+        const inp = document.getElementById('new-desc');
+        if (inp) { inp.value = '/' + name + ' '; inp.focus(); }
+    }, 100);
+    // Actually just navigate back to home with the skill pre-filled
+    window.location.href = '/';
+}
+</script>
+{% endblock %}
