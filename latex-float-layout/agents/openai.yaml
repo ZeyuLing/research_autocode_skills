@@ -1,0 +1,4 @@
+interface:
+  display_name: "LaTeX Float Layout"
+  short_description: "Balance figures and tables in papers."
+  default_prompt: "Use $latex-float-layout to rebalance the figures and tables in my LaTeX paper."
