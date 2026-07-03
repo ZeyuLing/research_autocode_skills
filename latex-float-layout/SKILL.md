@@ -13,30 +13,34 @@ The goal is not to force every float to its first source position. The goal is a
 
 ## Workflow
 
-1. Compile the paper at least twice before judging layout.
-2. Generate a whole-paper contact sheet from the PDF. Prefer `scripts/make_pdf_contact_sheet.py` when Ghostscript and Pillow are available.
-3. Map each float to its PDF page with `main.aux` labels:
+1. Read the venue constraints first. Treat main-body page limits, appendix/reference exclusions, and mandatory float placement rules as hard constraints.
+2. Compile the paper at least twice before judging layout.
+3. Locate the page where appendix and references begin from the PDF/log. Do not optimize figure/table balance if it pushes the main body over the venue limit.
+4. Generate a whole-paper contact sheet from the PDF. Prefer `scripts/make_pdf_contact_sheet.py` when Ghostscript and Pillow are available.
+5. Map each float to its PDF page with `main.aux` labels:
 
 ```bash
 rg -n "newlabel\\{(tab|fig):" main.aux
 ```
 
-4. Inventory float sources with:
+6. Inventory float sources with:
 
 ```bash
 rg -n "\\\\begin\\{(figure|table)\\*?\\}|\\\\input\\{.*(fig|tab)" .
 ```
 
-5. Apply the smallest set of source-order, placement, and float-parameter changes that fixes the visible imbalance.
-6. Recompile twice and regenerate the contact sheet. Keep iterating until the PDF, not just the LaTeX source, satisfies the layout rule.
+7. Apply the smallest set of source-order, placement, and float-parameter changes that fixes the visible imbalance without violating the page budget.
+8. Recompile twice and regenerate the contact sheet. Keep iterating until the PDF content, not just the LaTeX source, satisfies both page-count and layout rules.
 
 ## Layout Rules
 
+- Page budget comes first. If the venue limits the main paper to 10 pages excluding appendix/references, the appendix must begin after page 10 at the latest.
 - Keep tables at the top of pages. This applies to both `table` and `table*`.
 - Avoid placing more than one major two-column float on the same page when a nearby text page can absorb one of them.
 - If a page must contain multiple floats, prefer one table at the top plus one figure lower on the page over stacked tables in the middle or bottom.
 - If several single-column tables or figures must share a page, aim for left/right column balance rather than stacking them all in one column.
 - Do not let floats collect on the last pages. Move qualitative figures and secondary tables earlier or later by source order, but keep them near the section that discusses them.
+- When page budget is tight, move illustrative qualitative figures or detailed protocol material to the appendix before moving core numeric result tables.
 - Avoid large blank float pages. A page with only one small float is usually worse than a page with two related floats and explanatory text.
 - Preserve reading logic: do not move a float so far from its first reference that the reader loses context.
 
@@ -76,6 +80,7 @@ Use page/column breaks last:
 
 ## Verification Checklist
 
+- The main body page count satisfies the venue rule, with appendix and references excluded exactly as the venue defines them.
 - Tables appear at page tops or at the top of float pages.
 - No late-page cluster of several floats remains.
 - No page is dominated by a small isolated table or figure with large blank space.
