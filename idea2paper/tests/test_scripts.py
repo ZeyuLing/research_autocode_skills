@@ -21,6 +21,7 @@ from validate_project import (  # noqa: E402
     has_draft_marker,
     validate_figures,
     validate_no_alternate_figure_backends,
+    validate_title,
 )
 from compile_paper import aux_label_page, command_for, source_tree_sha256  # noqa: E402
 
@@ -90,7 +91,12 @@ class Idea2PaperScriptTests(unittest.TestCase):
             project = parent / "demo"
             self.assertEqual(json.loads((project / "resources.json").read_text(encoding="utf-8"))["source"], "current_machine")
             main_tex = (project / "paper/main.tex").read_text(encoding="utf-8")
-            self.assertIn(r"A\&B\_\# uncertainty model", main_tex)
+            title_tex = (project / "paper/title.tex").read_text(encoding="utf-8")
+            self.assertIn(r"\input{title}", main_tex)
+            self.assertIn(r"\title{\papertitle}", main_tex)
+            self.assertIn("Working Title Pending", title_tex)
+            self.assertNotIn("A&B_# uncertainty model", title_tex)
+            self.assertTrue(json.loads((project / "title/brief.json").read_text(encoding="utf-8"))["project_directory_is_not_title"])
 
             duplicate = run_script(
                 "init_project.py",
@@ -593,6 +599,154 @@ class Idea2PaperScriptTests(unittest.TestCase):
             )
         )
 
+    def test_title_freeze_binds_current_evidence_and_latex(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "project-label"
+            for relative in ("title", "paper", "venue", "related_works", "idea", "method", "experiments"):
+                (project / relative).mkdir(parents=True, exist_ok=True)
+
+            project_data = {
+                "project_id": "project-label",
+                "idea_version": "idea_v2",
+                "idea_original": "A long raw idea that is not a paper title.",
+            }
+            venue = {"selected": {"name": "3DV", "edition": "2027"}}
+            venue_path = project / "venue/decision.json"
+            venue_path.write_text(json.dumps(venue), encoding="utf-8")
+            corpus_path = project / "related_works/papers_enriched.csv"
+            with corpus_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["title"])
+                writer.writeheader()
+                writer.writerow({"title": "An Unrelated Motion Synthesis Paper"})
+            matrix_path = project / "experiments/claim_experiment_matrix.csv"
+            with matrix_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["claim_id", "contribution_id", "method_component"])
+                writer.writeheader()
+                writer.writerow({"claim_id": "C-001", "contribution_id": "CONTRIB-001", "method_component": "M-001"})
+            terminology_path = project / "idea/terminology.csv"
+            with terminology_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=["term"])
+                writer.writeheader()
+                writer.writerow({"term": "hierarchical planning"})
+            method_path = project / "method/method_spec.md"
+            method_path.write_text("# Method\n\nA hierarchical planning method.\n", encoding="utf-8")
+
+            (project / "title/brief.json").write_text(
+                json.dumps(
+                    {
+                        "status": "ready",
+                        "idea_version": "idea_v2",
+                        "project_label": "project-label",
+                        "project_directory_is_not_title": True,
+                        "required_concepts": ["planning"],
+                        "forbidden_claims": ["state of the art"],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            titles = [
+                "Plan Before Motion: Executable Hierarchical Planning for Human Motion Generation",
+                "Executable Plans for Human Motion Generation",
+                "From Language to Motion Programs",
+                "Hierarchical Motion Programs for Text-to-Motion Generation",
+                "Planning Contacts Before Poses",
+                "Verifiable Motion Plans for Controllable Generation",
+                "Event-to-Contact Planning for Human Motion",
+                "Structured Planning for Long-Horizon Motion Generation",
+            ]
+            families = ["problem_capability", "method_identity", "insight_mechanism", "application_outcome"]
+            score = {
+                "faithfulness": 5,
+                "specificity": 4,
+                "novelty_signal": 4,
+                "clarity": 5,
+                "memorability": 4,
+                "search_distinctiveness": 4,
+                "venue_fit": 5,
+            }
+            candidates = [
+                {
+                    "candidate_id": f"TITLE-{index:03d}",
+                    "title": title,
+                    "framing_family": families[(index - 1) % len(families)],
+                    "claim_ids": ["C-001"],
+                    "contribution_ids": ["CONTRIB-001"],
+                    "method_component_ids": ["M-001"],
+                    "terms": ["hierarchical planning"],
+                    "rationale": "Faithfully names the planning contribution.",
+                    "scores": score,
+                    "overclaim_risk": 1,
+                    "risk_flags": [],
+                }
+                for index, title in enumerate(titles, start=1)
+            ]
+            (project / "title/candidates.json").write_text(
+                json.dumps(
+                    {
+                        "status": "reviewed",
+                        "idea_version": "idea_v2",
+                        "venue_name": "3DV",
+                        "venue_edition": "2027",
+                        "generated_at": "2026-08-01T12:00:00Z",
+                        "candidates": candidates,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            def digest(path: Path) -> str:
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
+            selected = titles[0]
+            decision = {
+                "status": "frozen",
+                "title_version": "title_v1",
+                "idea_version": "idea_v2",
+                "venue_name": "3DV",
+                "venue_edition": "2027",
+                "selected_candidate_id": "TITLE-001",
+                "selected_title": selected,
+                "shortlist": ["TITLE-001", "TITLE-002", "TITLE-003"],
+                "selection_rationale": "Best balance of mechanism, scope, and clarity.",
+                "reviews": [
+                    {"role": "positioning", "verdict": "pass", "notes": "Distinct from audited titles."},
+                    {"role": "clarity_faithfulness", "verdict": "pass", "notes": "Matches the frozen claim."},
+                ],
+                "input_versions": {
+                    "idea_version": "idea_v2",
+                    "literature_sha256": digest(corpus_path),
+                    "claim_graph_sha256": digest(matrix_path),
+                    "terminology_sha256": digest(terminology_path),
+                    "method_spec_sha256": digest(method_path),
+                    "venue_decision_sha256": digest(venue_path),
+                },
+                "collision_check": {
+                    "checked_at": "2026-08-01T12:10:00Z",
+                    "corpus_sha256": digest(corpus_path),
+                    "exact_match": False,
+                    "reviewed_conflicts": [],
+                },
+                "unresolved_risks": [],
+                "frozen_at": "2026-08-01T12:15:00Z",
+            }
+            (project / "title/decision.json").write_text(json.dumps(decision), encoding="utf-8")
+            (project / "paper/title.tex").write_text(
+                f"\\newcommand{{\\papertitle}}{{{selected}}}\n", encoding="utf-8"
+            )
+            (project / "paper/main.tex").write_text(
+                "\\input{title}\n\\title{\\papertitle}\n", encoding="utf-8"
+            )
+
+            errors: list[str] = []
+            validate_title(project, project_data, venue, errors)
+            self.assertEqual(errors, [])
+            (project / "paper/title.tex").write_text(
+                "\\newcommand{\\papertitle}{A Stale Title}\n", encoding="utf-8"
+            )
+            stale_errors: list[str] = []
+            validate_title(project, project_data, venue, stale_errors)
+            self.assertTrue(any("does not match" in error for error in stale_errors))
+
     def test_venue_change_invalidates_literature_and_downstream(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             parent = Path(temporary)
@@ -612,6 +766,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "LITERATURE_AUDITED",
                 "IDEA_REVIEWED",
                 "CLAIM_GRAPH_FROZEN",
+                "TITLE_FROZEN",
                 "MANUSCRIPT_DRAFTED",
             ):
                 result = run_script("state_manager.py", "set", project, stage, "complete")
@@ -624,6 +779,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "LITERATURE_AUDITED",
                 "IDEA_REVIEWED",
                 "CLAIM_GRAPH_FROZEN",
+                "TITLE_FROZEN",
                 "MANUSCRIPT_DRAFTED",
             ):
                 self.assertEqual(state["stages"][stage]["status"], "stale")

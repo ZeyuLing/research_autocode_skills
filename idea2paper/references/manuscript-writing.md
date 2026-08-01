@@ -1,6 +1,6 @@
 # Manuscript Writing Protocol
 
-Write final prose only after the venue, literature corpus, idea, contributions, claim graph, Method, and experiment matrix are stable.
+Write final prose only after the venue, literature corpus, idea, contributions, claim graph, Method, experiment matrix, and paper title are stable.
 
 ## Draft order
 
@@ -86,3 +86,4 @@ Before QA, check:
 - Abstract and Conclusion contain no orphan claims;
 - no agent dialogue, execution plan, rejected idea, or internal risk register appears in rendered text;
 - double-blind metadata and artifact links comply with the target venue.
+- the LaTeX title exactly matches the frozen title decision and accurately previews the problem, differentiating mechanism, and claim boundary without relying on predicted results.

@@ -42,6 +42,14 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - Palette is low-saturation with readable contrast; final-size text is legible; no watermark exists.
 - Real qualitative evidence was not altered by imagegen.
 
+## Title gate
+
+- 8--12 distinct candidates cover at least three framing families and link to frozen claims.
+- At least three candidates were shortlisted and reviewed independently for positioning and clarity/faithfulness.
+- The audited literature corpus was checked for exact or confusingly similar titles.
+- The selected title is faithful, distinctive, venue-appropriate, and does not rely on predicted results or unsupported priority claims.
+- `title/decision.json` and `paper/title.tex` agree, and the active LaTeX template consumes that title.
+
 ## Manuscript gate
 
 - All required sections are complete and no internal work plan appears in rendered prose.
@@ -62,7 +70,7 @@ Run an independent review after the first complete draft. Review novelty positio
 
 Require:
 
-- all venue, literature, idea, design, figure, and manuscript gates pass;
+- all venue, literature, idea, design, title, figure, and manuscript gates pass;
 - compiled body is within official limit plus one page;
 - all unresolved items belong only to `PREDICTED_RESULT`, `QUALITATIVE_PLACEHOLDER`, `METHOD_ALTERNATIVE`, or `TEMPLATE_UPDATE`;
 - `scripts/todo_lint.py --mode sketch` reports no untracked red text or TODO;

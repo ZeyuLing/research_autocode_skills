@@ -1,6 +1,6 @@
 ---
 name: idea2paper
-description: End-to-end orchestration from a rough AI/ML/CV/NLP/robotics research idea to a complete experiment-ready LaTeX paper sketch. Use when Codex must refine an idea, select the nearest suitable top conference whose abstract deadline is still open, obtain the official or fallback template, run a source-audited literature survey, conduct a novelty/feasibility agent meeting, design the method and experiments, generate every paper figure with imagegen, write all paper sections, and leave only explicitly marked experimental or implementation TODOs. Triggers include idea2paper, idea to paper, paper sketch, research proposal to paper, turn this idea into a paper, 一键写论文, 从 idea 到 paper, 打磨 idea, and 完整论文草稿.
+description: End-to-end orchestration from a rough AI/ML/CV/NLP/robotics research idea to a complete experiment-ready LaTeX paper sketch. Use when Codex must refine an idea, select the nearest suitable top conference whose abstract deadline is still open, obtain the official or fallback template, run a source-audited literature survey, conduct a novelty/feasibility agent meeting, design the method and experiments, generate and freeze a defensible paper title, generate every paper figure with imagegen, write all paper sections, and leave only explicitly marked experimental or implementation TODOs. Triggers include idea2paper, idea to paper, paper sketch, research proposal to paper, turn this idea into a paper, 一键写论文, 从 idea 到 paper, 打磨 idea, and 完整论文草稿.
 ---
 
 # Idea to Paper
@@ -16,6 +16,7 @@ Build a traceable paper project whose prose, method, experiment design, tables, 
 5. Select venues by topic fit and the nearest still-open abstract deadline. Do not consider whether the author can finish experiments before the deadline.
 6. Verify current deadlines, templates, page limits, anonymity rules, and policies from official venue sources at execution time.
 7. Never silently continue with stale artifacts. Mark downstream stages `stale`, rerun the affected stage, and record the new input version.
+8. Treat the project name and initial idea summary only as working labels. Generate, review, and freeze the paper title from the final positioning, claim graph, Method, and venue before drafting the manuscript.
 
 ## Start or resume a project
 
@@ -51,6 +52,7 @@ Load only the references required for the current stage:
 | Initial or delta literature search, paper status and open-source enrichment | [literature-integration.md](references/literature-integration.md) |
 | Student A, Student B, Professor rounds and convergence | [idea-council.md](references/idea-council.md) |
 | Claim graph, Method, baselines, experiments, ablations, result TODOs | [claim-method-experiment.md](references/claim-method-experiment.md) |
+| Paper-title candidates, adversarial review, collision check, and freeze | [title-selection.md](references/title-selection.md) |
 | Any figure request or figure revision | [figure-protocol.md](references/figure-protocol.md), then the installed `imagegen` skill |
 | Related Work, Introduction, Abstract, Conclusion, Teaser placement, appendix, page budget | [manuscript-writing.md](references/manuscript-writing.md) |
 | Stage gates, compilation, review, sketch and submission readiness | [quality-gates.md](references/quality-gates.md) |
@@ -130,7 +132,13 @@ Give every claim, contribution, module, experiment, result slot, and figure a st
 6. Fill expected method and ablation numbers with `\PredResult{<ID>}{...}`. Mark every dependent narrative statement with `\PredClaim{<same-ID>}{...}` and an adjacent TODO.
 7. Use factorial module ablations when tractable; otherwise use an explicitly ordered probing design. Put non-core comparisons in the appendix.
 
-### 6. Generate every figure with imagegen
+### 6. Generate and freeze the paper title
+
+Read `title-selection.md` after `METHOD_EXPERIMENT_READY` is stable. Generate 8--12 candidates across at least three framing families, shortlist at least three, check them against the audited literature corpus, and run independent positioning and clarity/faithfulness reviews. Let the Professor/orchestrator choose the title from evidence rather than the project directory or original prompt.
+
+Save `title/brief.json`, `title/candidates.json`, and `title/decision.json`; bind the selected title to the current idea version, venue, claim IDs, Method, terminology, and corpus hashes; then update `paper/title.tex`. Keep `title/decision.json` canonical instead of mutating the early-stage `project.json`. Complete `TITLE_FROZEN` only when the decision and active LaTeX title match and the selected title has low overclaim risk. Reconcile the title once more after drafting the Abstract and Introduction; version and refreeze it if the actual story differs.
+
+### 7. Generate every figure with imagegen
 
 Read `figure-protocol.md`, then invoke `imagegen` separately for each figure or variant. Use it for the overview, complex modules, teaser, quantitative chart images, qualitative layouts, and placeholders.
 
@@ -143,7 +151,7 @@ For each final asset:
 5. Iterate through `imagegen` with one targeted change at a time; do not repair the artwork with another drawing tool.
 6. For real qualitative outputs, require preservation of the input evidence. Reject any generated layout that changes the underlying observation.
 
-### 7. Write the manuscript
+### 8. Write the manuscript
 
 Read `manuscript-writing.md`. Draft in this order after the idea and claim graph are frozen:
 
@@ -157,7 +165,7 @@ Cover all relevant `must_cite` accepted top-venue work in Related Work. Write re
 
 Place the teaser between authors and Abstract only when the official template permits it. Allow the sketch to exceed the official body limit by at most one page; move secondary material to the appendix and cite it from the main text. Keep core claims, method, and decisive evidence in the main paper.
 
-### 8. Review, compile, and close gates
+### 9. Review, compile, and close gates
 
 Read `quality-gates.md` and run:
 
@@ -177,11 +185,13 @@ After real results arrive, replace every prediction, regenerate affected imagege
 
 Use `scripts/state_manager.py invalidate <project-root> --cause <cause>` whenever inputs change:
 
-- `idea`: invalidate literature positioning, council, claim graph, method, experiments, figures, and manuscript.
-- `literature`: invalidate council decisions and all downstream claims.
-- `resources`: invalidate feasibility, resource-dependent method choices, and experiments.
-- `venue`: invalidate template, page budget, teaser placement, layout, and venue QA.
-- `results`: invalidate result tables, quantitative/qualitative figures, Abstract, Conclusion, and final claims.
+- `idea`: invalidate literature positioning, council, claim graph, method, experiments, title, figures, and manuscript.
+- `literature`: invalidate council decisions, title selection, and all downstream claims.
+- `resources`: invalidate feasibility, resource-dependent method choices, experiments, and title selection.
+- `venue`: invalidate template, title fit, page budget, teaser placement, layout, and venue QA.
+- `method`: invalidate Method/experiment readiness, title selection, figures, and manuscript.
+- `title`: invalidate the frozen title and manuscript consistency pass.
+- `results`: invalidate title claims, result tables, quantitative/qualitative figures, Abstract, Conclusion, and final claims.
 
 Only the orchestrator may merge canonical artifacts. Student agents write separate reports; literature shards write separate raw outputs; `imagegen` variants use versioned filenames. Never let concurrent agents edit the same canonical file.
 

@@ -31,11 +31,12 @@ Do not ask for information that can be discovered safely. Record reasonable defa
                  papers_merged.csv,papers_enriched.csv,screening.csv,snowball_log.csv,survey_receipt.json,survey_skill_snapshot.md,survey_run.json,
                  reading_matrix.csv,coverage_audit.md,synthesis_outline.md,
                  papers/,notes/,raw/,exports/}
+  title/{brief.json,candidates.json,decision.json,history.jsonl}
   idea/{versions/,meetings/round_01/,claims.csv,terminology.csv}
   method/{method_spec.md,decision_log.md}
   experiments/{plan.md,claim_experiment_matrix.csv,baseline_provenance.csv}
   figures/{inputs/,prompts/,generated/,qa/,manifest.csv}
-  paper/{main.tex,idea2paper-draft.sty,sections/,tables/,figures/,appendix/,references.bib}
+  paper/{main.tex,title.tex,idea2paper-draft.sty,sections/,tables/,figures/,appendix/,references.bib}
   qa/{todo_registry.json,citation_report.md,consistency_report.md,
       figure_report.md,layout_report.md,final_report.json}
   build/
@@ -50,7 +51,7 @@ Use these ordered stages:
 ```text
 INTAKE -> VENUE_LOCKED -> RESOURCES_READY -> LITERATURE_AUDITED
 -> IDEA_REVIEWED -> IDEA_FROZEN -> CLAIM_GRAPH_FROZEN
--> METHOD_EXPERIMENT_READY -> MANUSCRIPT_DRAFTED -> SKETCH_COMPLETE
+-> METHOD_EXPERIMENT_READY -> TITLE_FROZEN -> MANUSCRIPT_DRAFTED -> SKETCH_COMPLETE
 -> RESULTS_INTEGRATED -> SUBMISSION_READY
 ```
 

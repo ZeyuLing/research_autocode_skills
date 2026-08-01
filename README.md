@@ -69,6 +69,7 @@ Pushes the AI coding agent to exhaust every possible solution before admitting d
 - Invokes `ai-literature-survey` for source-audited prior-art discovery, including publication, paper-access, code, data, and model-weight status
 - Runs independent novelty and feasibility reviews followed by Professor adjudication before freezing claims and contributions
 - Designs the Method, benchmark tables, baselines, metrics, ablations, qualitative results, and linked predicted-result TODOs
+- Generates diverse paper-title candidates, checks prior-title collisions, runs independent positioning and faithfulness reviews, and freezes a title bound to the final claims and Method
 - Drafts Related Work, Introduction, Abstract, Conclusion, appendix material, and all content except measured experimental data
 - Uses the system `imagegen` skill exclusively for every paper figure, including overviews, modules, teasers, charts, qualitative layouts, and placeholders
 - Validates claim-method-experiment coverage, terminology, citations, page budget, tracked TODOs, state invalidation, and LaTeX readiness

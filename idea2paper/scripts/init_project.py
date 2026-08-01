@@ -27,6 +27,7 @@ STAGES = [
     "IDEA_FROZEN",
     "CLAIM_GRAPH_FROZEN",
     "METHOD_EXPERIMENT_READY",
+    "TITLE_FROZEN",
     "MANUSCRIPT_DRAFTED",
     "SKETCH_COMPLETE",
     "RESULTS_INTEGRATED",
@@ -99,22 +100,6 @@ def slugify(text: str) -> str:
     return f"idea2paper-{digest}"
 
 
-def latex_escape(text: str) -> str:
-    replacements = {
-        "\\": r"\textbackslash{}",
-        "&": r"\&",
-        "%": r"\%",
-        "$": r"\$",
-        "#": r"\#",
-        "_": r"\_",
-        "{": r"\{",
-        "}": r"\}",
-        "~": r"\textasciitilde{}",
-        "^": r"\textasciicircum{}",
-    }
-    return "".join(replacements.get(character, character) for character in text)
-
-
 def write_text_if_missing(path: Path, content: str) -> None:
     if path.exists():
         return
@@ -150,15 +135,15 @@ def state_payload(now: str) -> dict[str, Any]:
     return {"schema_version": 1, "updated_utc": now, "stages": stages, "history": []}
 
 
-def main_tex(title: str) -> str:
-    escaped = latex_escape(title)
+def main_tex() -> str:
     return f"""\\documentclass{{article}}
 \\usepackage[margin=1in]{{geometry}}
 \\usepackage{{graphicx}}
 \\usepackage{{booktabs}}
 \\usepackage{{idea2paper-draft}}
 
-\\title{{{escaped}}}
+\\input{{title}}
+\\title{{\\papertitle}}
 \\author{{Anonymous Authors}}
 
 \\begin{{document}}
@@ -240,6 +225,7 @@ def main() -> int:
         "related_works/exports",
         "idea/versions",
         "idea/meetings",
+        "title",
         "method",
         "experiments",
         "figures/prompts",
@@ -301,6 +287,27 @@ def main() -> int:
         {"schema_version": 1, "status": "pending", "selection_mode": project["venue_selection_mode"], "selected": None},
     )
     write_json_if_missing(root / "qa/todo_registry.json", {"schema_version": 1, "items": [], "errors": []})
+    write_json_if_missing(
+        root / "title/brief.json",
+        {
+            "schema_version": 1,
+            "status": "pending",
+            "idea_version": "idea_v0",
+            "project_label": slug,
+            "project_directory_is_not_title": True,
+            "required_concepts": [],
+            "forbidden_claims": [],
+        },
+    )
+    write_json_if_missing(
+        root / "title/candidates.json",
+        {"schema_version": 1, "status": "pending", "idea_version": "idea_v0", "candidates": []},
+    )
+    write_json_if_missing(
+        root / "title/decision.json",
+        {"schema_version": 1, "status": "pending", "selected_candidate_id": None, "selected_title": None},
+    )
+    write_text_if_missing(root / "title/history.jsonl", "")
 
     write_text_if_missing(root / "idea/versions/idea_v0.md", f"# Original Idea\n\n{args.idea}\n")
     write_csv_if_missing(root / "idea/claims.csv", ["claim_id", "statement", "scope", "evidence_ids", "status"])
@@ -318,7 +325,8 @@ def main() -> int:
     if not style_target.exists():
         shutil.copy2(style_source, style_target)
 
-    write_text_if_missing(root / "paper/main.tex", main_tex(args.idea[:120]))
+    write_text_if_missing(root / "paper/title.tex", "\\newcommand{\\papertitle}{Working Title Pending}\n")
+    write_text_if_missing(root / "paper/main.tex", main_tex())
     section_titles = {
         "teaser.tex": "% Teaser is inserted here only when venue rules permit it.\n",
         "abstract.tex": "% Abstract prose.\n",

@@ -150,6 +150,14 @@
       "fields": ["computer-graphics", "animation", "rendering", "human-motion"]
     },
     {
+      "id": "3dv",
+      "name": "3DV",
+      "full_name": "International Conference on 3D Vision",
+      "tier": "top",
+      "fields": ["3d-vision", "computer-graphics", "human-motion", "embodied-ai", "robotics"],
+      "community_top_evidence_url": "https://3dvconf.github.io/2027/partnership/"
+    },
+    {
       "id": "chi",
       "name": "CHI",
       "full_name": "ACM Conference on Human Factors in Computing Systems",

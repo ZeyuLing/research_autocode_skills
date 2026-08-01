@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import binascii
 import csv
+import difflib
 import hashlib
 import json
 import re
@@ -33,6 +34,7 @@ STAGES = [
     "IDEA_FROZEN",
     "CLAIM_GRAPH_FROZEN",
     "METHOD_EXPERIMENT_READY",
+    "TITLE_FROZEN",
     "MANUSCRIPT_DRAFTED",
     "SKETCH_COMPLETE",
     "RESULTS_INTEGRATED",
@@ -46,12 +48,17 @@ REQUIRED_STRUCTURE = [
     "venue/decision.json",
     "venue/candidates.json",
     "idea/versions/idea_v0.md",
+    "title/brief.json",
+    "title/candidates.json",
+    "title/decision.json",
+    "title/history.jsonl",
     "method/method_spec.md",
     "experiments/plan.md",
     "experiments/claim_experiment_matrix.csv",
     "experiments/baseline_provenance.csv",
     "figures/manifest.csv",
     "paper/main.tex",
+    "paper/title.tex",
     "paper/idea2paper-draft.sty",
     "paper/references.bib",
     "qa/todo_registry.json",
@@ -110,6 +117,15 @@ PUBLICATION_STATUSES = {
 }
 PAPER_ACCESS_STATUSES = {"open_pdf", "open_html", "metadata_only", "unknown"}
 ARTIFACT_STATUSES = {"available", "announced", "none_found", "unknown"}
+TITLE_SCORE_FIELDS = {
+    "faithfulness",
+    "specificity",
+    "novelty_signal",
+    "clarity",
+    "memorability",
+    "search_distinctiveness",
+    "venue_fit",
+}
 
 CLAIM_REQUIRED = [
     "claim_id",
@@ -217,6 +233,53 @@ def has_draft_marker(source: str, macro_name: str, item_id: str) -> bool:
         match.group(1) == macro_name and match.group(2).strip() == item_id
         for match in MACRO_RE.finditer(cleaned)
     )
+
+
+def latex_escape(text: str) -> str:
+    replacements = {
+        "\\": r"\textbackslash{}",
+        "&": r"\&",
+        "%": r"\%",
+        "$": r"\$",
+        "#": r"\#",
+        "_": r"\_",
+        "{": r"\{",
+        "}": r"\}",
+        "~": r"\textasciitilde{}",
+        "^": r"\textasciicircum{}",
+    }
+    return "".join(replacements.get(character, character) for character in text)
+
+
+def normalize_title(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", " ", text.casefold()).strip()
+
+
+def paper_title_tex(path: Path) -> str | None:
+    r"""Extract the balanced body of \newcommand{\papertitle}{...}."""
+    text = strip_tex_comments(path.read_text(encoding="utf-8", errors="replace"))
+    marker = re.search(r"\\newcommand\s*\{\\papertitle\}\s*", text)
+    if not marker:
+        return None
+    start = text.find("{", marker.end())
+    if start < 0:
+        return None
+    depth = 0
+    for index in range(start, len(text)):
+        character = text[index]
+        if character not in "{}":
+            continue
+        preceding = 0
+        cursor = index - 1
+        while cursor >= 0 and text[cursor] == "\\":
+            preceding += 1
+            cursor -= 1
+        if preceding % 2:
+            continue
+        depth += 1 if character == "{" else -1
+        if depth == 0:
+            return text[start + 1 : index].strip()
+    return None
 
 
 def timezone_aware(value: str) -> bool:
@@ -361,6 +424,218 @@ def validate_design(project: Path, errors: list[str]) -> None:
         ]:
             if baseline_id not in baseline_ids:
                 errors.append(f"{claim_path}:{index}: unknown baseline ID {baseline_id}")
+
+
+def validate_title(
+    project: Path,
+    project_data: dict[str, Any],
+    venue: dict[str, Any],
+    errors: list[str],
+) -> None:
+    brief_path = project / "title/brief.json"
+    candidates_path = project / "title/candidates.json"
+    decision_path = project / "title/decision.json"
+    title_tex_path = project / "paper/title.tex"
+    brief = read_json(brief_path, errors)
+    candidate_data = read_json(candidates_path, errors)
+    decision = read_json(decision_path, errors)
+
+    idea_version = project_data.get("idea_version")
+    selected_venue = venue.get("selected") if isinstance(venue.get("selected"), dict) else {}
+    venue_name = selected_venue.get("name")
+    venue_edition = str(selected_venue.get("edition", ""))
+
+    if brief.get("status") != "ready":
+        errors.append("title/brief.json: status must be ready")
+    if brief.get("idea_version") != idea_version:
+        errors.append("title/brief.json: idea version is stale")
+    if brief.get("project_directory_is_not_title") is not True:
+        errors.append("title/brief.json: project_directory_is_not_title must be true")
+    if brief.get("project_label") != project.name:
+        errors.append("title/brief.json: project_label must record the directory label")
+    for field in ("required_concepts", "forbidden_claims"):
+        if not isinstance(brief.get(field), list):
+            errors.append(f"title/brief.json: {field} must be a list")
+
+    if candidate_data.get("status") != "reviewed":
+        errors.append("title/candidates.json: status must be reviewed")
+    if candidate_data.get("idea_version") != idea_version:
+        errors.append("title/candidates.json: idea version is stale")
+    if candidate_data.get("venue_name") != venue_name or str(candidate_data.get("venue_edition", "")) != venue_edition:
+        errors.append("title/candidates.json: venue binding is stale")
+    if not timezone_aware(str(candidate_data.get("generated_at", ""))):
+        errors.append("title/candidates.json: generated_at must be timezone-aware")
+
+    _, matrix_rows = read_csv(project / "experiments/claim_experiment_matrix.csv", errors)
+    claim_ids = {row.get("claim_id", "").strip() for row in matrix_rows if row.get("claim_id", "").strip()}
+    contribution_ids = {
+        row.get("contribution_id", "").strip() for row in matrix_rows if row.get("contribution_id", "").strip()
+    }
+    component_ids = {
+        row.get("method_component", "").strip() for row in matrix_rows if row.get("method_component", "").strip()
+    }
+    _, terminology_rows = read_csv(project / "idea/terminology.csv", errors)
+    terms = {row.get("term", "").strip().casefold() for row in terminology_rows if row.get("term", "").strip()}
+
+    candidates = candidate_data.get("candidates")
+    if not isinstance(candidates, list) or not 8 <= len(candidates) <= 12:
+        errors.append("title/candidates.json: require 8--12 title candidates")
+        candidates = []
+    by_id: dict[str, dict[str, Any]] = {}
+    normalized_titles: set[str] = set()
+    families: set[str] = set()
+    for index, candidate in enumerate(candidates, start=1):
+        if not isinstance(candidate, dict):
+            errors.append(f"title/candidates.json: candidate {index} must be an object")
+            continue
+        candidate_id = str(candidate.get("candidate_id", "")).strip()
+        title = str(candidate.get("title", "")).strip()
+        family = str(candidate.get("framing_family", "")).strip()
+        if not candidate_id or candidate_id in by_id:
+            errors.append(f"title/candidates.json: candidate {index} has a missing or duplicate candidate_id")
+        else:
+            by_id[candidate_id] = candidate
+        normalized = normalize_title(title)
+        if not normalized or normalized in normalized_titles:
+            errors.append(f"title/candidates.json: candidate {candidate_id or index} has an empty or duplicate title")
+        normalized_titles.add(normalized)
+        if family:
+            families.add(family)
+        if not str(candidate.get("rationale", "")).strip():
+            errors.append(f"title/candidates.json: {candidate_id} lacks rationale")
+        scores = candidate.get("scores")
+        if not isinstance(scores, dict) or set(scores) != TITLE_SCORE_FIELDS:
+            errors.append(f"title/candidates.json: {candidate_id} has incomplete score fields")
+        else:
+            for field, value in scores.items():
+                if not isinstance(value, int) or not 1 <= value <= 5:
+                    errors.append(f"title/candidates.json: {candidate_id} score {field} must be an integer from 1 to 5")
+        risk = candidate.get("overclaim_risk")
+        if not isinstance(risk, int) or not 1 <= risk <= 5:
+            errors.append(f"title/candidates.json: {candidate_id} overclaim_risk must be an integer from 1 to 5")
+        mappings = (
+            ("claim_ids", claim_ids),
+            ("contribution_ids", contribution_ids),
+            ("method_component_ids", component_ids),
+        )
+        for field, known in mappings:
+            values = candidate.get(field)
+            if not isinstance(values, list) or not values:
+                errors.append(f"title/candidates.json: {candidate_id} requires non-empty {field}")
+            elif any(value not in known for value in values):
+                errors.append(f"title/candidates.json: {candidate_id} contains unknown {field}")
+        candidate_terms = candidate.get("terms")
+        if not isinstance(candidate_terms, list) or not candidate_terms:
+            errors.append(f"title/candidates.json: {candidate_id} requires terminology bindings")
+        elif any(str(term).casefold() not in terms for term in candidate_terms):
+            errors.append(f"title/candidates.json: {candidate_id} contains unknown terminology")
+    if len(families) < 3:
+        errors.append("title/candidates.json: candidates must span at least three framing families")
+
+    if decision.get("status") != "frozen":
+        errors.append("title/decision.json: status must be frozen")
+    if not re.fullmatch(r"title_v[1-9][0-9]*", str(decision.get("title_version", ""))):
+        errors.append("title/decision.json: title_version must look like title_v1")
+    if decision.get("idea_version") != idea_version:
+        errors.append("title/decision.json: idea version is stale")
+    if decision.get("venue_name") != venue_name or str(decision.get("venue_edition", "")) != venue_edition:
+        errors.append("title/decision.json: venue binding is stale")
+    if not timezone_aware(str(decision.get("frozen_at", ""))):
+        errors.append("title/decision.json: frozen_at must be timezone-aware")
+    if not str(decision.get("selection_rationale", "")).strip():
+        errors.append("title/decision.json: selection_rationale is required")
+    if decision.get("unresolved_risks") != []:
+        errors.append("title/decision.json: unresolved_risks must be an empty list")
+
+    shortlist = decision.get("shortlist")
+    if not isinstance(shortlist, list) or len(set(shortlist)) < 3:
+        errors.append("title/decision.json: shortlist must contain at least three distinct candidate IDs")
+        shortlist = []
+    elif any(candidate_id not in by_id for candidate_id in shortlist):
+        errors.append("title/decision.json: shortlist contains an unknown candidate ID")
+    selected_id = str(decision.get("selected_candidate_id", ""))
+    selected_candidate = by_id.get(selected_id)
+    selected_title = str(decision.get("selected_title", "")).strip()
+    if not selected_candidate:
+        errors.append("title/decision.json: selected candidate does not exist")
+    else:
+        if selected_id not in shortlist:
+            errors.append("title/decision.json: selected candidate is absent from shortlist")
+        if selected_title != str(selected_candidate.get("title", "")).strip():
+            errors.append("title/decision.json: selected title does not match its candidate")
+        if selected_candidate.get("overclaim_risk", 5) > 2:
+            errors.append("title/decision.json: selected title has unresolved overclaim risk")
+        if selected_candidate.get("risk_flags") not in ([], None):
+            errors.append("title/decision.json: selected title retains risk flags")
+
+    reviewers = decision.get("reviews")
+    review_roles = set()
+    if isinstance(reviewers, list):
+        for review in reviewers:
+            if isinstance(review, dict) and review.get("verdict") == "pass" and str(review.get("notes", "")).strip():
+                review_roles.add(review.get("role"))
+    if not {"positioning", "clarity_faithfulness"}.issubset(review_roles):
+        errors.append("title/decision.json: both independent title reviews must pass with notes")
+
+    input_versions = decision.get("input_versions") if isinstance(decision.get("input_versions"), dict) else {}
+    if input_versions.get("idea_version") != idea_version:
+        errors.append("title/decision.json: input_versions.idea_version is stale")
+    hash_inputs = {
+        "literature_sha256": project / "related_works/papers_enriched.csv",
+        "claim_graph_sha256": project / "experiments/claim_experiment_matrix.csv",
+        "terminology_sha256": project / "idea/terminology.csv",
+        "method_spec_sha256": project / "method/method_spec.md",
+        "venue_decision_sha256": project / "venue/decision.json",
+    }
+    for field, path in hash_inputs.items():
+        if not path.is_file() or input_versions.get(field) != sha256_file(path):
+            errors.append(f"title/decision.json: stale or missing input hash {field}")
+
+    collision = decision.get("collision_check") if isinstance(decision.get("collision_check"), dict) else {}
+    corpus_path = project / "related_works/papers_enriched.csv"
+    if not timezone_aware(str(collision.get("checked_at", ""))):
+        errors.append("title/decision.json: collision_check.checked_at must be timezone-aware")
+    if not corpus_path.is_file() or collision.get("corpus_sha256") != sha256_file(corpus_path):
+        errors.append("title/decision.json: collision_check corpus hash is stale")
+    if collision.get("exact_match") is not False or not isinstance(collision.get("reviewed_conflicts"), list):
+        errors.append("title/decision.json: collision_check must record no exact match and reviewed conflicts")
+
+    selected_normalized = normalize_title(selected_title)
+    forbidden_labels = {
+        normalize_title(project.name),
+        normalize_title(str(project_data.get("project_id", ""))),
+        normalize_title("Working Title Pending"),
+        normalize_title(str(project_data.get("idea_original", ""))[:120]),
+    }
+    if not selected_normalized or selected_normalized in forbidden_labels:
+        errors.append("title/decision.json: selected title is a project label, idea truncation, or placeholder")
+    if re.search(r"\\(?:PredResult|PredClaim|DraftChoice|QualPlaceholder|TemplateTODO)\b", selected_title):
+        errors.append("title/decision.json: draft macros are forbidden in the paper title")
+    if re.search(r"(?:\b\d+(?:\.\d+)?%|\b\d+\.\d+\b)", selected_title):
+        errors.append("title/decision.json: predicted numeric claims are forbidden in the paper title")
+
+    if corpus_path.is_file() and selected_normalized:
+        _, corpus_rows = read_csv(corpus_path, errors)
+        for row in corpus_rows:
+            prior_title = str(row.get("title", "")).strip()
+            prior_normalized = normalize_title(prior_title)
+            if not prior_normalized:
+                continue
+            similarity = difflib.SequenceMatcher(None, selected_normalized, prior_normalized).ratio()
+            if selected_normalized == prior_normalized or similarity >= 0.94:
+                errors.append(f"title/decision.json: selected title collides with prior work {prior_title!r}")
+                break
+
+    latex_title = paper_title_tex(title_tex_path)
+    if latex_title is None:
+        errors.append("paper/title.tex: missing balanced \\newcommand{\\papertitle}{...}")
+    elif latex_title != latex_escape(selected_title):
+        errors.append("paper/title.tex: title does not match the frozen title decision")
+    main_source = strip_tex_comments((project / "paper/main.tex").read_text(encoding="utf-8", errors="replace"))
+    if not re.search(r"\\input\s*\{title\}", main_source) or not re.search(
+        r"\\title\s*\{\s*\\papertitle\s*\}", main_source
+    ):
+        errors.append("paper/main.tex: active template must consume paper/title.tex through \\papertitle")
 
 
 def validate_venue(
@@ -1291,6 +1566,7 @@ def main() -> int:
             "IDEA_FROZEN",
             "CLAIM_GRAPH_FROZEN",
             "METHOD_EXPERIMENT_READY",
+            "TITLE_FROZEN",
             "MANUSCRIPT_DRAFTED",
         ]
         if args.mode == "submission":
@@ -1303,6 +1579,7 @@ def main() -> int:
         validate_council(project, errors)
         validate_claims(project, errors)
         validate_design(project, errors)
+        validate_title(project, project_data, venue, errors)
         validate_figures(project, errors, require_overview=True)
         validate_no_alternate_figure_backends(project, errors)
         validate_sections(project, errors)
