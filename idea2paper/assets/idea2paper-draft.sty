@@ -1,0 +1,22 @@
+\NeedsTeXFormat{LaTeX2e}
+\ProvidesPackage{idea2paper-draft}[2026/08/01 Tracked draft placeholders for idea2paper]
+
+\RequirePackage{xcolor}
+
+\definecolor{IdeaTwoPaperDraftRed}{RGB}{190,35,35}
+
+% The first argument is a stable TODO/result ID retained in source.
+\newcommand{\PredResult}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
+\newcommand{\PredClaim}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
+\newcommand{\DraftChoice}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
+\newcommand{\QualPlaceholder}[2]{%
+  \fcolorbox{IdeaTwoPaperDraftRed}{white}{%
+    \parbox{0.92\linewidth}{\centering\textcolor{IdeaTwoPaperDraftRed}{#2}}%
+  }%
+}
+\newcommand{\TemplateTODO}[2]{%
+  \PackageWarningNoLine{idea2paper-draft}{#1: #2}%
+  \par\noindent\textcolor{IdeaTwoPaperDraftRed}{\textbf{Template TODO (#1):} #2}\par%
+}
+
+\endinput

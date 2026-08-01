@@ -9,6 +9,7 @@ A curated collection of Claude Code / Codex / Cursor skills for AI-assisted rese
 | [autodebug](#autodebug) | Hypothesis-driven iterative auto-debugging | Claude Code |
 | [pua](#pua) | High-agency enforcement — forces the AI to exhaust all options before giving up | Claude Code, Codex, Cursor, Kiro, and more |
 | [remote-exec](#remote-exec) | GPU server management & distributed task execution | Claude Code |
+| [idea2paper](#idea2paper) | End-to-end idea-to-experiment-ready LaTeX paper workflow | Codex |
 | [research-paper-writing](#research-paper-writing) | Academic paper writing & self-review guidance | Claude Code, Codex, Cursor, OpenCode |
 | [Research-Paper-Writing-Skills](#research-paper-writing-skills) | Standalone repo wrapper for `research-paper-writing` | Claude Code, Codex, Gemini |
 | [Skill-Research-Figure](#skill-research-figure) | Publication-quality TikZ diagrams & Blender 3D renders | Claude Code |
@@ -60,6 +61,24 @@ Pushes the AI coding agent to exhaust every possible solution before admitting d
 
 ---
 
+## idea2paper
+
+**Turn a research idea into a complete, experiment-ready LaTeX paper sketch.**
+
+- Selects the nearest suitable top conference whose abstract deadline is still open, verifies official rules and templates, and tracks a previous-cycle template when the current one is unavailable
+- Invokes `ai-literature-survey` for source-audited prior-art discovery, including publication, paper-access, code, data, and model-weight status
+- Runs independent novelty and feasibility reviews followed by Professor adjudication before freezing claims and contributions
+- Designs the Method, benchmark tables, baselines, metrics, ablations, qualitative results, and linked predicted-result TODOs
+- Drafts Related Work, Introduction, Abstract, Conclusion, appendix material, and all content except measured experimental data
+- Uses the system `imagegen` skill exclusively for every paper figure, including overviews, modules, teasers, charts, qualitative layouts, and placeholders
+- Validates claim-method-experiment coverage, terminology, citations, page budget, tracked TODOs, state invalidation, and LaTeX readiness
+- Includes standard-library Python helpers and offline regression tests; requires a working Python 3.10+ runtime rather than the Windows Store alias
+- Requires both `ai-literature-survey` and the system `imagegen` skill; `idea2paper` stops instead of silently substituting another literature or figure workflow when either dependency is unavailable
+
+**Trigger**: `idea2paper`, "turn this idea into a paper", "paper sketch", "from idea to paper", "从 idea 写论文", "一键写论文"
+
+---
+
 ## research-paper-writing
 
 **Section-by-section academic writing guidance for ML/CV/NLP papers.**
@@ -90,6 +109,8 @@ Standalone repository wrapper that packages the `research-paper-writing` skill w
 
 **Trigger**: "method figure", "pipeline figure", "architecture diagram", "teaser", "3D render", "SMPL", "Blender", "画图", etc.
 
+**Routing note**: inside an `idea2paper` workflow, the imagegen-only contract takes precedence; this skill must not be used for paper figures.
+
 ---
 
 ## Skill-Research-Rebuttal
@@ -107,4 +128,4 @@ Three-phase workflow:
 
 ## Installation
 
-Each skill can be installed independently. Most skills for Claude Code are installed by adding the skill directory to your project's `.claude/skills/` or via the slash command configuration. See each skill's own README for platform-specific instructions.
+Standalone skills can be installed by copying their directory into the agent's skill directory. Orchestrator skills may declare hard dependencies: `idea2paper` additionally requires `ai-literature-survey` and Codex's system `imagegen` skill. For Codex, use `$CODEX_HOME/skills`; for Claude Code, use `.claude/skills`. Standalone wrapper repositories may include additional platform-specific instructions.

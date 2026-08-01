@@ -1,0 +1,4 @@
+interface:
+  display_name: "Idea to Paper"
+  short_description: "Turn a research idea into a full LaTeX paper sketch"
+  default_prompt: "Use $idea2paper to turn my research idea into a complete experiment-ready LaTeX paper sketch."
