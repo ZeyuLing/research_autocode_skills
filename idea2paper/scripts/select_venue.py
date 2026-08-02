@@ -11,6 +11,24 @@ from typing import Any
 
 
 TIER_RANK = {"flagship": 0, "top": 1}
+DEFAULT_POOL_DEFINITIONS = {
+    "eccv": ("ECCV", "European Conference on Computer Vision", (), "flagship"),
+    "iccv": ("ICCV", "IEEE/CVF International Conference on Computer Vision", (), "flagship"),
+    "cvpr": ("CVPR", "IEEE/CVF Conference on Computer Vision and Pattern Recognition", (), "flagship"),
+    "neurips": ("NeurIPS", "Conference on Neural Information Processing Systems", ("NIPS",), "flagship"),
+    "icml": ("ICML", "International Conference on Machine Learning", (), "flagship"),
+    "iclr": ("ICLR", "International Conference on Learning Representations", (), "flagship"),
+    "aaai": ("AAAI", "AAAI Conference on Artificial Intelligence", (), "flagship"),
+    "ijcai": ("IJCAI", "International Joint Conference on Artificial Intelligence", (), "flagship"),
+    "acmmm": ("ACM MM", "ACM International Conference on Multimedia", ("ACMMM", "ACM Multimedia"), "top"),
+    "acl": ("ACL", "Annual Meeting of the Association for Computational Linguistics", (), "flagship"),
+    "emnlp": ("EMNLP", "Conference on Empirical Methods in Natural Language Processing", (), "flagship"),
+}
+DEFAULT_POOL_IDS = frozenset(DEFAULT_POOL_DEFINITIONS)
+SELECTION_RULE = (
+    "strict default pool, scope_fit>=threshold, nearest open abstract/full-paper deadline, "
+    "fit desc, tier desc"
+)
 
 
 def parse_datetime(value: str) -> datetime:
@@ -32,7 +50,63 @@ def load_candidates(path: Path) -> list[dict[str, Any]]:
 
 def load_registry(path: Path) -> dict[str, dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
-    return {item["name"].lower(): item for item in payload.get("venues", [])}
+    if not isinstance(payload, dict) or payload.get("strict_default_pool") is not True:
+        raise ValueError("Venue registry must declare strict_default_pool=true")
+    venues = payload.get("venues")
+    if not isinstance(venues, list):
+        raise ValueError("Venue registry must contain a venues list")
+    venue_ids = [str(item.get("id", "")).strip().casefold() for item in venues if isinstance(item, dict)]
+    if len(venue_ids) != len(venues) or len(venue_ids) != len(set(venue_ids)):
+        raise ValueError("Venue registry contains a malformed or duplicate venue ID")
+    if set(venue_ids) != DEFAULT_POOL_IDS:
+        missing = sorted(DEFAULT_POOL_IDS - set(venue_ids))
+        extra = sorted(set(venue_ids) - DEFAULT_POOL_IDS)
+        raise ValueError(
+            "Venue registry must contain exactly the strict default pool "
+            f"(missing={missing}, extra={extra})"
+        )
+    registry: dict[str, dict[str, Any]] = {}
+    for item in venues:
+        aliases = item.get("aliases", [])
+        if not isinstance(aliases, list):
+            raise ValueError(f"Venue registry aliases must be a list for {item.get('id')}")
+        if not item.get("name") or str(item.get("tier", "")).casefold() not in TIER_RANK:
+            raise ValueError(f"Venue registry entry is malformed: {item.get('id')}")
+        venue_id = str(item["id"]).strip().casefold()
+        expected_name, expected_full_name, expected_aliases, expected_tier = DEFAULT_POOL_DEFINITIONS[venue_id]
+        normalized_aliases = {" ".join(str(alias).strip().casefold().split()) for alias in aliases}
+        expected_normalized_aliases = {
+            " ".join(alias.strip().casefold().split()) for alias in expected_aliases
+        }
+        if (
+            " ".join(str(item.get("name", "")).strip().casefold().split())
+            != expected_name.casefold()
+            or " ".join(str(item.get("full_name", "")).strip().casefold().split())
+            != expected_full_name.casefold()
+            or normalized_aliases != expected_normalized_aliases
+            or str(item.get("tier", "")).strip().casefold() != expected_tier
+        ):
+            raise ValueError(f"Venue registry metadata differs from the immutable pool for {venue_id}")
+        canonical_item = dict(item)
+        canonical_item.update(
+            {
+                "id": venue_id,
+                "name": expected_name,
+                "full_name": expected_full_name,
+                "aliases": list(expected_aliases),
+                "tier": expected_tier,
+            }
+        )
+        names = [venue_id, expected_name, expected_full_name, *expected_aliases]
+        for name in names:
+            key = " ".join(str(name or "").strip().casefold().split())
+            if not key:
+                continue
+            previous = registry.get(key)
+            if previous is not None and previous.get("id") != venue_id:
+                raise ValueError(f"Duplicate venue registry alias: {name}")
+            registry[key] = canonical_item
+    return registry
 
 
 def evaluate(
@@ -47,11 +121,16 @@ def evaluate(
     name = str(item.get("name", "")).strip()
     if not name or not item.get("edition") or not item.get("track"):
         return False, "name, edition, and track are required", None, item
-    registry_item = registry.get(name.lower())
-    if registry_item:
-        item.setdefault("tier", registry_item.get("tier"))
-    elif not item.get("community_top_evidence_url"):
-        return False, "not in top-venue registry and no community-top evidence", None, item
+    if " ".join(str(item.get("track", "")).strip().casefold().split()) != "main":
+        return False, "automatic selection only allows the main track", None, item
+    registry_key = " ".join(name.casefold().split())
+    registry_item = registry.get(registry_key)
+    if registry_item is None:
+        return False, "not in the strict default top-conference pool", None, item
+    item["submitted_name"] = name
+    item["name"] = registry_item["name"]
+    item["registry_id"] = registry_item["id"]
+    item["tier"] = registry_item["tier"]
 
     tier = str(item.get("tier", "")).lower()
     if tier not in TIER_RANK:
@@ -199,7 +278,7 @@ def main() -> int:
         "status": "selected" if selected.get("deadline_status", "confirmed") == "confirmed" else "tentative",
         "selection_mode": "auto",
         "as_of": as_of.isoformat(),
-        "selection_rule": "scope_fit>=threshold, nearest open abstract/full-paper deadline, fit desc, tier desc",
+        "selection_rule": SELECTION_RULE,
         "selected": selected,
         "eligible": [item for _, item in eligible],
         "excluded": excluded,

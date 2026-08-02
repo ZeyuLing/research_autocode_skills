@@ -1,10 +1,33 @@
 {
-  "schema_version": 1,
-  "purpose": "Candidate registry only. Verify every live deadline, track, rule, and template from official current-cycle sources.",
+  "schema_version": 2,
+  "purpose": "Strict default top-conference pool for automatic selection. Verify every live deadline, track, rule, and template from official current-cycle sources.",
+  "strict_default_pool": true,
   "venues": [
+    {
+      "id": "eccv",
+      "name": "ECCV",
+      "full_name": "European Conference on Computer Vision",
+      "tier": "flagship",
+      "fields": ["computer-vision", "multimodal", "machine-learning"]
+    },
+    {
+      "id": "iccv",
+      "name": "ICCV",
+      "full_name": "IEEE/CVF International Conference on Computer Vision",
+      "tier": "flagship",
+      "fields": ["computer-vision", "multimodal", "machine-learning"]
+    },
+    {
+      "id": "cvpr",
+      "name": "CVPR",
+      "full_name": "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+      "tier": "flagship",
+      "fields": ["computer-vision", "multimodal", "machine-learning"]
+    },
     {
       "id": "neurips",
       "name": "NeurIPS",
+      "aliases": ["NIPS"],
       "full_name": "Conference on Neural Information Processing Systems",
       "tier": "flagship",
       "fields": ["machine-learning", "artificial-intelligence", "multimodal"]
@@ -24,48 +47,6 @@
       "fields": ["machine-learning", "representation-learning", "artificial-intelligence"]
     },
     {
-      "id": "cvpr",
-      "name": "CVPR",
-      "full_name": "IEEE/CVF Conference on Computer Vision and Pattern Recognition",
-      "tier": "flagship",
-      "fields": ["computer-vision", "multimodal", "machine-learning"]
-    },
-    {
-      "id": "iccv",
-      "name": "ICCV",
-      "full_name": "IEEE/CVF International Conference on Computer Vision",
-      "tier": "flagship",
-      "fields": ["computer-vision", "multimodal", "machine-learning"]
-    },
-    {
-      "id": "eccv",
-      "name": "ECCV",
-      "full_name": "European Conference on Computer Vision",
-      "tier": "flagship",
-      "fields": ["computer-vision", "multimodal", "machine-learning"]
-    },
-    {
-      "id": "acl",
-      "name": "ACL",
-      "full_name": "Annual Meeting of the Association for Computational Linguistics",
-      "tier": "flagship",
-      "fields": ["natural-language-processing", "multimodal", "machine-learning"]
-    },
-    {
-      "id": "emnlp",
-      "name": "EMNLP",
-      "full_name": "Conference on Empirical Methods in Natural Language Processing",
-      "tier": "flagship",
-      "fields": ["natural-language-processing", "multimodal", "machine-learning"]
-    },
-    {
-      "id": "naacl",
-      "name": "NAACL",
-      "full_name": "Annual Conference of the Nations of the Americas Chapter of the ACL",
-      "tier": "top",
-      "fields": ["natural-language-processing", "multimodal", "machine-learning"]
-    },
-    {
       "id": "aaai",
       "name": "AAAI",
       "full_name": "AAAI Conference on Artificial Intelligence",
@@ -80,110 +61,26 @@
       "fields": ["artificial-intelligence", "machine-learning", "computer-vision", "natural-language-processing"]
     },
     {
-      "id": "kdd",
-      "name": "KDD",
-      "full_name": "ACM SIGKDD Conference on Knowledge Discovery and Data Mining",
-      "tier": "flagship",
-      "fields": ["data-mining", "machine-learning", "applied-ai"]
-    },
-    {
-      "id": "thewebconf",
-      "name": "The Web Conference",
-      "full_name": "ACM Web Conference",
-      "tier": "flagship",
-      "fields": ["web", "data-mining", "information-retrieval", "applied-ai"]
-    },
-    {
-      "id": "sigir",
-      "name": "SIGIR",
-      "full_name": "ACM SIGIR Conference on Research and Development in Information Retrieval",
-      "tier": "flagship",
-      "fields": ["information-retrieval", "natural-language-processing", "data-mining"]
-    },
-    {
       "id": "acmmm",
       "name": "ACM MM",
+      "aliases": ["ACMMM", "ACM Multimedia"],
       "full_name": "ACM International Conference on Multimedia",
       "tier": "top",
       "fields": ["multimodal", "multimedia", "computer-vision", "audio"]
     },
     {
-      "id": "rss",
-      "name": "RSS",
-      "full_name": "Robotics: Science and Systems",
+      "id": "acl",
+      "name": "ACL",
+      "full_name": "Annual Meeting of the Association for Computational Linguistics",
       "tier": "flagship",
-      "fields": ["robotics", "embodied-ai", "machine-learning"]
+      "fields": ["natural-language-processing", "multimodal", "machine-learning"]
     },
     {
-      "id": "corl",
-      "name": "CoRL",
-      "full_name": "Conference on Robot Learning",
+      "id": "emnlp",
+      "name": "EMNLP",
+      "full_name": "Conference on Empirical Methods in Natural Language Processing",
       "tier": "flagship",
-      "fields": ["robotics", "embodied-ai", "machine-learning"]
-    },
-    {
-      "id": "icra",
-      "name": "ICRA",
-      "full_name": "IEEE International Conference on Robotics and Automation",
-      "tier": "flagship",
-      "fields": ["robotics", "automation", "embodied-ai"]
-    },
-    {
-      "id": "iros",
-      "name": "IROS",
-      "full_name": "IEEE/RSJ International Conference on Intelligent Robots and Systems",
-      "tier": "top",
-      "fields": ["robotics", "intelligent-systems", "embodied-ai"]
-    },
-    {
-      "id": "siggraph",
-      "name": "SIGGRAPH",
-      "full_name": "ACM SIGGRAPH Conference",
-      "tier": "flagship",
-      "fields": ["computer-graphics", "animation", "rendering", "human-motion"]
-    },
-    {
-      "id": "siggraph-asia",
-      "name": "SIGGRAPH Asia",
-      "full_name": "ACM SIGGRAPH Conference and Exhibition on Computer Graphics and Interactive Techniques in Asia",
-      "tier": "flagship",
-      "fields": ["computer-graphics", "animation", "rendering", "human-motion"]
-    },
-    {
-      "id": "3dv",
-      "name": "3DV",
-      "full_name": "International Conference on 3D Vision",
-      "tier": "top",
-      "fields": ["3d-vision", "computer-graphics", "human-motion", "embodied-ai", "robotics"],
-      "community_top_evidence_url": "https://3dvconf.github.io/2027/partnership/"
-    },
-    {
-      "id": "chi",
-      "name": "CHI",
-      "full_name": "ACM Conference on Human Factors in Computing Systems",
-      "tier": "flagship",
-      "fields": ["human-computer-interaction", "human-ai-interaction"]
-    },
-    {
-      "id": "uist",
-      "name": "UIST",
-      "full_name": "ACM Symposium on User Interface Software and Technology",
-      "tier": "flagship",
-      "fields": ["human-computer-interaction", "user-interfaces"]
-    },
-    {
-      "id": "interspeech",
-      "name": "INTERSPEECH",
-      "full_name": "Conference of the International Speech Communication Association",
-      "tier": "top",
-      "fields": ["speech", "audio", "natural-language-processing"]
-    },
-    {
-      "id": "icassp",
-      "name": "ICASSP",
-      "full_name": "IEEE International Conference on Acoustics, Speech and Signal Processing",
-      "tier": "top",
-      "fields": ["signal-processing", "speech", "audio", "machine-learning"]
+      "fields": ["natural-language-processing", "multimodal", "machine-learning"]
     }
   ]
 }

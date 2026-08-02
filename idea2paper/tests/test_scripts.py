@@ -21,9 +21,20 @@ from validate_project import (  # noqa: E402
     has_draft_marker,
     validate_figures,
     validate_no_alternate_figure_backends,
+    validate_selection_binding,
     validate_title,
 )
-from compile_paper import aux_label_page, command_for, source_tree_sha256  # noqa: E402
+from compile_paper import (  # noqa: E402
+    aux_label_page,
+    body_float_inventory,
+    body_float_labels,
+    body_float_tail_report,
+    command_for,
+    manual_pagination_commands,
+    manuscript_structure_audit,
+    source_tree_sha256,
+)
+from select_venue import load_registry  # noqa: E402
 
 
 def run_script(name: str, *arguments: object) -> subprocess.CompletedProcess[str]:
@@ -74,6 +85,326 @@ class Idea2PaperScriptTests(unittest.TestCase):
             first_hash = source_tree_sha256(paper)
             source.write_text("second", encoding="utf-8")
             self.assertNotEqual(first_hash, source_tree_sha256(paper))
+            ltx = paper / "body.ltx"
+            ltx.write_text("first", encoding="utf-8")
+            ltx_hash = source_tree_sha256(paper)
+            ltx.write_text("second", encoding="utf-8")
+            self.assertNotEqual(ltx_hash, source_tree_sha256(paper))
+            figure = paper / "figure.pdf"
+            figure.write_bytes(b"first")
+            figure_hash = source_tree_sha256(paper)
+            figure.write_bytes(b"second")
+            self.assertNotEqual(figure_hash, source_tree_sha256(paper))
+
+    def test_layout_gate_rejects_manual_breaks_and_post_conclusion_body_floats(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary) / "paper"
+            sections = paper / "sections"
+            appendix = paper / "appendix"
+            sections.mkdir(parents=True)
+            appendix.mkdir()
+            body = sections / "experiments.tex"
+            body.write_text(
+                "% \\clearpage is only documentation\n"
+                "\\begin{figure}[t]\\caption{x}\\label{fig:late}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            appended = appendix / "appendix.tex"
+            appended.write_text(
+                "\\appendix\n"
+                "\\begin{figure}[t]\\label{fig:appendix-only}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            (paper / "references.bib").write_text("", encoding="utf-8")
+            (sections / "conclusion.tex").write_text(
+                "\\section{Conclusion}\n"
+                "\\label{idea2paper:start-conclusion}\n",
+                encoding="utf-8",
+            )
+            (paper / "unused-draft.tex").write_text("\\clearpage\n", encoding="utf-8")
+            (paper / "main.tex").write_text(
+                "\\input sections/experiments.tex\n"
+                "\\input{sections/conclusion}\n"
+                "\\label{idea2paper:end-body}\n"
+                "\\label{idea2paper:end-exempt}\n"
+                "\\bibliography{references}\n"
+                "\\label{idea2paper:end-references}\n"
+                "\\input{appendix/appendix}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(manual_pagination_commands(paper), [])
+            self.assertEqual(body_float_labels(paper), ["fig:late"])
+            inventory = body_float_inventory(paper)
+            self.assertEqual(inventory["unlabeled"], [])
+            self.assertNotIn("appendix/appendix.tex", inventory["active_body_files"])
+            self.assertEqual(inventory["structure_errors"], [])
+            self.assertEqual(inventory["after_conclusion_source"], [])
+
+            labeled_source = body.read_text(encoding="utf-8")
+            body.write_text(labeled_source.replace(r"\label{fig:late}", ""), encoding="utf-8")
+            self.assertEqual(len(body_float_inventory(paper)["unlabeled"]), 1)
+            body.write_text(labeled_source, encoding="utf-8")
+
+            for command in (r"\clearpage", r"\newpage", r"\pagebreak", r"\FloatBarrier"):
+                body.write_text(labeled_source + command + "\n", encoding="utf-8")
+                commands = manual_pagination_commands(paper)
+                self.assertEqual([item["command"] for item in commands], [command])
+            body.write_text(labeled_source, encoding="utf-8")
+
+            aux = Path(temporary) / "main.aux"
+            aux.write_text(
+                "\\newlabel{idea2paper:start-conclusion}{{}{10}}\n"
+                "\\newlabel{fig:late}{{3}{11}}\n",
+                encoding="utf-8",
+            )
+            conclusion_page = aux_label_page(aux, "idea2paper:start-conclusion")
+            pages, violations = body_float_tail_report(aux, ["fig:late"], conclusion_page)
+            self.assertEqual(pages, {"fig:late": 11})
+            self.assertEqual(violations[0]["label"], "fig:late")
+
+            pages, violations = body_float_tail_report(aux, ["fig:missing"], conclusion_page)
+            self.assertEqual(pages, {"fig:missing": None})
+            self.assertEqual(violations, [])
+
+            aux.write_text(
+                "\\newlabel{fig:late}{{3}{10}}\n"
+                "\\newlabel{idea2paper:start-conclusion}{{}{10}}\n",
+                encoding="utf-8",
+            )
+            conclusion_page = aux_label_page(aux, "idea2paper:start-conclusion")
+            _, violations = body_float_tail_report(aux, ["fig:late"], conclusion_page)
+            self.assertEqual(violations, [])
+
+            aux.write_text(
+                "\\newlabel{idea2paper:start-conclusion}{{}{10}}\n"
+                "\\newlabel{fig:late}{{3}{10}}\n",
+                encoding="utf-8",
+            )
+            conclusion_page = aux_label_page(aux, "idea2paper:start-conclusion")
+            _, violations = body_float_tail_report(aux, ["fig:late"], conclusion_page)
+            self.assertEqual(violations[0]["reason"], "same_page_after_conclusion")
+
+            conclusion = sections / "conclusion.tex"
+            conclusion.write_text(
+                "\\section{Conclusion}\n"
+                "\\begin{figure}[t]\\caption{x}\\label{fig:evade}\\end{figure}\n"
+                "\\label{idea2paper:start-conclusion}\n",
+                encoding="utf-8",
+            )
+            structure = manuscript_structure_audit(paper)
+            self.assertTrue(any("immediately follows" in error for error in structure["errors"]))
+
+            conclusion.write_text(
+                "\\section{Conclusion}\n"
+                "\\label{idea2paper:start-conclusion}\n"
+                "\\begin{figure}[t]\\caption{x}\\label{fig:after}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            inventory = body_float_inventory(paper)
+            self.assertEqual(
+                [item["labels"] for item in inventory["after_conclusion_source"]],
+                [["fig:after"]],
+            )
+
+            conclusion.write_text(
+                "\\section{Conclusion}\n\\label{idea2paper:start-conclusion}\n",
+                encoding="utf-8",
+            )
+            main = paper / "main.tex"
+            valid_main = main.read_text(encoding="utf-8")
+            main.write_text(
+                valid_main.replace(
+                    "\\input{sections/conclusion}\n\\label{idea2paper:end-body}",
+                    "\\label{idea2paper:end-body}\n\\input{sections/conclusion}",
+                ),
+                encoding="utf-8",
+            )
+            structure = manuscript_structure_audit(paper)
+            self.assertTrue(any("boundaries must be ordered" in error for error in structure["errors"]))
+
+    def test_layout_gate_rejects_dynamic_tex_and_boundary_budget_bypasses(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            paper = root / "paper"
+            sections = paper / "sections"
+            appendix = paper / "appendix"
+            sections.mkdir(parents=True)
+            appendix.mkdir()
+            (paper / "references.bib").write_text("", encoding="utf-8")
+            (sections / "body.tex").write_text("Body.\n", encoding="utf-8")
+            (sections / "conclusion.tex").write_text(
+                "\\section{Conclusion}\n\\label{idea2paper:start-conclusion}\n",
+                encoding="utf-8",
+            )
+            (sections / "limitations.tex").write_text(
+                "\\section{Limitations}\nScoped limitations.\n", encoding="utf-8"
+            )
+            (sections / "ai_use_statement.tex").write_text(
+                "\\subsection*{AI use statement}\nA concise disclosure.\n", encoding="utf-8"
+            )
+            (appendix / "appendix.tex").write_text(
+                "\\appendix\n\\section{Additional Material}\n", encoding="utf-8"
+            )
+            canonical_main = (
+                "\\input{sections/body}\n"
+                "\\input{sections/conclusion}\n"
+                "\\input{sections/limitations}\n"
+                "\\label{idea2paper:end-body}\n"
+                "\\input{sections/ai_use_statement}\n"
+                "\\label{idea2paper:end-exempt}\n"
+                "{\\small\\bibliographystyle{plain}\\bibliography{references}}\n"
+                "\\label{idea2paper:end-references}\n"
+                "\\input{appendix/appendix}\n"
+                "\\end{document}\n"
+            )
+            main = paper / "main.tex"
+            main.write_text(canonical_main, encoding="utf-8")
+            self.assertEqual(manuscript_structure_audit(paper)["errors"], [])
+
+            (sections / "late.ltx").write_text(
+                "\\begin{figure}\\label{fig:late}\\end{figure}\n", encoding="utf-8"
+            )
+            main.write_text(
+                "\\def\\latefile{late.ltx}\n"
+                + canonical_main.replace(
+                    "\\input{sections/conclusion}",
+                    "\\input{sections/conclusion}\n\\input{sections/\\latefile}",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "static literal path"):
+                manuscript_structure_audit(paper)
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\input{sections/conclusion}",
+                    "\\input{sections/conclusion}\n"
+                    "\\makeatletter\\@input{sections/late.ltx}\\makeatother",
+                ),
+                encoding="utf-8",
+            )
+            dynamic_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("dynamic file-reading" in error for error in dynamic_errors))
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\input{sections/conclusion}",
+                    "\\input{sections/conclusion}\n"
+                    "\\inputfrom{sections/}{late.ltx}\\subinputfrom{sections/}{late.ltx}",
+                ),
+                encoding="utf-8",
+            )
+            dynamic_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("dynamic file-reading" in error for error in dynamic_errors))
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\input{sections/conclusion}",
+                    "\\input{sections/conclusion}\n"
+                    "\\ExplSyntaxOn\\file_input:n { sections/late.ltx }\\ExplSyntaxOff",
+                ),
+                encoding="utf-8",
+            )
+            dynamic_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("dynamic file-reading" in error for error in dynamic_errors))
+
+            (paper / "evil.sty").write_text(
+                "\\renewcommand{\\appendix}{}\n"
+                "\\newcommand{\\manypages}{hidden output}\n",
+                encoding="utf-8",
+            )
+            main.write_text("\\usepackage{evil}\n" + canonical_main, encoding="utf-8")
+            package_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(
+                any("not present in the recorded official template" in error for error in package_errors)
+            )
+
+            (sections / "ai_use_statement.tex").write_text(
+                "\\subsection*{AI use statement}\n"
+                "Disclosure text.\\makeatletter\\global\\c@page=1\\relax\\makeatother\n"
+                "\\global\\count0=1\n",
+                encoding="utf-8",
+            )
+            main.write_text(canonical_main, encoding="utf-8")
+            page_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("page-counter/output manipulation" in error for error in page_errors))
+            (sections / "ai_use_statement.tex").write_text(
+                "\\subsection*{AI use statement}\nA concise disclosure.\n", encoding="utf-8"
+            )
+
+            main.write_text(
+                "\\renewcommand{\\thepage}{1}\n" + canonical_main, encoding="utf-8"
+            )
+            page_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("may not be redefined" in error for error in page_errors))
+
+            main.write_text(
+                "\\newwrite\\auditout\\openout\\auditout=generated.tex"
+                "\\write\\auditout{hidden}\\closeout\\auditout\n"
+                + canonical_main,
+                encoding="utf-8",
+            )
+            write_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("file-writing commands" in error for error in write_errors))
+
+            (paper / "evil.bst").write_text("ENTRY{}{}{}\nREAD\n", encoding="utf-8")
+            main.write_text(
+                canonical_main.replace("\\bibliographystyle{plain}", "\\bibliographystyle{evil}"),
+                encoding="utf-8",
+            )
+            style_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(
+                any("not present in the recorded official template" in error for error in style_errors)
+            )
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\input{sections/conclusion}",
+                    "\\input{sections/conclusion}\n\\input sections/late.ltx\\relax",
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "static literal path"):
+                manuscript_structure_audit(paper)
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\input{appendix/appendix}",
+                    "\\iffalse\\appendix\\fi\n"
+                    "\\begin{figure}\\label{fig:hidden-tail}\\end{figure}\n"
+                    "\\csname appendix\\endcsname",
+                ),
+                encoding="utf-8",
+            )
+            fake_appendix_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("conditionals are not allowed" in error for error in fake_appendix_errors))
+            self.assertTrue(any("appendix/appendix exactly once" in error for error in fake_appendix_errors))
+
+            main.write_text(
+                canonical_main.replace(
+                    "\\label{idea2paper:end-body}\n",
+                    "\\label{idea2paper:end-body}\nHidden body prose that evades the page label.\n",
+                ),
+                encoding="utf-8",
+            )
+            boundary_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("end-exempt" in error for error in boundary_errors))
+
+            (root / "external.bib").write_text("", encoding="utf-8")
+            main.write_text(
+                canonical_main.replace("\\bibliography{references}", "\\bibliography{../external}"),
+                encoding="utf-8",
+            )
+            dependency_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("bibliography resource escapes" in error for error in dependency_errors))
+
+            (root / "external.pdf").write_bytes(b"external")
+            (sections / "body.tex").write_text(
+                "\\includegraphics{../external.pdf}\n", encoding="utf-8"
+            )
+            main.write_text(canonical_main, encoding="utf-8")
+            dependency_errors = manuscript_structure_audit(paper)["errors"]
+            self.assertTrue(any("figure resource escapes" in error for error in dependency_errors))
 
     def test_init_resume_resources_and_structure_validation(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -94,6 +425,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
             title_tex = (project / "paper/title.tex").read_text(encoding="utf-8")
             self.assertIn(r"\input{title}", main_tex)
             self.assertIn(r"\title{\papertitle}", main_tex)
+            self.assertIn(r"\label{idea2paper:end-exempt}", main_tex)
             self.assertIn("Working Title Pending", title_tex)
             self.assertNotIn("A&B_# uncertainty model", title_tex)
             self.assertTrue(json.loads((project / "title/brief.json").read_text(encoding="utf-8"))["project_directory_is_not_title"])
@@ -164,6 +496,23 @@ class Idea2PaperScriptTests(unittest.TestCase):
             self.assertEqual(supplied_project["compute_source"], "user")
             self.assertEqual(supplied_project["data_source"], "user")
             self.assertEqual(supplied_resources["source"], "user")
+
+            explicit = run_script(
+                "init_project.py",
+                "--idea",
+                "Explicit venue idea",
+                "--out-dir",
+                parent,
+                "--slug",
+                "explicit",
+                "--venue",
+                "3DV",
+            )
+            self.assertEqual(explicit.returncode, 0, explicit.stderr)
+            explicit_project = json.loads((parent / "explicit/project.json").read_text(encoding="utf-8"))
+            explicit_decision = json.loads((parent / "explicit/venue/decision.json").read_text(encoding="utf-8"))
+            self.assertEqual(explicit_project["venue_selection_mode"], "user_specified")
+            self.assertEqual(explicit_decision["selection_mode"], "user_specified")
 
     def test_auto_venue_uses_open_abstract_or_paper_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -240,6 +589,56 @@ class Idea2PaperScriptTests(unittest.TestCase):
                         "deadline_source_url": "https://neurips.cc/Conferences/2026/Dates",
                         "checked_at": "2026-08-01T00:00:00Z",
                     },
+                    {
+                        "name": "3DV",
+                        "edition": "2027",
+                        "track": "main",
+                        "tier": "top",
+                        "scope_fit": 5,
+                        "idea_version": "idea_v0",
+                        "idea_tags": ["3d vision", "human motion"],
+                        "fit_reason": "The idea is directly in scope.",
+                        "scope_evidence_url": "https://3dvconf.github.io/2027/call-for-papers/",
+                        "community_top_evidence_url": "https://3dvconf.github.io/2027/",
+                        "has_separate_abstract_deadline": False,
+                        "paper_deadline": "2026-08-03T23:59:59-12:00",
+                        "deadline_status": "confirmed",
+                        "official_url": "https://3dvconf.github.io/2027/",
+                        "deadline_source_url": "https://3dvconf.github.io/2027/call-for-papers/",
+                        "checked_at": "2026-08-01T00:00:00Z"
+                    },
+                    {
+                        "name": "CVPR",
+                        "edition": "2027",
+                        "track": "workshop",
+                        "scope_fit": 5,
+                        "idea_version": "idea_v0",
+                        "idea_tags": ["vision"],
+                        "fit_reason": "A workshop is near but is not the main conference.",
+                        "scope_evidence_url": "https://cvpr.thecvf.com/",
+                        "has_separate_abstract_deadline": False,
+                        "paper_deadline": "2026-08-02T23:59:59-12:00",
+                        "deadline_status": "confirmed",
+                        "official_url": "https://cvpr.thecvf.com/",
+                        "deadline_source_url": "https://cvpr.thecvf.com/",
+                        "checked_at": "2026-08-01T00:00:00Z"
+                    },
+                    {
+                        "name": "ACL",
+                        "edition": "2027",
+                        "track": "Findings",
+                        "scope_fit": 5,
+                        "idea_version": "idea_v0",
+                        "idea_tags": ["language"],
+                        "fit_reason": "Findings is not the main conference track.",
+                        "scope_evidence_url": "https://2027.aclweb.org/",
+                        "has_separate_abstract_deadline": False,
+                        "paper_deadline": "2026-08-02T23:59:59-12:00",
+                        "deadline_status": "confirmed",
+                        "official_url": "https://2027.aclweb.org/",
+                        "deadline_source_url": "https://2027.aclweb.org/",
+                        "checked_at": "2026-08-01T00:00:00Z"
+                    },
                 ]
             }
             source = root / "candidates.json"
@@ -259,6 +658,116 @@ class Idea2PaperScriptTests(unittest.TestCase):
             self.assertEqual(decision["selected"]["effective_deadline_kind"], "paper_deadline")
             self.assertTrue(any(item["name"] == "CVPR" for item in decision["excluded"]))
             self.assertTrue(any(item["name"] == "ICCV" for item in decision["excluded"]))
+            excluded_3dv = next(item for item in decision["excluded"] if item["name"] == "3DV")
+            self.assertIn("strict default top-conference pool", excluded_3dv["reason"])
+            excluded_non_main = [
+                item for item in decision["excluded"] if item["name"] in {"CVPR", "ACL"}
+                and "main track" in item["reason"]
+            ]
+            self.assertEqual(len(excluded_non_main), 2)
+
+    def test_auto_venue_canonicalizes_pool_aliases(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            common = {
+                "edition": "2027",
+                "track": "main",
+                "tier": "flagship",
+                "scope_fit": 5,
+                "idea_version": "idea_v0",
+                "idea_tags": ["machine learning"],
+                "fit_reason": "The idea is directly in scope.",
+                "scope_evidence_url": "https://example.org/official-scope",
+                "has_separate_abstract_deadline": False,
+                "deadline_status": "confirmed",
+                "official_url": "https://example.org/official",
+                "deadline_source_url": "https://example.org/official-dates",
+                "checked_at": "2026-08-01T00:00:00Z",
+            }
+            candidates = {
+                "candidates": [
+                    {**common, "name": "NIPS", "paper_deadline": "2026-08-05T23:59:59-12:00"},
+                    {**common, "name": "ACMMM", "paper_deadline": "2026-08-06T23:59:59-12:00"},
+                ]
+            }
+            source = root / "candidates.json"
+            output = root / "decision.json"
+            source.write_text(json.dumps(candidates), encoding="utf-8")
+            result = run_script(
+                "select_venue.py",
+                source,
+                "--output",
+                output,
+                "--as-of",
+                "2026-08-01T00:00:00Z",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            decision = json.loads(output.read_text(encoding="utf-8"))
+            self.assertEqual(decision["selected"]["name"], "NeurIPS")
+            self.assertEqual(decision["selected"]["submitted_name"], "NIPS")
+            self.assertEqual(decision["selected"]["registry_id"], "neurips")
+            self.assertEqual(decision["eligible"][1]["name"], "ACM MM")
+
+    def test_auto_venue_registry_is_exact_and_cannot_inject_3dv(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            registry = json.loads((SKILL_ROOT / "references/venue-registry.json").read_text(encoding="utf-8"))
+            registry["venues"].append(
+                {
+                    "id": "3dv",
+                    "name": "3DV",
+                    "full_name": "International Conference on 3D Vision",
+                    "tier": "top",
+                }
+            )
+            injected = root / "registry.json"
+            injected.write_text(json.dumps(registry), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "exactly the strict default pool"):
+                load_registry(injected)
+
+            replaced = json.loads(
+                (SKILL_ROOT / "references/venue-registry.json").read_text(encoding="utf-8")
+            )
+            eccv = next(item for item in replaced["venues"] if item["id"] == "eccv")
+            eccv["name"] = "3DV"
+            eccv["aliases"] = ["3DV"]
+            replaced_path = root / "replaced-registry.json"
+            replaced_path.write_text(json.dumps(replaced), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "metadata differs from the immutable pool"):
+                load_registry(replaced_path)
+
+    def test_venue_decision_is_bound_to_project_intake(self) -> None:
+        registry = load_registry(SKILL_ROOT / "references/venue-registry.json")
+
+        errors: list[str] = []
+        validate_selection_binding(
+            {"target_venue": "auto", "venue_selection_mode": "auto"},
+            {"selection_mode": "user_specified"},
+            {"name": "3DV"},
+            registry,
+            errors,
+        )
+        self.assertTrue(any("selection_mode does not match" in error for error in errors))
+
+        errors = []
+        validate_selection_binding(
+            {"target_venue": "ICLR", "venue_selection_mode": "user_specified"},
+            {"selection_mode": "user_specified"},
+            {"name": "CVPR"},
+            registry,
+            errors,
+        )
+        self.assertTrue(any("selected venue does not match" in error for error in errors))
+
+        errors = []
+        validate_selection_binding(
+            {"target_venue": "NIPS", "venue_selection_mode": "user_specified"},
+            {"selection_mode": "user_specified"},
+            {"name": "NeurIPS"},
+            registry,
+            errors,
+        )
+        self.assertEqual(errors, [])
 
     def test_literature_enrichment_preserves_identity_and_excludes_records(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -610,7 +1119,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "idea_version": "idea_v2",
                 "idea_original": "A long raw idea that is not a paper title.",
             }
-            venue = {"selected": {"name": "3DV", "edition": "2027"}}
+            venue = {"selected": {"name": "ICLR", "edition": "2027"}}
             venue_path = project / "venue/decision.json"
             venue_path.write_text(json.dumps(venue), encoding="utf-8")
             corpus_path = project / "related_works/papers_enriched.csv"
@@ -685,7 +1194,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                     {
                         "status": "reviewed",
                         "idea_version": "idea_v2",
-                        "venue_name": "3DV",
+                        "venue_name": "ICLR",
                         "venue_edition": "2027",
                         "generated_at": "2026-08-01T12:00:00Z",
                         "candidates": candidates,
@@ -702,7 +1211,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "status": "frozen",
                 "title_version": "title_v1",
                 "idea_version": "idea_v2",
-                "venue_name": "3DV",
+                "venue_name": "ICLR",
                 "venue_edition": "2027",
                 "selected_candidate_id": "TITLE-001",
                 "selected_title": selected,

@@ -59,6 +59,13 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - Double-blind metadata, acknowledgments, repository links, and self-citations comply with venue policy.
 - LaTeX compiles without unresolved citations or references.
 - `qa/layout_report.json` records a passing build, the correct body/reference counting rule, and body pages within the permitted budget.
+- Every main-paper figure/table is rendered near its discussion and no body float appears on a page after Conclusion begins.
+- The active manuscript input graph contains no `\clearpage`, `\newpage`, `\pagebreak`, or `\FloatBarrier`; layout is fixed at the source rather than by forced flushing.
+- The sole Conclusion label, body/reference boundaries, bibliography, and appendix marker follow the canonical order; every pre-appendix float has one unique label and none occurs after Conclusion in source or rendered order.
+- Manuscript inputs and figure/bibliography resources are static and paper-local; the audited input graph contains no TeX conditionals, dynamic file readers, page-register/output manipulation, external dependencies, untrusted local styles/classes, or non-exempt content hidden after the body-page label.
+- The canonical `end-exempt` label immediately follows the optional AI-use statement, and the compiled exempt region spans no more than one additional page.
+- The layout report uses the current schema and its source hash covers every manuscript file and embedded figure resource under `paper/`.
+- The independent PDF pass checks every page for float piles, premature section endings, large avoidable gaps, clipped tables, and references/appendix contamination.
 
 ## Independent review
 

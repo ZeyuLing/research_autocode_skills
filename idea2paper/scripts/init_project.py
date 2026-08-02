@@ -163,6 +163,7 @@ def main_tex() -> str:
 \\input{{sections/conclusion}}
 \\input{{sections/limitations}}
 \\label{{idea2paper:end-body}}
+\\label{{idea2paper:end-exempt}}
 
 \\bibliographystyle{{plain}}
 \\bibliography{{references}}
@@ -253,7 +254,7 @@ def main() -> int:
         "idea_version": "idea_v0",
         "language": args.language,
         "target_venue": args.venue,
-        "venue_selection_mode": "auto" if args.venue.lower() == "auto" else "user",
+        "venue_selection_mode": "auto" if args.venue.lower() == "auto" else "user_specified",
         "compute_source": "user" if supplied_resources is not None else "current_machine",
         "data_source": args.data_source,
         "automation_mode": "autopilot",
@@ -334,7 +335,7 @@ def main() -> int:
         "related_work.tex": "\\section{Related Work}\n",
         "method.tex": "\\section{Method}\n",
         "experiments.tex": "\\section{Experiments}\n",
-        "conclusion.tex": "\\section{Conclusion}\n",
+        "conclusion.tex": "\\section{Conclusion}\n\\label{idea2paper:start-conclusion}\n",
         "limitations.tex": "\\section{Limitations}\n",
     }
     for filename, content in section_titles.items():

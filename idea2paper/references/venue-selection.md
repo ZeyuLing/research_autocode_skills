@@ -5,16 +5,23 @@ Apply this policy when the user does not supply a venue or when a supplied venue
 ## Candidate construction
 
 1. Extract field, task, method, modality, application, and paper-type tags from the current idea.
-2. Start from `venue-registry.json`. Treat it as a candidate registry, not as a source for live deadlines.
-3. Add a missing domain-specific flagship/top main conference only when its official scope and community standing are documented.
-4. Exclude workshops by default unless the user explicitly requests one.
-5. Give each candidate a `scope_fit` score from 1 to 5 and a one-sentence fit rationale.
+2. Start from `venue-registry.json`. It is the strict default pool, not a source for live deadlines.
+3. Automatic selection may consider only ECCV, ICCV, CVPR, NeurIPS (including the NIPS alias), ICML, ICLR, AAAI, IJCAI, ACM MM (including the ACMMM alias), ACL, and EMNLP.
+4. Reject every pool-external venue during automatic selection, even when a community-standing URL is supplied. Do not auto-add domain-specific conferences.
+5. Exclude workshops by default unless the user explicitly requests one.
+6. Give each candidate a `scope_fit` score from 1 to 5 and a one-sentence fit rationale.
+
+If the user explicitly names a venue outside the pool, it may be retained with
+`selection_mode=user_specified` after verifying its rules. Do not describe that
+choice as an automatically selected top-pool venue, and do not let it expand the
+default registry.
 
 ## Eligibility and ranking
 
 A venue is eligible only when:
 
-- `tier` is `flagship` or `top`;
+- the canonical venue or a registered alias is present in the strict default pool;
+- `tier` is `flagship` or `top` as assigned by the registry;
 - `scope_fit >= 4`;
 - an official CFP or submission page was checked;
 - the abstract deadline has not passed; or, when no separate abstract deadline exists, the full-paper deadline has not passed;
@@ -97,9 +104,6 @@ If an edition's abstract deadline is known to have passed, never select that edi
 
 ## Page budget
 
-When migrating into the official template, keep the LaTeX labels
-idea2paper:end-body immediately before the bibliography and
-idea2paper:end-references immediately after it. The compile gate uses the
-appropriate label according to whether references count.
+When migrating into the official template, keep the sole Conclusion input and optional Limitations input before `idea2paper:end-body`. If a venue-exempt AI disclosure follows, put `idea2paper:end-exempt` immediately after that one input; otherwise place the two labels together. Put `idea2paper:end-references` immediately after the bibliography and begin `appendix/appendix.tex` with `\appendix`. The compile gate binds this canonical order to the real section/bibliography/appendix commands, caps the exempt disclosure to one additional page, and uses the appropriate body label according to whether references count.
 
 Create a budget immediately after venue lock. Reserve space for the overview, main tables, and teaser before prose expansion. The sketch may exceed the official body limit by at most one page; `SUBMISSION_READY` may not exceed it at all.

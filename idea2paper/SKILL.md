@@ -74,8 +74,8 @@ If the user specified a venue, retain it and verify the current track, deadlines
 Otherwise:
 
 1. Extract field, task, method, modality, and application tags from the idea.
-2. Use `venue-registry.json` as the initial top-venue candidate set; add a domain-specific top venue only with evidence.
-3. Browse official CFP or submission pages and create a verified candidate JSON file.
+2. Use `venue-registry.json` as a strict default whitelist. Automatic selection may consider only ECCV, ICCV, CVPR, NeurIPS (alias NIPS), ICML, ICLR, AAAI, IJCAI, ACM MM (alias ACMMM), ACL, and EMNLP. Never promote a pool-external venue through community-standing evidence.
+3. Browse official CFP or submission pages for all plausibly fitting whitelist members and create a verified candidate JSON file. A user may explicitly request a venue outside the pool, but record it as `selection_mode=user_specified`; do not call it a default-pool top venue.
 4. Run `scripts/select_venue.py` to keep candidates with `scope_fit >= 4/5`, reject meetings whose abstract deadline has passed, and select the nearest effective deadline. If no separate abstract deadline exists, use the full-paper deadline.
 5. Do not use experiment duration in filtering or ranking.
 6. Download the official current-cycle template from the venue. If it is not released, use the previous official template and add `\TemplateTODO{TEMPLATE-UPDATE}{...}` plus an adjacent source TODO.
@@ -164,6 +164,8 @@ Read `manuscript-writing.md`. Draft in this order after the idea and claim graph
 Cover all relevant `must_cite` accepted top-venue work in Related Work. Write result-dependent Abstract and Conclusion claims under the successful-experiment assumption, using the same red result IDs and adjacent TODOs.
 
 Place the teaser between authors and Abstract only when the official template permits it. Allow the sketch to exceed the official body limit by at most one page; move secondary material to the appendix and cite it from the main text. Keep core claims, method, and decisive evidence in the main paper.
+
+Lay out every main-paper figure and table at or shortly after its first discussion. Give every pre-appendix float one unique label. The final body float must be anchored before `Conclusion`; no body figure/table may be deferred to a float dump after `Conclusion`. Keep the sole Conclusion label, body/exempt/reference labels, bibliography, and appendix marker in the canonical order specified by `manuscript-writing.md`. Use only static paper-local manuscript and figure/bibliography paths; do not add untrusted local styles/classes or use TeX conditionals to alter the audited structure. Never insert `\clearpage`, `\newpage`, `\pagebreak`, or `\FloatBarrier` to manufacture placement. Rebalance float size, placement specifiers, prose, and appendix transfers instead, then visually inspect every compiled page.
 
 ### 9. Review, compile, and close gates
 

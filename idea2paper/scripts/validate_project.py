@@ -16,10 +16,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from compile_paper import source_tree_sha256
+from compile_paper import body_float_inventory, manual_pagination_commands, source_tree_sha256
 from record_survey_run import CSV_REQUIRED as SURVEY_CSV_REQUIRED
 from record_survey_run import STANDARD_ARTIFACTS as SURVEY_STANDARD_ARTIFACTS
-from select_venue import TIER_RANK, evaluate as evaluate_venue
+from select_venue import SELECTION_RULE, TIER_RANK, evaluate as evaluate_venue
 from select_venue import load_candidates, load_registry, parse_datetime
 from state_manager import snapshot_inputs
 from todo_lint import INCLUDE_RE, MACRO_RE, lint_directory, strip_tex_comments
@@ -638,6 +638,46 @@ def validate_title(
         errors.append("paper/main.tex: active template must consume paper/title.tex through \\papertitle")
 
 
+def validate_selection_binding(
+    project_data: dict[str, Any],
+    venue: dict[str, Any],
+    selected: dict[str, Any],
+    registry: dict[str, dict[str, Any]],
+    errors: list[str],
+) -> None:
+    """Bind the decision mode and selected venue to the immutable intake choice."""
+
+    target = str(project_data.get("target_venue", "")).strip()
+    project_mode = str(project_data.get("venue_selection_mode", "")).strip()
+    decision_mode = str(venue.get("selection_mode", "")).strip()
+    if not target:
+        errors.append("project.json: target_venue is required")
+        return
+
+    expected_mode = "auto" if target.casefold() == "auto" else "user_specified"
+    if project_mode != expected_mode:
+        errors.append(
+            "project.json: venue_selection_mode does not match target_venue "
+            f"(expected {expected_mode})"
+        )
+    if decision_mode != expected_mode:
+        errors.append(
+            "venue/decision.json: selection_mode does not match project target_venue "
+            f"(expected {expected_mode})"
+        )
+    if expected_mode == "auto":
+        return
+
+    def canonical_name(value: str) -> str:
+        key = " ".join(value.strip().casefold().split())
+        registry_item = registry.get(key)
+        return str(registry_item.get("name", "")).strip().casefold() if registry_item else key
+
+    selected_name = str(selected.get("name", "")).strip()
+    if not selected_name or canonical_name(target) != canonical_name(selected_name):
+        errors.append("venue/decision.json: selected venue does not match project.json target_venue")
+
+
 def validate_venue(
     project: Path,
     project_data: dict[str, Any],
@@ -646,12 +686,15 @@ def validate_venue(
     warnings: list[str],
 ) -> None:
     selection_mode = venue.get("selection_mode")
-    if selection_mode not in {"auto", "user"}:
-        errors.append("venue/decision.json: selection_mode must be auto or user")
+    if selection_mode not in {"auto", "user_specified"}:
+        errors.append("venue/decision.json: selection_mode must be auto or user_specified")
     selected = venue.get("selected")
     if not isinstance(selected, dict):
         errors.append("venue/decision.json: no selected venue")
         return
+
+    registry = load_registry(Path(__file__).resolve().parents[1] / "references/venue-registry.json")
+    validate_selection_binding(project_data, venue, selected, registry, errors)
 
     for field in (
         "name",
@@ -728,7 +771,7 @@ def validate_venue(
         return
     if venue.get("status") not in {"selected", "tentative"}:
         errors.append("venue/decision.json: automatic selection status must be selected or tentative")
-    if venue.get("selection_rule") != "scope_fit>=threshold, nearest open abstract/full-paper deadline, fit desc, tier desc":
+    if venue.get("selection_rule") != SELECTION_RULE:
         errors.append("venue/decision.json: unexpected or missing automatic selection_rule")
     try:
         as_of = parse_datetime(str(venue.get("as_of", "")))
@@ -736,7 +779,6 @@ def validate_venue(
         errors.append(f"venue/decision.json: invalid as_of: {exc}")
         return
 
-    registry = load_registry(Path(__file__).resolve().parents[1] / "references/venue-registry.json")
     allow_tentative = venue.get("status") == "tentative"
     ok, reason, selected_deadline, normalized_selected = evaluate_venue(
         selected,
@@ -1459,8 +1501,80 @@ def validate_layout_and_review(
         errors.append("qa/layout_report.json: missing compile and page-budget report")
     else:
         report = read_json(layout_path, errors)
+        try:
+            layout_schema = int(report.get("schema_version", 0))
+        except (TypeError, ValueError):
+            layout_schema = 0
+        if layout_schema < 5:
+            errors.append("qa/layout_report.json: obsolete layout-audit schema")
         if report.get("status") != "pass":
             errors.append("qa/layout_report.json: LaTeX build or page check did not pass")
+        try:
+            current_pagination = manual_pagination_commands(project / "paper")
+            current_float_inventory = body_float_inventory(project / "paper")
+        except ValueError as exc:
+            errors.append(f"qa/layout_report.json: cannot audit active LaTeX inputs: {exc}")
+            current_pagination = []
+            current_float_inventory = {
+                "active_body_files": [],
+                "records": [],
+                "structure_errors": [],
+                "after_conclusion_source": [],
+            }
+        if report.get("manual_pagination_commands") != current_pagination:
+            errors.append("qa/layout_report.json: manual-pagination audit is stale or incomplete")
+        if report.get("manual_pagination_commands") != []:
+            errors.append("qa/layout_report.json: manuscript contains manual pagination commands")
+        if report.get("active_body_files") != current_float_inventory["active_body_files"]:
+            errors.append("qa/layout_report.json: active-body source coverage is stale or incomplete")
+        if report.get("tracked_body_float_count") != len(current_float_inventory["records"]):
+            errors.append("qa/layout_report.json: body-float coverage count is stale or incomplete")
+        if report.get("manuscript_structure_errors") != current_float_inventory["structure_errors"]:
+            errors.append("qa/layout_report.json: manuscript-structure audit is stale or incomplete")
+        if report.get("manuscript_structure_errors") != []:
+            errors.append("qa/layout_report.json: canonical manuscript boundaries are invalid")
+        if (
+            report.get("source_body_floats_after_conclusion")
+            != current_float_inventory["after_conclusion_source"]
+        ):
+            errors.append("qa/layout_report.json: post-Conclusion source audit is stale or incomplete")
+        if report.get("source_body_floats_after_conclusion") != []:
+            errors.append("qa/layout_report.json: source contains floats after Conclusion begins")
+        if report.get("unlabeled_body_floats") != []:
+            errors.append("qa/layout_report.json: active body contains unlabeled floats")
+        if report.get("duplicate_body_float_labels") != []:
+            errors.append("qa/layout_report.json: active body contains duplicate float labels")
+        if report.get("missing_body_float_aux_labels") != []:
+            errors.append("qa/layout_report.json: body float labels are missing from compiled AUX")
+        if report.get("body_float_tail_violations") != []:
+            errors.append("qa/layout_report.json: body floats appear after Conclusion begins")
+        try:
+            conclusion_page = int(report.get("conclusion_page", 0))
+        except (TypeError, ValueError):
+            conclusion_page = 0
+        if conclusion_page <= 0:
+            errors.append("qa/layout_report.json: missing conclusion-page audit")
+        try:
+            end_body_page = int(report.get("end_body_page", 0))
+        except (TypeError, ValueError):
+            end_body_page = 0
+        if end_body_page <= 0 or report.get("conclusion_before_end_body") is not True:
+            errors.append("qa/layout_report.json: invalid Conclusion/end-body boundary order")
+        try:
+            end_exempt_page = int(report.get("end_exempt_page", 0))
+            exempt_page_span = int(report.get("exempt_page_span", -1))
+            max_exempt_page_span = int(report.get("max_exempt_page_span", -1))
+        except (TypeError, ValueError):
+            end_exempt_page = 0
+            exempt_page_span = max_exempt_page_span = -1
+        if (
+            end_exempt_page <= 0
+            or exempt_page_span < 0
+            or exempt_page_span > 1
+            or max_exempt_page_span != 1
+            or end_exempt_page - end_body_page != exempt_page_span
+        ):
+            errors.append("qa/layout_report.json: invalid page-limit-exempt disclosure span")
         if report.get("source_sha256") != source_tree_sha256(project / "paper"):
             errors.append("qa/layout_report.json: paper sources changed after compilation")
         if not timezone_aware(str(report.get("compiled_at", ""))):
