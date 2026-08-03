@@ -1,0 +1,152 @@
+{
+  "profile_version": 1,
+  "name": "Motion, Video, World Models, Agents and VLA Radar",
+  "language": "zh-CN",
+  "timezone": "Asia/Shanghai",
+  "lookback_days": 7,
+  "max_candidates_per_topic": 60,
+  "max_review_candidates": 300,
+  "max_digest_papers": 10,
+  "max_per_topic": 2,
+  "relevance_threshold": 70,
+  "quality_threshold": 65,
+  "watch_threshold": 62,
+  "topics": [
+    {
+      "id": "human-embodied-motion",
+      "label": "人体动作 / 具身机器人动作的生成、理解与规划",
+      "arxiv_categories": ["cs.CV", "cs.RO", "cs.AI", "cs.LG"],
+      "query_terms": [
+        "text-to-motion",
+        "motion generation",
+        "human motion generation",
+        "human motion synthesis",
+        "human motion understanding",
+        "motion-language",
+        "humanoid whole-body motion",
+        "video-action model",
+        "video action model",
+        "robot action model",
+        "robot motion planning",
+        "embodied motion planning",
+        "robot trajectory generation"
+      ],
+      "include_any": [
+        "human motion", "text-to-motion", "motion generation", "motion synthesis", "motion understanding",
+        "motion-language", "humanoid", "whole-body", "robot motion", "motion planning",
+        "trajectory generation", "locomotion", "dexterous motion", "video-action", "video action model"
+      ],
+      "exclude_any": ["molecular motion", "motion blur removal", "camera motion only"]
+    },
+    {
+      "id": "video-generation",
+      "label": "视频生成",
+      "arxiv_categories": ["cs.CV", "cs.AI", "cs.LG", "cs.MM"],
+      "query_terms": [
+        "text-to-video generation",
+        "image-to-video generation",
+        "video diffusion",
+        "video distillation",
+        "autoregressive video generation",
+        "controllable video generation",
+        "video editing generation"
+      ],
+      "include_any": [
+        "video generation", "text-to-video", "image-to-video", "video diffusion", "video distillation",
+        "generative video", "autoregressive video", "controllable video", "video editing"
+      ],
+      "exclude_any": ["video compression", "video retrieval only", "video captioning only"]
+    },
+    {
+      "id": "video-3d-world-models",
+      "label": "视频世界模型 / 3D 世界模型",
+      "arxiv_categories": ["cs.CV", "cs.RO", "cs.AI", "cs.LG", "cs.GR"],
+      "query_terms": [
+        "video world model",
+        "generative world model",
+        "3D world model",
+        "spatial world model",
+        "interactive world model",
+        "world simulator",
+        "robot world simulator",
+        "action-conditioned world model",
+        "physical language world model",
+        "neural simulator",
+        "world model robotics"
+      ],
+      "include_any": [
+        "world model", "world modeling", "3d world", "spatial world", "interactive world",
+        "world simulator", "neural simulator", "environment dynamics", "action-conditioned video",
+        "action-conditioned world", "physical language", "scene dynamics"
+      ],
+      "exclude_any": ["world model as metaphor", "economic world model"]
+    },
+    {
+      "id": "llm-agents",
+      "label": "LLM Agent",
+      "arxiv_categories": ["cs.AI", "cs.CL", "cs.LG", "cs.HC", "cs.SE"],
+      "query_terms": [
+        "large language model agent",
+        "LLM agent",
+        "agentic language model",
+        "tool-using agent",
+        "tool-calling agent",
+        "tool specification agent",
+        "AI agent safety",
+        "GUI agent",
+        "search agent",
+        "coding agent",
+        "agent memory",
+        "agent benchmark",
+        "computer-use agent",
+        "web agent",
+        "multi-agent language model"
+      ],
+      "include_any": [
+        "llm agent", "language model agent", "agentic", "tool use", "tool-using", "tool-calling",
+        "tool specification", "agent safety",
+        "computer use", "gui agent", "web agent", "search agent", "coding agent", "agent memory",
+        "agent benchmark", "multi-agent", "autonomous agent", "long-horizon agent"
+      ],
+      "exclude_any": ["chemical agent", "contrast agent", "reinforcement learning agent only"]
+    },
+    {
+      "id": "vla-embodied-models",
+      "label": "VLA 等具身模型",
+      "arxiv_categories": ["cs.RO", "cs.CV", "cs.AI", "cs.LG"],
+      "query_terms": [
+        "vision-language-action",
+        "vision-language-action model",
+        "VLA robot",
+        "embodied foundation model",
+        "robot foundation model",
+        "world critic robot",
+        "robot manipulation policy",
+        "visuomotor policy",
+        "universal manipulation interface",
+        "language-conditioned robot policy",
+        "generalist robot policy"
+      ],
+      "include_any": [
+        "vision-language-action", "vision language action", "vla model", "vla robot",
+        "embodied foundation model", "robot foundation model", "generalist robot",
+        "language-conditioned policy", "robot manipulation policy", "visuomotor policy",
+        "world critic", "universal manipulation interface", "embodied model"
+      ],
+      "exclude_any": ["very large array", "variable length array"]
+    }
+  ],
+  "quality_policy": {
+    "intrinsic_weights": {
+      "problem_importance": 0.20,
+      "method_novelty": 0.25,
+      "evidence_strength": 0.35,
+      "reproducibility": 0.20
+    },
+    "overall_weights": {
+      "relevance": 0.45,
+      "intrinsic_quality": 0.45,
+      "external_signal": 0.10
+    }
+  }
+}

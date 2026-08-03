@@ -1,0 +1,4 @@
+interface:
+  display_name: "Daily AI Paper Radar"
+  short_description: "Find and rank high-quality new AI papers"
+  default_prompt: "Use $track-ai-papers to find and rank today's highest-quality papers for my research topics."
