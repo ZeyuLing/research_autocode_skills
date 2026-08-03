@@ -10,6 +10,7 @@ A curated collection of Claude Code / Codex / Cursor skills for AI-assisted rese
 | [pua](#pua) | High-agency enforcement — forces the AI to exhaust all options before giving up | Claude Code, Codex, Cursor, Kiro, and more |
 | [remote-exec](#remote-exec) | GPU server management & distributed task execution | Claude Code |
 | [idea2paper](#idea2paper) | End-to-end idea-to-experiment-ready LaTeX paper workflow | Codex |
+| [nature-paper-card](#nature-paper-card) | Source-grounded, module-by-module deep reading of AI and scientific papers | Claude Code, Codex, Cursor |
 | [research-paper-writing](#research-paper-writing) | Academic paper writing & self-review guidance | Claude Code, Codex, Cursor, OpenCode |
 | [Research-Paper-Writing-Skills](#research-paper-writing-skills) | Standalone repo wrapper for `research-paper-writing` | Claude Code, Codex, Gemini |
 | [Skill-Research-Figure](#skill-research-figure) | Publication-quality TikZ diagrams & Blender 3D renders | Claude Code |
@@ -89,6 +90,20 @@ Pushes the AI coding agent to exhaust every possible solution before admitting d
 - Paragraph clarity check via reverse outlining
 - 5-dimension pre-submission self-review: contribution, writing clarity, experimental strength, evaluation completeness, method design
 - Claim-evidence alignment checking
+
+---
+
+## nature-paper-card
+
+**Evidence-grounded deep reading for a single AI or scientific paper.**
+
+- Reconstructs the scientific problem and why existing approaches are insufficient
+- Maps every central module or strategy to its function, necessity, inputs/outputs, assumptions, and ablation evidence
+- Traces the causal chain from prior-work limitations through the paper's design choices to the conclusions actually supported
+- Separates paper claims, external facts, analysis, and hypotheses with stable source pointers
+- Includes local PDF/source-map preparation, a fixed 16-section Paper Card schema, and a groundedness auditor
+
+**Trigger**: "deep-read this paper", "analyze every module", "generate a Paper Card", "精读这篇论文"
 
 ---
 
