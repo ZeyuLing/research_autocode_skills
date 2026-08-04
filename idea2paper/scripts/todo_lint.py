@@ -76,6 +76,7 @@ def lint_directory(root: Path, mode: str = "sketch", adjacent_lines: int = 3) ->
 
     file_lines: dict[Path, list[str]] = {}
     for path in tex_files:
+        portable_path = path.relative_to(root).as_posix()
         text = path.read_text(encoding="utf-8", errors="replace")
         cleaned = strip_tex_comments(text)
         lines = text.splitlines()
@@ -90,7 +91,7 @@ def lint_directory(root: Path, mode: str = "sketch", adjacent_lines: int = 3) ->
                     "id": item_id,
                     "type": MACRO_TYPES[macro_name],
                     "macro": macro_name,
-                    "file": str(path),
+                    "file": portable_path,
                     "line": line_number,
                 }
             )
@@ -98,12 +99,12 @@ def lint_directory(root: Path, mode: str = "sketch", adjacent_lines: int = 3) ->
                 errors.append(f"{path}:{line_number}: invalid draft ID {item_id!r}")
         for match in INCLUDE_RE.finditer(cleaned):
             line_number = cleaned.count("\n", 0, match.start()) + 1
-            includes.append({"file": str(path), "line": line_number, "path": match.group(1).strip()})
+            includes.append({"file": portable_path, "line": line_number, "path": match.group(1).strip()})
         for index, line in enumerate(lines, start=1):
             for match in TODO_RE.finditer(line):
                 item_id, message = match.groups()
                 item_id = item_id.strip()
-                todos.append({"id": item_id, "message": message.strip(), "file": str(path), "line": index})
+                todos.append({"id": item_id, "message": message.strip(), "file": portable_path, "line": index})
                 if not ID_RE.fullmatch(item_id):
                     errors.append(f"{path}:{index}: invalid TODO ID {item_id!r}")
             if (
@@ -124,11 +125,12 @@ def lint_directory(root: Path, mode: str = "sketch", adjacent_lines: int = 3) ->
         macro_by_id.setdefault(item["id"], []).append(item)
 
     for macro in macros:
-        path = Path(macro["file"])
+        portable_path = str(macro["file"])
+        path = root / portable_path
         nearby = [
             todo
             for todo in todos
-            if todo["file"] == str(path)
+            if todo["file"] == portable_path
             and todo["id"] == macro["id"]
             and abs(int(todo["line"]) - int(macro["line"])) <= adjacent_lines
         ]
@@ -168,7 +170,7 @@ def lint_directory(root: Path, mode: str = "sketch", adjacent_lines: int = 3) ->
     return {
         "schema_version": 1,
         "mode": mode,
-        "root": str(root),
+        "root": ".",
         "files_scanned": len(tex_files),
         "items": registry_items,
         "errors": errors,

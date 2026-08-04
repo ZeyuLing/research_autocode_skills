@@ -17,12 +17,13 @@ Build a traceable paper project whose prose, method, experiment design, tables, 
 6. Verify current deadlines, templates, page limits, anonymity rules, and policies from official venue sources at execution time.
 7. Never silently continue with stale artifacts. Mark downstream stages `stale`, rerun the affected stage, and record the new input version.
 8. Treat the project name and initial idea summary only as working labels. Generate, review, and freeze the paper title from the final positioning, claim graph, Method, and venue before drafting the manuscript.
+9. Invoke `paperjury:paperjury` for isolated adversarial manuscript review. Run at least two isolated rounds with at least three reviewer lenses, require the final round to be clean, adjudicate every major issue, and bind the passing report to the final manuscript hash.
 
 ## Start or resume a project
 
 Read [project-contract.md](references/project-contract.md) before creating or resuming any project.
 
-Before running helper scripts, verify that `python --version` resolves to Python 3.10 or newer. On Windows, do not use a Microsoft Store alias that exits without a runtime; select an installed or Codex-bundled Python executable and use that same executable for every command.
+Before running helper scripts, verify that `python --version` resolves to Python 3.10 or newer and install `requirements.txt` into that runtime; `pdfplumber` is mandatory for the rendered layout gate. On Windows, do not use a Microsoft Store alias that exits without a runtime; select an installed or Codex-bundled Python executable and use that same executable for every command.
 
 For a new project, run:
 
@@ -55,7 +56,8 @@ Load only the references required for the current stage:
 | Paper-title candidates, adversarial review, collision check, and freeze | [title-selection.md](references/title-selection.md) |
 | Any figure request or figure revision | [figure-protocol.md](references/figure-protocol.md), then the installed `imagegen` skill |
 | Related Work, Introduction, Abstract, Conclusion, Teaser placement, appendix, page budget | [manuscript-writing.md](references/manuscript-writing.md) |
-| Stage gates, compilation, review, sketch and submission readiness | [quality-gates.md](references/quality-gates.md) |
+| Adversarial manuscript iteration | [quality-gates.md](references/quality-gates.md), then the installed `paperjury:paperjury` skill |
+| Stage gates, compilation, sketch and submission readiness | [quality-gates.md](references/quality-gates.md) |
 
 ## Workflow
 
@@ -149,6 +151,8 @@ For each final asset:
 3. Record it in `figures/manifest.csv` with claim/module/result IDs, an `imagegen` invocation provenance JSON, and matching hashes for the generated and paper-consumed copies.
 4. Inspect it for terminology, arrows, factual content, text fidelity, layout, color, column-width readability, and watermark absence.
 5. Iterate through `imagegen` with one targeted change at a time; do not repair the artwork with another drawing tool.
+
+The selected imagegen raster must remain the graphical subject of every `figure` environment. Use only the finite raster-layout grammar: placement, centering, `includegraphics`, captions, labels, tracked draft macros, spacing, and ordinary raster `subfigure` environments. TeX text/math bodies, outer scale/resize wrappers, `tabular`, `array`, `rule`, `minipage`, boxes, inputs, custom drawing macros, or any unrecognized structure are forbidden, including attempts to satisfy provenance with a token-sized registered raster.
 6. For real qualitative outputs, require preservation of the input evidence. Reject any generated layout that changes the underlying observation.
 
 ### 8. Write the manuscript
@@ -165,7 +169,9 @@ Cover all relevant `must_cite` accepted top-venue work in Related Work. Write re
 
 Place the teaser between authors and Abstract only when the official template permits it. Allow the sketch to exceed the official body limit by at most one page; move secondary material to the appendix and cite it from the main text. Keep core claims, method, and decisive evidence in the main paper.
 
-Lay out every main-paper figure and table at or shortly after its first discussion. Give every pre-appendix float one unique label. The final body float must be anchored before `Conclusion`; no body figure/table may be deferred to a float dump after `Conclusion`. Keep the sole Conclusion label, body/exempt/reference labels, bibliography, and appendix marker in the canonical order specified by `manuscript-writing.md`. Use only static paper-local manuscript and figure/bibliography paths; do not add untrusted local styles/classes or use TeX conditionals to alter the audited structure. Never insert `\clearpage`, `\newpage`, `\pagebreak`, or `\FloatBarrier` to manufacture placement. Rebalance float size, placement specifiers, prose, and appendix transfers instead, then visually inspect every compiled page.
+Lay out every figure and table at or shortly after its first discussion and give every body or appendix float a unique label. The final body float must be anchored before `Conclusion`; no body figure/table may be deferred to a float dump after `Conclusion`. In a single-column template, reject a float page with a large empty row, a tall narrow local float region, one-sided empty column, or avoidable trailing blank area. Across both body and appendix, allow no more than two floats on a single-column page, reject adjacent appendix pages that each carry at least two floats, reject three consecutive pages in either region that each carry at least two floats, reject a four-float dump on the final two appendix pages, and reject an appendix whose floats are mostly dumped onto its final three pages. Infer columns from active top-level commands and actually invoked local-template macros, then cross-check confident rendered gutter geometry; dormant macro definitions or unresolved conditional branches are not column evidence, and a manual `--columns` value may not relax confirmed two-column mode. Forbid every `\hfuzz` or `\vfuzz` use in the active author `.tex` input graph and in author-controlled local styles because those registers suppress TeX clipping diagnostics; do not misclassify register use inside an exact venue-bound official template asset as an author bypass. Compile from freshly removed named `main.*` artifacts, force `latexmk` to rebuild, and bind the report to the resulting `main.log` and `main.aux` paths and hashes. The project validator must independently recompute the active column mode, every float-label page, distribution gates, and rendered whitespace from the bound current source/AUX/PDF and exactly compare them with the report. Treat any TeX overfull box above 2 pt as a blocking clipping defect; record smaller overfull boxes as inspection warnings rather than silently discarding them. Also reject rendered text or images extending more than 2 pt beyond the PDF media box, while retaining the compiler log as the primary detector for content that overflows a column but remains inside the page. Interleave floats with the prose that interprets them; do not solve clustering by moving the whole queue to the appendix.
+
+Keep the sole Conclusion label, body/exempt/reference labels, bibliography, and appendix marker in the canonical order specified by `manuscript-writing.md`; place `\label{idea2paper:start-appendix}` immediately after `\appendix`. Use only static paper-local manuscript and figure/bibliography paths; do not add untrusted local styles/classes or use TeX conditionals to alter the audited structure. Never insert `\clearpage`, `\newpage`, `\pagebreak`, `\FloatBarrier`, or exact `[H]` figure/table placement to manufacture placement. Rebalance float size, legal `[tbp]` placement specifiers, source order, prose, and appendix transfers instead, compile twice after meaningful layout changes, and visually inspect every page rather than only the last page.
 
 ### 9. Review, compile, and close gates
 
@@ -177,7 +183,14 @@ python scripts/todo_lint.py <project-root>/paper --mode sketch --registry <proje
 python scripts/validate_project.py <project-root> --mode sketch --report <project-root>/qa/sketch_validation.json
 ```
 
-Perform an independent paper review for novelty positioning, method completeness, claim/experiment coverage, baseline fairness, citation support, terminology consistency, figure readability, anonymity, venue compliance, and page balance. Revise and rerun the checks.
+The TODO registry is an immutable-snapshot artifact: it must use `.` as its root and
+paper-root-relative POSIX paths for every exact occurrence line. Regenerate it after
+any manuscript edit; project validation compares the entire registry, including paths,
+lines, and messages, rather than accepting an ID-only match.
+
+Invoke `paperjury:paperjury` after the first complete draft. Give each reviewer the same immutable manuscript snapshot but no other review or ledger; use at least three independent lenses covering domain novelty, method validity, and empirical/reproducibility risk. Every new reviewer JSON must use `schema_version: 2`; every blocking major must be an object with a reviewer-scoped stable `id`, a non-empty `evidence` or `evidence_anchor` containing an exact `file:line[-line]` or LaTeX label/ref that resolves inside the frozen snapshot, and a non-empty `required_fix`. String majors and semantic-similarity ledger binding are forbidden for new rounds. The orchestrator—not a reviewer—merges duplicates, adjudicates significance, applies author-authorized writing and claim-alignment edits, and queues issues that genuinely require new method or data. Use the official `schema/meta/issues` PaperJury ledger, and preserve each blocker ID with its round and reviewer provenance in the corresponding ledger row. Save each snapshot, three or more reviewer JSON files, and a derived `round_report.json` containing their hashes under `qa/paperjury/round_XX/`; render `LEDGER.md` from `LEDGER.json`, never by hand.
+
+After revision, create a new immutable snapshot and run a clean PaperJury round whose reviewers cannot see prior reports or the ledger. Continue until a clean round adds no fixable writing/claim-alignment issue and no gate-blocking or unadjudicated major issue remains; require at least two rounds. Save `qa/paperjury/final_report.json` with `status=pass`, `mode=review`, `author_authorized=true`, the artifact-derived round/reviewer counts, `converged=true`, zero ledger-derived blocking/unadjudicated majors, the current complete `paper/` source hash, and the final review-visible `.tex`/`.bib` snapshot hash. Validation must derive the pass from reviewer files, round manifests, snapshots, and the official ledger rather than trusting this summary. Rerun PaperJury after any later material claim, result-narrative, or layout/caption rewrite.
 
 Declare `SKETCH_COMPLETE` only when every non-experimental component is publication-quality and the only unresolved items are registered predicted results, qualitative placeholders, method alternatives, or a temporary-template update.
 

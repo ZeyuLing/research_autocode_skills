@@ -2,6 +2,8 @@
 
 Use the installed `imagegen` skill for every figure asset. This rule covers method overviews, module diagrams, teasers, bar/radar/chart images, qualitative comparisons, case-study layouts, and placeholders. Do not use any other drawing skill or render figures with SVG, TikZ, draw.io, plotting code, HTML, CSS, or canvas.
 
+The registered raster must be the graphical subject, not a provenance token. Inside a LaTeX `figure`, use only placement, centering, `includegraphics`, captions, labels, tracked draft macros, spacing, and ordinary raster `subfigure` environments. The validator rejects every unrecognized residual command or visible TeX body, including display math, text-built diagrams, outer `scalebox`/`resizebox`, `tabular`, `array`, `rule`, `minipage`, boxes, custom macros, and nested inputs. It also rejects author-side redefinition or dynamic construction of `includegraphics`; do not add a tiny registered image or alter raster-command semantics to evade the imagegen-only contract.
+
 LaTeX tables and mathematical equations remain LaTeX, not image assets.
 
 ## Imagegen execution

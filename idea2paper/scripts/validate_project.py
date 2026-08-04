@@ -9,6 +9,7 @@ import csv
 import difflib
 import hashlib
 import json
+import math
 import re
 import struct
 import zlib
@@ -16,7 +17,23 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from compile_paper import body_float_inventory, manual_pagination_commands, source_tree_sha256
+from compile_paper import (
+    CORE_BUILD_ARTIFACTS,
+    MATERIAL_OVERFULL_PT,
+    MEDIA_BOX_OVERFLOW_PT,
+    aux_label_page,
+    aux_label_record,
+    body_float_inventory,
+    body_float_tail_report,
+    document_column_mode_audit,
+    float_distribution_audit,
+    latex_overfull_boxes,
+    manual_pagination_commands,
+    rendered_media_box_overflows,
+    rendered_whitespace_audit,
+    source_tree_sha256,
+    tex_fuzz_register_uses,
+)
 from record_survey_run import CSV_REQUIRED as SURVEY_CSV_REQUIRED
 from record_survey_run import STANDARD_ARTIFACTS as SURVEY_STANDARD_ARTIFACTS
 from select_venue import SELECTION_RULE, TIER_RANK, evaluate as evaluate_venue
@@ -1394,22 +1411,220 @@ def validate_no_alternate_figure_backends(project: Path, errors: list[str]) -> N
             r"\\(?:input|include)\s*\{[^}]*\.(?:tikz|pgf|svg|asy)\}",
             re.IGNORECASE,
         ),
+        "protected raster command redefinition": re.compile(
+            r"\\(?:def|gdef|edef|xdef)\s*\\includegraphics\b"
+            r"|\\(?:newcommand|renewcommand|providecommand|DeclareRobustCommand)"
+            r"\*?\s*\{?\s*\\includegraphics\b"
+            r"|\\let\s*\\includegraphics\b"
+            r"|\\csname\s*includegraphics\s*\\endcsname",
+            re.IGNORECASE,
+        ),
     }
     paper_root = project / "paper"
-    for tex_path in paper_root.rglob("*.tex"):
+    figure_composition = re.compile(
+        r"\\begin\{(?:tabular\*?|tabularx|array|minipage|matrix|pmatrix|bmatrix|cases)\}"
+        r"|\\(?:rule|put|multiput|line|vector|oval|circle|fbox|framebox|parbox|shortstack|"
+        r"makebox|raisebox|colorbox|fcolorbox)\b",
+        re.IGNORECASE,
+    )
+    figure_include_re = re.compile(
+        r"\\includegraphics\*?(?:\[([^\]]*)\])?\s*\{([^}]+)\}", re.IGNORECASE
+    )
+
+    def raster_include_extent_points(options: str) -> float | None:
+        """Estimate explicit raster extent; unknown/natural sizes are not guessed."""
+
+        dimensions: list[float] = []
+        for match in re.finditer(
+            r"(?:width|height)\s*=\s*([0-9]*\.?[0-9]+)\s*"
+            r"(\\(?:line|text|column|paper)width|pt|bp|in|cm|mm)",
+            options,
+            re.IGNORECASE,
+        ):
+            value = float(match.group(1))
+            unit = match.group(2).lower()
+            if unit.startswith("\\"):
+                dimensions.append(value * 468.0)
+            else:
+                factors = {
+                    "pt": 1.0,
+                    "bp": 72.27 / 72.0,
+                    "in": 72.27,
+                    "cm": 28.4528,
+                    "mm": 2.84528,
+                }
+                dimensions.append(value * factors[unit])
+        if re.search(
+            r"(?:width|height)\s*=\s*\\(?:line|text|column|paper)width",
+            options,
+            re.IGNORECASE,
+        ):
+            dimensions.append(468.0)
+        if dimensions:
+            return max(dimensions)
+        scale = re.search(r"(?:^|,)\s*scale\s*=\s*([0-9]*\.?[0-9]+)", options)
+        if scale is not None and float(scale.group(1)) < 0.20:
+            return 0.0
+        return None
+
+    def balanced_end(source: str, start: int, opening: str, closing: str) -> int | None:
+        if start >= len(source) or source[start] != opening:
+            return None
+        depth = 0
+        index = start
+        while index < len(source):
+            character = source[index]
+            if character == "\\":
+                index += 2
+                continue
+            if character == opening:
+                depth += 1
+            elif character == closing:
+                depth -= 1
+                if depth == 0:
+                    return index + 1
+            index += 1
+        return None
+
+    def grouped_command_spans(
+        source: str,
+        command_pattern: str,
+        group_count: int,
+        *,
+        optional_bracket: bool = False,
+    ) -> list[tuple[int, int]]:
+        spans: list[tuple[int, int]] = []
+        for command in re.finditer(command_pattern, source, re.IGNORECASE):
+            cursor = command.end()
+            while cursor < len(source) and source[cursor].isspace():
+                cursor += 1
+            if optional_bracket and cursor < len(source) and source[cursor] == "[":
+                bracket_end = balanced_end(source, cursor, "[", "]")
+                if bracket_end is None:
+                    continue
+                cursor = bracket_end
+                while cursor < len(source) and source[cursor].isspace():
+                    cursor += 1
+            valid = True
+            for _ in range(group_count):
+                if cursor >= len(source) or source[cursor] != "{":
+                    valid = False
+                    break
+                group_end = balanced_end(source, cursor, "{", "}")
+                if group_end is None:
+                    valid = False
+                    break
+                cursor = group_end
+                while cursor < len(source) and source[cursor].isspace():
+                    cursor += 1
+            if valid:
+                spans.append((command.start(), cursor))
+        return spans
+
+    def unauthorized_figure_residue(figure_body: str) -> str:
+        """Return source not covered by the finite raster-figure grammar."""
+
+        spans: list[tuple[int, int]] = [
+            (include.start(), include.end())
+            for include in figure_include_re.finditer(figure_body)
+        ]
+        spans.extend(
+            grouped_command_spans(
+                figure_body,
+                r"\\(?:caption|subcaption)\*?(?![A-Za-z@])",
+                1,
+                optional_bracket=True,
+            )
+        )
+        spans.extend(
+            grouped_command_spans(
+                figure_body, r"\\(?:label|Description|captionsetup)\b", 1
+            )
+        )
+        spans.extend(
+            grouped_command_spans(
+                figure_body,
+                r"\\(?:PredResult|PredClaim|DraftChoice|QualPlaceholder|TemplateTODO)\b",
+                2,
+            )
+        )
+        spans.extend(
+            grouped_command_spans(figure_body, r"\\[hv]space\*?(?![A-Za-z@])", 1)
+        )
+        for pattern in (
+            r"\\begin\{subfigure\}(?:\[[^]]*\])?\s*\{[^}]*\}",
+            r"\\end\{subfigure\}",
+            r"\\(?:centering|raggedright|hfill|hfil|vfill|small|footnotesize|scriptsize|"
+            r"tiny|normalsize|par|noindent|phantomsubcaption|smallskip|medskip|bigskip|"
+            r"quad|qquad)\b",
+            r"\\\\(?:\[[^]]*\])?",
+        ):
+            spans.extend((match.start(), match.end()) for match in re.finditer(pattern, figure_body))
+
+        first = 0
+        while first < len(figure_body) and figure_body[first].isspace():
+            first += 1
+        if first < len(figure_body) and figure_body[first] == "[":
+            placement_end = balanced_end(figure_body, first, "[", "]")
+            if placement_end is not None:
+                spans.append((first, placement_end))
+
+        masked = list(figure_body)
+        for start, end in spans:
+            for index in range(start, min(end, len(masked))):
+                if masked[index] not in "\r\n":
+                    masked[index] = " "
+        return re.sub(r"\s+", " ", "".join(masked)).strip()
+
+    audited_sources = sorted(
+        {
+            *paper_root.rglob("*.tex"),
+            *paper_root.rglob("*.sty"),
+            *paper_root.rglob("*.cls"),
+        }
+    )
+    for tex_path in audited_sources:
         text = strip_tex_comments(tex_path.read_text(encoding="utf-8", errors="replace"))
         for label, pattern in forbidden_patterns.items():
             if pattern.search(text):
                 errors.append(f"{tex_path}: forbidden non-imagegen figure backend ({label})")
+        if tex_path.suffix.casefold() != ".tex":
+            continue
         for match in re.finditer(
             r"\\begin\{figure\*?\}([\s\S]*?)\\end\{figure\*?\}",
             text,
             re.IGNORECASE,
         ):
-            if not INCLUDE_RE.search(match.group(1)):
-                line_number = text.count("\n", 0, match.start()) + 1
+            figure_body = match.group(1)
+            line_number = text.count("\n", 0, match.start()) + 1
+            includes = list(figure_include_re.finditer(figure_body))
+            if not includes:
                 errors.append(
                     f"{tex_path}:{line_number}: figure environment has no registered raster includegraphics"
+                )
+                continue
+            if figure_composition.search(figure_body):
+                errors.append(
+                    f"{tex_path}:{line_number}: figure environment uses TeX composition primitives; "
+                    "the graphical subject must be a registered imagegen raster"
+                )
+            residue = unauthorized_figure_residue(figure_body)
+            if residue:
+                errors.append(
+                    f"{tex_path}:{line_number}: figure contains unauthorized TeX structure "
+                    f"outside the raster-layout grammar ({residue[:120]!r})"
+                )
+            explicit_extents = [
+                raster_include_extent_points(include.group(1) or "") for include in includes
+            ]
+            if (
+                explicit_extents
+                and all(extent is not None for extent in explicit_extents)
+                and sum(float(extent) for extent in explicit_extents if extent is not None) < 72.0
+            ):
+                errors.append(
+                    f"{tex_path}:{line_number}: every registered raster in the figure is explicitly "
+                    "token-sized; an imagegen asset must remain the graphical subject"
                 )
     for extension in ("*.svg", "*.tikz", "*.pgf", "*.asy"):
         for drawing_path in paper_root.rglob(extension):
@@ -1454,17 +1669,11 @@ def validate_todo_registry(
     registry = read_json(registry_path, errors)
     if registry.get("errors"):
         errors.append(f"{registry_path}: registry contains lint errors")
-    actual = {
-        (str(item.get("id", "")), str(item.get("type", "")), str(item.get("status", "")))
-        for item in todo_report.get("items", [])
-    }
-    recorded = {
-        (str(item.get("id", "")), str(item.get("type", "")), str(item.get("status", "")))
-        for item in registry.get("items", [])
-        if isinstance(item, dict)
-    }
-    if actual != recorded:
-        errors.append(f"{registry_path}: registry does not match current LaTeX draft macros/TODOs")
+    if registry != todo_report:
+        errors.append(
+            f"{registry_path}: registry does not exactly match current portable "
+            "LaTeX draft macro/TODO paths, lines, and messages"
+        )
 
 
 def validate_state_snapshots(project: Path, state: dict[str, Any], errors: list[str]) -> None:
@@ -1490,6 +1699,1276 @@ def validate_state_snapshots(project: Path, state: dict[str, Any], errors: list[
             )
 
 
+PAPERJURY_ACTIVE = {
+    "raised",
+    "in-trial",
+    "re-trial",
+    "under-discussion",
+    "maintain-pending-tiebreak",
+    "agreed-to-fix",
+    "agreed-to-fix-modified",
+    "valid-fixable",
+    "author-required",
+}
+PAPERJURY_GATE_BLOCKING = {"raised", "in-trial", "re-trial", "valid-fixable"}
+PAPERJURY_TERMINAL = {"closed", "withdrawn", "override", "dropped", "queued"}
+
+
+def paperjury_review_tree_sha256(root: Path) -> str:
+    """Hash the review-visible manuscript text, excluding compiled/template assets."""
+
+    paths = sorted(
+        (
+            path
+            for path in root.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".tex", ".bib"}
+        ),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
+    digest = hashlib.sha256()
+    for path in paths:
+        digest.update(path.relative_to(root).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(bytes.fromhex(sha256_file(path)))
+    return digest.hexdigest()
+
+
+def paperjury_significance(row: dict[str, Any]) -> str | None:
+    significance = row.get("significance")
+    if significance in {"major", "minor"}:
+        return str(significance)
+    severity = row.get("severity")
+    if severity in {"blocker", "major"}:
+        return "major"
+    if severity in {"minor", "nit"}:
+        return "minor"
+    return None
+
+
+def paperjury_ledger_facts(
+    ledger: dict[str, Any], path: Path, errors: list[str]
+) -> dict[str, int]:
+    facts = {
+        "active": 0,
+        "active_major": 0,
+        "active_minor": 0,
+        "author_required": 0,
+        "gate_blocking_major": 0,
+        "unadjudicated_major": 0,
+    }
+    if ledger.get("schema") != 1:
+        errors.append(f"{path}: expected the PaperJury ledger schema field schema=1")
+    meta = ledger.get("meta")
+    if not isinstance(meta, dict):
+        errors.append(f"{path}: missing PaperJury meta object")
+    elif not isinstance(meta.get("assignment_unverified", []), list):
+        errors.append(f"{path}: meta.assignment_unverified must be a list")
+    issues = ledger.get("issues")
+    if not isinstance(issues, list):
+        errors.append(f"{path}: issues must be a list")
+        return facts
+    seen_ids: set[str] = set()
+    valid_statuses = PAPERJURY_ACTIVE | PAPERJURY_TERMINAL
+    for index, raw in enumerate(issues, start=1):
+        if not isinstance(raw, dict):
+            errors.append(f"{path}: issue {index} is not an object")
+            continue
+        issue_id = str(raw.get("id", ""))
+        if not re.fullmatch(r"I-\d+", issue_id) or issue_id in seen_ids:
+            errors.append(f"{path}: issue {index} has an invalid or duplicate id")
+        seen_ids.add(issue_id)
+        significance = paperjury_significance(raw)
+        if significance not in {"major", "minor"}:
+            errors.append(f"{path}: {issue_id or index} has no valid significance")
+        if raw.get("kind") not in {"mechanical", "substantive"}:
+            errors.append(f"{path}: {issue_id or index} has no valid kind")
+        status = str(raw.get("status", ""))
+        if status not in valid_statuses:
+            errors.append(f"{path}: {issue_id or index} has invalid status {status!r}")
+            continue
+        if status == "valid-fixable" and not str(raw.get("close_criterion", "")).strip():
+            errors.append(f"{path}: {issue_id or index} is valid-fixable without a close criterion")
+        if status == "dropped" and not str(raw.get("notes", "")).strip():
+            errors.append(f"{path}: {issue_id or index} was silently dropped")
+        raised_by = raw.get("raised_by", [])
+        if not isinstance(raised_by, list) or not all(
+            isinstance(item, str) and item.strip() for item in raised_by
+        ):
+            errors.append(f"{path}: {issue_id or index} has invalid raised_by provenance")
+        if status in PAPERJURY_ACTIVE:
+            facts["active"] += 1
+            if significance == "major":
+                facts["active_major"] += 1
+            elif significance == "minor":
+                facts["active_minor"] += 1
+        if status == "author-required":
+            facts["author_required"] += 1
+        if significance == "major" and status in PAPERJURY_GATE_BLOCKING:
+            facts["gate_blocking_major"] += 1
+        if (
+            significance == "major"
+            and status in {"raised", "in-trial", "re-trial"}
+            and raw.get("verdict") is None
+        ):
+            facts["unadjudicated_major"] += 1
+    return facts
+
+
+def render_paperjury_ledger(ledger: dict[str, Any], facts: dict[str, int]) -> str:
+    """Render the official PaperJury v3 Markdown view for integrity checking."""
+
+    def cell(value: Any) -> str:
+        return str("" if value is None else value).replace("|", r"\|").replace("\r", " ").replace("\n", " ").strip()
+
+    def status_cell(row: dict[str, Any]) -> str:
+        tag = row.get("reason_code") or row.get("verdict")
+        return cell(str(row.get("status", "")) + (f" ({tag})" if tag else ""))
+
+    meta = ledger.get("meta") if isinstance(ledger.get("meta"), dict) else {}
+    issues = [item for item in ledger.get("issues", []) if isinstance(item, dict)]
+    rank = {"major": 0, "minor": 1}
+    issues.sort(
+        key=lambda row: (
+            0 if str(row.get("status", "")) in PAPERJURY_ACTIVE else 1,
+            rank.get(paperjury_significance(row) or "", 9),
+            str(row.get("id", "")),
+        )
+    )
+    lines = [
+        "# Ledger (rendered view -- do not edit; source of truth is the .json)",
+        "",
+        f"Manuscript: {meta.get('manuscript') or '(unset)'} | venue: {meta.get('venue_family') or '(unset)'}",
+    ]
+    assignments = meta.get("assignment_unverified", [])
+    if isinstance(assignments, list) and assignments:
+        lines.append("Assignment-unverified reviewers: " + ", ".join(map(str, assignments)))
+    lines.extend(
+        [
+            "",
+            f"Active: {facts['active']} (major {facts['active_major']}, minor {facts['active_minor']}; "
+            f"author-required {facts['author_required']}). Completion gate (0 gate-blocking active major): "
+            f"{'PASS' if facts['gate_blocking_major'] == 0 else 'FAIL'} "
+            f"(gate-blocking majors: {facts['gate_blocking_major']}).",
+            "",
+            "| id | sig | kind | status | section | summary | close_criterion | by | rounds |",
+            "|----|-----|------|--------|---------|---------|-----------------|----|--------|",
+        ]
+    )
+    for row in issues:
+        rounds = "->".join(
+            str(value)
+            for value in (row.get("round_raised"), row.get("round_closed"))
+            if value is not None
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    cell(row.get("id")),
+                    cell(paperjury_significance(row)),
+                    cell(row.get("kind")),
+                    status_cell(row),
+                    cell(row.get("section")),
+                    cell(row.get("summary")),
+                    cell(row.get("close_criterion")),
+                    cell(",".join(map(str, row.get("raised_by", [])))),
+                    cell(rounds),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
+PAPERJURY_FINDING_ID_FIELDS = ("id", "finding_id", "issue_id")
+PAPERJURY_REVIEWER_SCHEMA_VERSION = 2
+PAPERJURY_LEGACY_SIMILARITY_MINIMUM = 0.105
+# One-time migration allowlist for the immutable MotionPlanner R1--R7 artifacts.
+# Compatibility is granted only when both the review-visible snapshot and every
+# reviewer file match these digests; a newly named ``round_07`` cannot opt in.
+PAPERJURY_LEGACY_MIGRATION: dict[int, dict[str, Any]] = {
+    1: {
+        "snapshot_sha256": "07e970bae7d9f9c1f54a56d712c59132376bf3af2bbd8c6be84b1a8db779d9b6",
+        "reviewer_files": {
+            "reviewer_empirical.json": "d4276deef77e2373fa948646cf03553f9f43f7f505112302fc6be468166313f9",
+            "reviewer_novelty.json": "1894053fa9d6cb6be1b75b4dc0cc4385ceea989c9d18fefdba504ea0044039ec",
+            "reviewer_planning.json": "834d302ff4e74808db423c44b1562ccb7550e0a36d4bb6a7f90038af240452d3",
+        },
+    },
+    2: {
+        "snapshot_sha256": "6cf5c6ddfae8bbaed50d016b9d3602bf7539b89db51b7399bc6b1c982e074229",
+        "reviewer_files": {
+            "reviewer_claims.json": "41d05b6d176471ad89ec67aac5162fbfff663dbb7801a74c779f4c21c0ea7d44",
+            "reviewer_design.json": "9569af0b018f793d0e84b2c44f950ef1cb254e4f97ecc4de4b6faa79ee47f424",
+            "reviewer_repro.json": "1f5f993e04d002b83d0a2191714385cec086c5b57c1de861528aae514b54b8a3",
+        },
+    },
+    3: {
+        "snapshot_sha256": "1c73b7b20efe481a34608ac735413865d49cbf9e124ed3115b8601a2bc2f8996",
+        "reviewer_files": {
+            "reviewer_claims.json": "6ef1527b9fe33bc5a06b1c49195d6b9cc26714388ce5826d1f4f8e812c0a47c2",
+            "reviewer_design.json": "8eb1f630d47abe8aa59bde0026f9168068daa62953096ccae7f123b6da6f3bf7",
+            "reviewer_repro.json": "cd2bb6532a4f0d156bd785ce7a2b05195e7a1369ccc958f29c4872eb59639842",
+        },
+    },
+    4: {
+        "snapshot_sha256": "03153e00f732a896cff923a0249bb772e94390715305013e898ef62d7ae28da0",
+        "reviewer_files": {
+            "reviewer_claims.json": "8556451d3d74f7a90cdef2c52a042104cef537f9e9bf61d516c1462d7af9a0fb",
+            "reviewer_design.json": "b7c915e20f7397b615fab6114be32296a53c4a2e306c3b05efa502f410473fb9",
+            "reviewer_repro.json": "b8cc2e0841181f91ab597c433342122dc49dd31121f38b8da97c25f229eaef18",
+        },
+    },
+    5: {
+        "snapshot_sha256": "9dbbb842081fab37e0906c992707589fb550023fca05f6d5ab547289e9d6127a",
+        "reviewer_files": {
+            "reviewer_claims.json": "bc2e402b38957ebde871608a841585cb55c5c7d521acd77699c392f00868cabd",
+            "reviewer_design.json": "10c14e509255e6fceb689cbc2defae2fbb9196638b07b05069c3e04c6373e3bc",
+            "reviewer_repro.json": "f508bcdb30e9f975fcabd7f81d76244c94a78a510e1859930f3abccd42b1b26d",
+        },
+    },
+    6: {
+        "snapshot_sha256": "1e9451fdffc8b4ad59bb0a8e6b6288aa7d2487d25d92edfe8e5df203cedec332",
+        "reviewer_files": {
+            "reviewer_claims.json": "1ac0cdc80bc02b63847695b032ec2d48e2621d2061eaaf1d6798219f2cd1f59e",
+            "reviewer_design.json": "9c8a368a91adaaa5f0672668a86e4fa45908abf5d0bf1fa0a7da9b4bfd02973b",
+            "reviewer_repro.json": "955dc189a98a11cce8b822a7c55b194b2b9ad9096516916dbf59a998df1d6728",
+        },
+    },
+    7: {
+        "snapshot_sha256": "0ff9a93c3b055d7cc7beb049c67b87251e6c8eff0865dc19a8dbbc4aa28dd80c",
+        "reviewer_files": {
+            "reviewer_claims.json": "440988590bfc0d91ffcad3d46cf17bf7414563c49813863f44ebacb88ec4e6bd",
+            "reviewer_design.json": "0c54a40a0abbee6cfe34f5f1e90d6c987511121e1478b2da6aa24785f043768f",
+            "reviewer_repro.json": "e6798daefd568ca03cea0b218e560657270b7c79aaa1ae3064acf3e976ff5cd8",
+        },
+    },
+}
+PAPERJURY_LEDGER_PROVENANCE_FIELDS = (
+    "passage_id",
+    "references",
+    "notes",
+)
+PAPERJURY_FINDING_TEXT_FIELDS = (
+    "title",
+    "issue",
+    "finding",
+    "evidence",
+    "why_blocking",
+    "required_fix",
+)
+PAPERJURY_BINDING_STOPWORDS = {
+    "about",
+    "after",
+    "again",
+    "against",
+    "also",
+    "among",
+    "and",
+    "are",
+    "because",
+    "been",
+    "before",
+    "being",
+    "between",
+    "but",
+    "cannot",
+    "could",
+    "does",
+    "each",
+    "for",
+    "from",
+    "have",
+    "into",
+    "must",
+    "not",
+    "only",
+    "other",
+    "should",
+    "that",
+    "the",
+    "their",
+    "then",
+    "these",
+    "this",
+    "through",
+    "under",
+    "use",
+    "when",
+    "which",
+    "while",
+    "with",
+    "without",
+    "would",
+}
+
+
+def paperjury_finding_identity(
+    round_number: int,
+    reviewer_id: str,
+    index: int,
+    finding: Any,
+) -> dict[str, Any] | None:
+    """Derive a stable reviewer-scoped identity from an immutable finding."""
+
+    external_id: str | None = None
+    if isinstance(finding, str):
+        text = finding.strip()
+        canonical: Any = text
+    elif isinstance(finding, dict):
+        for field in PAPERJURY_FINDING_ID_FIELDS:
+            value = str(finding.get(field, "")).strip()
+            if value:
+                external_id = value
+                break
+        text = " ".join(
+            str(finding.get(field, "")).strip()
+            for field in PAPERJURY_FINDING_TEXT_FIELDS
+            if str(finding.get(field, "")).strip()
+        )
+        canonical = finding
+    else:
+        return None
+    if not text:
+        return None
+    fingerprint = hashlib.sha256(
+        json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode(
+            "utf-8"
+        )
+    ).hexdigest()
+    local_identity = external_id or f"sha256:{fingerprint}"
+    return {
+        "identity": f"round={round_number};reviewer={reviewer_id};finding={local_identity}",
+        "external_id": external_id,
+        "fingerprint": fingerprint,
+        "text": text,
+        "index": index,
+    }
+
+
+def validate_paperjury_major_finding(
+    finding: Any,
+    reviewer_path: Path,
+    index: int,
+    errors: list[str],
+    snapshot: Path | None = None,
+) -> str | None:
+    """Validate one schema-v2 major and return its explicit stable finding ID."""
+
+    label = f"{reviewer_path}: blocking finding {index}"
+    if not isinstance(finding, dict):
+        errors.append(f"{label} must be an object under reviewer schema v2")
+        return None
+    finding_id = next(
+        (
+            str(finding.get(field, "")).strip()
+            for field in PAPERJURY_FINDING_ID_FIELDS
+            if str(finding.get(field, "")).strip()
+        ),
+        "",
+    )
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.:-]{1,127}", finding_id):
+        errors.append(f"{label} requires an explicit stable id")
+        finding_id = ""
+    raw_evidence = finding.get("evidence_anchor")
+    if not isinstance(raw_evidence, str) or not raw_evidence.strip():
+        raw_evidence = finding.get("evidence")
+    evidence = raw_evidence.strip() if isinstance(raw_evidence, str) else ""
+    file_locator = re.compile(
+        r"(?<![A-Za-z0-9_./\\-])"
+        r"(?P<path>[A-Za-z0-9_./\\-]+\.(?:tex|bib|md|csv|json|ya?ml))"
+        r":(?P<start>\d+)(?:(?:--?|\.\.)(?P<end>\d+))?",
+        re.IGNORECASE,
+    )
+    ref_locator = re.compile(
+        r"\\(?:ref|autoref|cref|Cref)\{(?P<label>[A-Za-z0-9_.:-]+)\}",
+        re.IGNORECASE,
+    )
+    bare_label_locator = re.compile(
+        r"\b(?P<label>(?:fig|tab|sec|eq|alg|lst|app):[A-Za-z0-9_.:-]+)\b",
+        re.IGNORECASE,
+    )
+    file_matches = list(file_locator.finditer(evidence))
+    label_tokens = {
+        match.group("label") for match in ref_locator.finditer(evidence)
+    } | {
+        match.group("label") for match in bare_label_locator.finditer(evidence)
+    }
+    if not evidence:
+        errors.append(f"{label} requires a non-empty evidence anchor")
+    elif not file_matches and not label_tokens:
+        errors.append(
+            f"{label} evidence must contain an exact file:line/range or LaTeX label/ref anchor"
+        )
+    elif snapshot is not None:
+        snapshot_root = snapshot.resolve()
+        valid_anchor = False
+        for match in file_matches:
+            relative_text = match.group("path").replace("\\", "/")
+            relative = Path(relative_text)
+            candidates = [snapshot_root / relative]
+            if relative.parts and relative.parts[0].casefold() == "paper":
+                candidates.append(snapshot_root.joinpath(*relative.parts[1:]))
+            resolved_file: Path | None = None
+            for candidate in candidates:
+                try:
+                    resolved = candidate.resolve()
+                    resolved.relative_to(snapshot_root)
+                except (OSError, ValueError):
+                    continue
+                if resolved.is_file():
+                    resolved_file = resolved
+                    break
+            if resolved_file is None:
+                errors.append(
+                    f"{label} evidence path does not resolve inside the frozen snapshot: "
+                    f"{match.group('path')}"
+                )
+                continue
+            try:
+                start_line = int(match.group("start"))
+                end_line = int(match.group("end") or match.group("start"))
+            except ValueError:
+                start_line = end_line = 0
+            line_count = len(
+                resolved_file.read_text(encoding="utf-8", errors="replace").splitlines()
+            )
+            if start_line < 1 or end_line < start_line or end_line > line_count:
+                errors.append(
+                    f"{label} evidence line range is outside the frozen snapshot file: "
+                    f"{match.group(0)} (file has {line_count} lines)"
+                )
+                continue
+            valid_anchor = True
+        if label_tokens:
+            tex_sources = [
+                path.read_text(encoding="utf-8", errors="replace")
+                for path in snapshot_root.rglob("*.tex")
+                if path.is_file()
+            ]
+            for token in sorted(label_tokens):
+                label_pattern = re.compile(rf"\\label\{{{re.escape(token)}\}}")
+                if any(label_pattern.search(source) for source in tex_sources):
+                    valid_anchor = True
+                else:
+                    errors.append(
+                        f"{label} evidence label does not exist in the frozen snapshot: {token}"
+                    )
+        if not valid_anchor:
+            errors.append(f"{label} has no resolvable exact anchor in the frozen snapshot")
+    if not str(finding.get("required_fix", "")).strip():
+        errors.append(f"{label} requires a non-empty required_fix")
+    return finding_id or None
+
+
+def _paperjury_issue_order(row: dict[str, Any]) -> tuple[int, str]:
+    match = re.fullmatch(r"I-(\d+)", str(row.get("id", "")))
+    return (int(match.group(1)), str(row.get("id", ""))) if match else (10**9, str(row.get("id", "")))
+
+
+def _paperjury_provenance_contains(row: dict[str, Any], token: str) -> bool:
+    pattern = re.compile(
+        rf"(?<![A-Za-z0-9_.-]){re.escape(token)}(?![A-Za-z0-9_.-])",
+        re.IGNORECASE,
+    )
+    return any(
+        pattern.search(str(row.get(field, ""))) is not None
+        for field in PAPERJURY_LEDGER_PROVENANCE_FIELDS
+    )
+
+
+def _paperjury_binding_tokens(value: str) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[A-Za-z0-9]+", value.casefold())
+        if len(token) >= 3 and token not in PAPERJURY_BINDING_STOPWORDS
+    }
+
+
+def _paperjury_legacy_similarity(finding_text: str, row: dict[str, Any]) -> float:
+    left = _paperjury_binding_tokens(finding_text)
+    right = _paperjury_binding_tokens(
+        " ".join(
+            str(row.get(field, ""))
+            for field in ("section", "summary", "evidence_anchor", "close_criterion", "notes")
+        )
+    )
+    return len(left & right) / len(left | right) if left and right else 0.0
+
+
+def paperjury_bind_blocking_findings(
+    ledger: dict[str, Any],
+    round_number: int,
+    reviewer_id: str,
+    findings: list[Any],
+    reviewer_path: Path,
+    errors: list[str],
+    *,
+    allow_legacy: bool = False,
+) -> list[dict[str, Any]]:
+    """Bind every reviewer blocker to one major ledger row from that reviewer/round."""
+
+    identities: list[dict[str, Any]] = []
+    seen_identities: set[str] = set()
+    for index, finding in enumerate(findings, start=1):
+        identity = paperjury_finding_identity(round_number, reviewer_id, index, finding)
+        if identity is None:
+            errors.append(f"{reviewer_path}: blocking finding {index} has no stable identity text")
+            continue
+        if identity["identity"] in seen_identities:
+            errors.append(f"{reviewer_path}: duplicate blocking finding identity {identity['identity']}")
+            continue
+        seen_identities.add(identity["identity"])
+        identities.append(identity)
+
+    rows = []
+    for raw in ledger.get("issues", []) if isinstance(ledger.get("issues"), list) else []:
+        if not isinstance(raw, dict) or paperjury_significance(raw) != "major":
+            continue
+        try:
+            raised_round = int(raw.get("round_raised", -1))
+        except (TypeError, ValueError):
+            continue
+        raised_by = raw.get("raised_by", [])
+        if (
+            raised_round == round_number
+            and isinstance(raised_by, list)
+            and reviewer_id.casefold() in {str(value).casefold() for value in raised_by}
+        ):
+            rows.append(raw)
+    rows.sort(key=_paperjury_issue_order)
+
+    bindings: list[dict[str, Any]] = []
+    used_rows: set[str] = set()
+    legacy: list[dict[str, Any]] = []
+    for identity in identities:
+        token = identity["external_id"]
+        if token:
+            candidates = [row for row in rows if _paperjury_provenance_contains(row, token)]
+            if len(candidates) > 1:
+                errors.append(
+                    f"{reviewer_path}: blocker {identity['identity']} must bind to exactly one "
+                    f"major LEDGER.json row from round {round_number}; found {len(candidates)}"
+                )
+                continue
+            if len(candidates) == 1:
+                ledger_id = str(candidates[0].get("id", ""))
+                if ledger_id in used_rows:
+                    errors.append(
+                        f"{reviewer_path}: blockers reuse ledger row {ledger_id}; finding identities must be one-to-one per reviewer"
+                    )
+                    continue
+                used_rows.add(ledger_id)
+                bindings.append(
+                    {"finding_identity": identity["identity"], "ledger_issue_id": ledger_id, "mode": "explicit-id"}
+                )
+                continue
+            if allow_legacy:
+                # Frozen pre-v2 ledgers sometimes retained the stable ID only in
+                # the reviewer artifact. The finite migration path below is never
+                # available to a schema-v2/new round.
+                legacy.append(identity)
+            else:
+                errors.append(
+                    f"{reviewer_path}: blocker {identity['identity']} has no LEDGER.json row with "
+                    "that exact finding id and round/reviewer provenance"
+                )
+            continue
+
+        fingerprint_token = f"sha256:{identity['fingerprint']}"
+        fingerprint_rows = [
+            row for row in rows if _paperjury_provenance_contains(row, fingerprint_token)
+        ]
+        if len(fingerprint_rows) == 1:
+            ledger_id = str(fingerprint_rows[0].get("id", ""))
+            if ledger_id not in used_rows:
+                used_rows.add(ledger_id)
+                bindings.append(
+                    {
+                        "finding_identity": identity["identity"],
+                        "ledger_issue_id": ledger_id,
+                        "mode": "content-fingerprint",
+                    }
+                )
+                continue
+        elif len(fingerprint_rows) > 1:
+            errors.append(
+                f"{reviewer_path}: blocker {identity['identity']} has ambiguous fingerprint provenance"
+            )
+            continue
+        if allow_legacy:
+            legacy.append(identity)
+        else:
+            errors.append(
+                f"{reviewer_path}: blocker {identity['identity']} requires an explicit stable "
+                "finding id and exact LEDGER.json provenance"
+            )
+
+    # The migration-only branch is restricted by the caller to the immutable
+    # pre-v2 round range. New reviewers cannot use semantic binding.
+    scored_pairs: list[tuple[float, str, str, dict[str, Any], dict[str, Any]]] = []
+    for identity in legacy:
+        for row in rows:
+            ledger_id = str(row.get("id", ""))
+            if ledger_id in used_rows:
+                continue
+            score = _paperjury_legacy_similarity(str(identity["text"]), row)
+            scored_pairs.append(
+                (-score, str(identity["identity"]), ledger_id, identity, row)
+            )
+    scored_pairs.sort(key=lambda item: (item[0], item[1], _paperjury_issue_order(item[4])))
+    assigned_legacy: set[str] = set()
+    for negative_score, _, ledger_id, identity, _ in scored_pairs:
+        identity_key = str(identity["identity"])
+        if identity_key in assigned_legacy or ledger_id in used_rows:
+            continue
+        score = -negative_score
+        if score < PAPERJURY_LEGACY_SIMILARITY_MINIMUM:
+            continue
+        assigned_legacy.add(identity_key)
+        used_rows.add(ledger_id)
+        bindings.append(
+            {
+                "finding_identity": identity_key,
+                "ledger_issue_id": ledger_id,
+                "mode": (
+                    "legacy-semantic-external-id"
+                    if identity.get("external_id")
+                    else "legacy-semantic"
+                ),
+                "similarity": round(score, 4),
+            }
+        )
+    for identity in legacy:
+        if str(identity["identity"]) not in assigned_legacy:
+            errors.append(
+                f"{reviewer_path}: blocker {identity['identity']} has no matching major "
+                f"LEDGER.json row with the same round/reviewer provenance"
+            )
+    return sorted(bindings, key=lambda item: item["finding_identity"])
+
+
+def validate_paperjury_review(project: Path, errors: list[str]) -> None:
+    root = project / "qa/paperjury"
+    ledger_json = root / "LEDGER.json"
+    ledger_markdown = root / "LEDGER.md"
+    final_path = root / "final_report.json"
+    ledger: dict[str, Any] = {}
+    ledger_facts = {
+        "gate_blocking_major": -1,
+        "unadjudicated_major": -1,
+    }
+    if not ledger_json.exists() or not ledger_markdown.exists():
+        errors.append("qa/paperjury: missing PaperJury LEDGER.json or LEDGER.md")
+    else:
+        ledger = read_json(ledger_json, errors)
+        ledger_facts = paperjury_ledger_facts(ledger, ledger_json, errors)
+        expected_markdown = render_paperjury_ledger(ledger, ledger_facts).replace("\r\n", "\n")
+        actual_markdown = ledger_markdown.read_text(encoding="utf-8", errors="replace").replace(
+            "\r\n", "\n"
+        )
+        if actual_markdown != expected_markdown:
+            errors.append("qa/paperjury/LEDGER.md: rendered view is stale or was hand-edited")
+    if not final_path.exists():
+        errors.append("qa/paperjury/final_report.json: missing adversarial review result")
+        return
+    report = read_json(final_path, errors)
+    if report.get("status") != "pass" or report.get("mode") != "review":
+        errors.append("qa/paperjury/final_report.json: review status must be pass")
+    if report.get("author_authorized") is not True:
+        errors.append("qa/paperjury/final_report.json: author authorization is not recorded")
+    try:
+        rounds = int(report.get("rounds", 0))
+        reviewer_count = int(report.get("reviewer_count", 0))
+        blocking_major = int(report.get("gate_blocking_major", -1))
+        unadjudicated_major = int(report.get("unadjudicated_major", -1))
+    except (TypeError, ValueError):
+        rounds = reviewer_count = 0
+        blocking_major = unadjudicated_major = -1
+    if rounds < 2:
+        errors.append("qa/paperjury/final_report.json: at least two isolated review rounds are required")
+    if reviewer_count < 3:
+        errors.append("qa/paperjury/final_report.json: at least three reviewer lenses are required")
+    if report.get("converged") is not True:
+        errors.append("qa/paperjury/final_report.json: adversarial review has not converged")
+    if blocking_major != 0 or unadjudicated_major != 0:
+        errors.append("qa/paperjury/final_report.json: blocking or unadjudicated major issues remain")
+    if blocking_major != ledger_facts.get("gate_blocking_major"):
+        errors.append("qa/paperjury/final_report.json: gate count does not match LEDGER.json")
+    if unadjudicated_major != ledger_facts.get("unadjudicated_major"):
+        errors.append("qa/paperjury/final_report.json: unadjudicated count does not match LEDGER.json")
+    if report.get("source_sha256") != source_tree_sha256(project / "paper"):
+        errors.append("qa/paperjury/final_report.json: review is stale for the current manuscript")
+    completed_rounds = sorted(
+        path for path in root.glob("round_[0-9][0-9]") if path.is_dir()
+    )
+    v2_cutover_rounds: set[int] = set()
+    for candidate_round in completed_rounds:
+        candidate_reviewers = sorted(candidate_round.glob("reviewer_*.json"))
+        if len(candidate_reviewers) < 3:
+            continue
+        candidate_schemas: list[Any] = []
+        for candidate_reviewer in candidate_reviewers:
+            try:
+                candidate_payload = json.loads(
+                    candidate_reviewer.read_text(encoding="utf-8", errors="replace")
+                )
+            except (OSError, json.JSONDecodeError):
+                candidate_payload = {}
+            candidate_schemas.append(
+                candidate_payload.get("schema_version")
+                if isinstance(candidate_payload, dict)
+                else None
+            )
+        if all(
+            isinstance(schema, int)
+            and not isinstance(schema, bool)
+            and schema == PAPERJURY_REVIEWER_SCHEMA_VERSION
+            for schema in candidate_schemas
+        ):
+            v2_cutover_rounds.add(int(candidate_round.name.split("_")[-1]))
+    verified_rounds: list[dict[str, Any]] = []
+    for round_path in completed_rounds:
+        round_number = int(round_path.name.split("_")[-1])
+        snapshot = round_path / "snapshot"
+        manifest_path = round_path / "round_report.json"
+        if not snapshot.is_dir() or not manifest_path.is_file():
+            errors.append(f"{round_path}: missing frozen snapshot or round_report.json")
+            continue
+        manifest = read_json(manifest_path, errors)
+        reviewer_paths = sorted(round_path.glob("reviewer_*.json"))
+        snapshot_hash = paperjury_review_tree_sha256(snapshot)
+        raw_reviewer_hashes = {
+            reviewer_path.name: sha256_file(reviewer_path)
+            for reviewer_path in reviewer_paths
+        }
+        legacy_expected = PAPERJURY_LEGACY_MIGRATION.get(round_number)
+        legacy_round_allowed = bool(
+            legacy_expected
+            and legacy_expected.get("snapshot_sha256") == snapshot_hash
+            and legacy_expected.get("reviewer_files") == raw_reviewer_hashes
+        )
+        reviewers: list[dict[str, Any]] = []
+        reviewer_hashes: dict[str, str] = {}
+        reviewer_ids: set[str] = set()
+        total_blocking = 0
+        total_minor = 0
+        all_pass = True
+        finding_bindings: list[dict[str, Any]] = []
+        for reviewer_path in reviewer_paths:
+            reviewer = read_json(reviewer_path, errors)
+            reviewer_id = str(reviewer.get("reviewer_id", "")).strip()
+            status = reviewer.get("status")
+            reviewer_schema = reviewer.get("schema_version")
+            current_schema = (
+                isinstance(reviewer_schema, int)
+                and not isinstance(reviewer_schema, bool)
+                and reviewer_schema == PAPERJURY_REVIEWER_SCHEMA_VERSION
+            )
+            legacy_schema = (
+                legacy_round_allowed
+                and (
+                    reviewer_schema is None
+                    or (
+                        isinstance(reviewer_schema, int)
+                        and not isinstance(reviewer_schema, bool)
+                        and reviewer_schema == 1
+                    )
+                )
+                and any(cutover_round > round_number for cutover_round in v2_cutover_rounds)
+            )
+            if not current_schema and not legacy_schema:
+                errors.append(
+                    f"{reviewer_path}: reviewer schema_version must be "
+                    f"{PAPERJURY_REVIEWER_SCHEMA_VERSION}; legacy compatibility requires an "
+                    "exact snapshot/reviewer digest in the built-in migration allowlist"
+                )
+            majors = reviewer.get("blocking_major_findings")
+            if majors is None and legacy_schema:
+                majors = reviewer.get("major_findings")
+            minors = reviewer.get("minor_findings", [])
+            if (
+                not reviewer_id
+                or reviewer_id in reviewer_ids
+                or status not in {"pass", "revise"}
+                or not isinstance(majors, list)
+                or not isinstance(minors, list)
+                or not isinstance(reviewer.get("queued_empirical", []), list)
+                or not str(reviewer.get("verdict_rationale", "")).strip()
+            ):
+                errors.append(f"{reviewer_path}: invalid isolated reviewer report schema")
+                continue
+            major_ids: set[str] = set()
+            if current_schema:
+                for finding_index, finding in enumerate(majors, start=1):
+                    finding_id = validate_paperjury_major_finding(
+                        finding, reviewer_path, finding_index, errors, snapshot
+                    )
+                    if finding_id and finding_id in major_ids:
+                        errors.append(
+                            f"{reviewer_path}: duplicate blocking finding id {finding_id}"
+                        )
+                    if finding_id:
+                        major_ids.add(finding_id)
+            reviewer_ids.add(reviewer_id)
+            reviewer_hashes[reviewer_path.name] = sha256_file(reviewer_path)
+            total_blocking += len(majors)
+            total_minor += len(minors)
+            all_pass = all_pass and status == "pass" and not majors and not minors
+            finding_bindings.extend(
+                paperjury_bind_blocking_findings(
+                    ledger,
+                    round_number,
+                    reviewer_id,
+                    majors,
+                    reviewer_path,
+                    errors,
+                    allow_legacy=legacy_schema,
+                )
+            )
+            reviewers.append(reviewer)
+        derived_status = "pass" if all_pass and len(reviewers) >= 3 else "revise"
+        if manifest.get("schema_version") != 1 or manifest.get("round") != round_number:
+            errors.append(f"{manifest_path}: invalid round manifest identity")
+        if manifest.get("snapshot_sha256") != snapshot_hash:
+            errors.append(f"{manifest_path}: frozen snapshot hash mismatch")
+        if manifest.get("reviewer_files") != reviewer_hashes:
+            errors.append(f"{manifest_path}: reviewer file hashes are stale or incomplete")
+        if manifest.get("reviewer_count") != len(reviewers) or len(reviewers) < 3:
+            errors.append(f"{manifest_path}: each round requires three valid isolated reviewers")
+        if manifest.get("blocking_major_findings") != total_blocking:
+            errors.append(f"{manifest_path}: blocking-major count does not match reviewer reports")
+        if manifest.get("status") != derived_status:
+            errors.append(f"{manifest_path}: status does not match reviewer reports")
+        verified_rounds.append(
+            {
+                "round": round_number,
+                "reviewer_count": len(reviewers),
+                "status": derived_status,
+                "snapshot_sha256": snapshot_hash,
+                "minor_findings": total_minor,
+                "finding_bindings": finding_bindings,
+            }
+        )
+    if len(verified_rounds) < 2:
+        errors.append("qa/paperjury: fewer than two verified isolated review rounds")
+    else:
+        final_round = verified_rounds[-1]
+        if final_round["status"] != "pass":
+            errors.append("qa/paperjury: final clean round did not pass all reviewer lenses")
+        current_review_hash = paperjury_review_tree_sha256(project / "paper")
+        if final_round["snapshot_sha256"] != current_review_hash:
+            errors.append("qa/paperjury: final clean-round snapshot is stale")
+        if report.get("review_snapshot_sha256") != current_review_hash:
+            errors.append("qa/paperjury/final_report.json: review snapshot hash is stale")
+        if rounds != len(verified_rounds):
+            errors.append("qa/paperjury/final_report.json: round count is not derived from artifacts")
+        if reviewer_count != final_round["reviewer_count"]:
+            errors.append("qa/paperjury/final_report.json: reviewer count is not derived from final round")
+
+
+def validate_layout_report_status(report: dict[str, Any], errors: list[str]) -> None:
+    if report.get("status") != "pass":
+        errors.append("qa/layout_report.json: LaTeX build or page check did not pass")
+        return
+    if report.get("errors") != []:
+        errors.append("qa/layout_report.json: passing report must contain errors=[]")
+    if report.get("returncode") != 0:
+        errors.append("qa/layout_report.json: passing report must record compiler returncode=0")
+
+
+def validate_compiler_log_binding(
+    project: Path, report: dict[str, Any], errors: list[str]
+) -> Path | None:
+    build_root = (project / "build").resolve()
+    build_value = Path(str(report.get("build_dir", ""))).expanduser()
+    try:
+        resolved_build = build_value.resolve()
+        resolved_build.relative_to(build_root)
+    except ValueError:
+        errors.append("qa/layout_report.json: build_dir must stay under the project build directory")
+        resolved_build = None
+    if report.get("fresh_build") is not True:
+        errors.append("qa/layout_report.json: compile was not recorded as a fresh build")
+    removed = report.get("fresh_build_removed_artifacts")
+    if (
+        not isinstance(removed, list)
+        or not all(isinstance(item, str) and item in CORE_BUILD_ARTIFACTS for item in removed)
+        or len(removed) != len(set(removed))
+    ):
+        errors.append("qa/layout_report.json: fresh-build cleanup record is missing or invalid")
+
+    log_value = report.get("compiler_log")
+    log_path = Path(str(log_value)).expanduser() if log_value else None
+    if log_path is None or not log_path.is_file():
+        errors.append("qa/layout_report.json: fresh compiler main.log is missing")
+        return None
+    resolved_log = log_path.resolve()
+    try:
+        resolved_log.relative_to(build_root)
+    except ValueError:
+        errors.append("qa/layout_report.json: compiler log must stay under the project build directory")
+        return None
+    if resolved_build is None or resolved_log != (resolved_build / "main.log").resolve():
+        errors.append("qa/layout_report.json: compiler log is not build_dir/main.log")
+        return None
+    expected_hash = str(report.get("compiler_log_sha256", "")).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash) or sha256_file(log_path) != expected_hash:
+        errors.append("qa/layout_report.json: compiler log hash mismatch")
+        return None
+    return log_path
+
+
+def validate_aux_binding(
+    project: Path, report: dict[str, Any], errors: list[str]
+) -> Path | None:
+    """Bind every page-placement claim to the current compiled ``main.aux``."""
+
+    build_root = (project / "build").resolve()
+    build_value = str(report.get("build_dir", "")).strip()
+    if not build_value:
+        errors.append("qa/layout_report.json: build_dir is missing for AUX binding")
+        return None
+    resolved_build = Path(build_value).expanduser().resolve()
+    try:
+        resolved_build.relative_to(build_root)
+    except ValueError:
+        errors.append("qa/layout_report.json: build_dir must stay under the project build directory")
+        return None
+    if resolved_build != build_root:
+        errors.append("qa/layout_report.json: AUX binding requires the canonical project build directory")
+        return None
+
+    aux_value = str(report.get("aux", "")).strip()
+    if not aux_value:
+        errors.append("qa/layout_report.json: compiled AUX path is missing")
+        return None
+    aux_path = Path(aux_value).expanduser()
+    if not aux_path.is_file():
+        errors.append("qa/layout_report.json: compiled AUX file is missing")
+        return None
+    resolved_aux = aux_path.resolve()
+    try:
+        resolved_aux.relative_to(build_root)
+    except ValueError:
+        errors.append("qa/layout_report.json: compiled AUX must stay under the project build directory")
+        return None
+    if resolved_aux != (resolved_build / "main.aux").resolve():
+        errors.append("qa/layout_report.json: compiled AUX is not build_dir/main.aux")
+        return None
+    expected_hash = str(report.get("aux_sha256", "")).lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", expected_hash) or sha256_file(aux_path) != expected_hash:
+        errors.append("qa/layout_report.json: compiled AUX hash mismatch")
+        return None
+    return aux_path
+
+
+def _require_exact_layout_field(
+    report: dict[str, Any], field: str, expected: Any, errors: list[str]
+) -> None:
+    if report.get(field) != expected:
+        errors.append(
+            f"qa/layout_report.json: {field} does not match the current source/AUX/PDF audit"
+        )
+
+
+def validate_recomputed_layout_audits(
+    project: Path,
+    report: dict[str, Any],
+    float_inventory: dict[str, Any],
+    aux_path: Path | None,
+    pdf_path: Path | None,
+    errors: list[str],
+) -> None:
+    """Recompute all placement/geometry gates instead of trusting report summaries."""
+
+    column_report = report.get("column_mode_audit")
+    requested = column_report.get("requested") if isinstance(column_report, dict) else None
+    if requested not in {"auto", "1", "2"}:
+        errors.append("qa/layout_report.json: column-mode request is missing or invalid")
+        requested = "auto"
+    try:
+        current_column_audit = document_column_mode_audit(project / "paper", str(requested))
+    except (OSError, ValueError) as exc:
+        errors.append(f"qa/layout_report.json: cannot recompute document column mode: {exc}")
+        return
+    _require_exact_layout_field(report, "column_mode_audit", current_column_audit, errors)
+    column_mode = int(current_column_audit["mode"])
+    _require_exact_layout_field(report, "column_mode", column_mode, errors)
+
+    if aux_path is None:
+        return
+    all_records = list(float_inventory.get("all_records", []))
+    body_labels = list(float_inventory.get("labels", []))
+    all_labels = list(float_inventory.get("all_labels", []))
+    body_pages = {label: aux_label_page(aux_path, label) for label in body_labels}
+    all_pages = {label: aux_label_page(aux_path, label) for label in all_labels}
+    conclusion_page = aux_label_page(aux_path, "idea2paper:start-conclusion")
+    end_body_page = aux_label_page(aux_path, "idea2paper:end-body")
+    end_exempt_page = aux_label_page(aux_path, "idea2paper:end-exempt")
+    end_references_page = aux_label_page(aux_path, "idea2paper:end-references")
+    appendix_start_page = aux_label_page(aux_path, "idea2paper:start-appendix")
+    current_body_pages = (
+        end_references_page if report.get("references_counted") is True else end_body_page
+    )
+    conclusion_record = aux_label_record(aux_path, "idea2paper:start-conclusion")
+    end_body_record = aux_label_record(aux_path, "idea2paper:end-body")
+    conclusion_before_end_body = (
+        conclusion_record[0] is not None
+        and end_body_record[0] is not None
+        and conclusion_record[0] <= end_body_record[0]
+        and conclusion_record[1] is not None
+        and end_body_record[1] is not None
+        and conclusion_record[1] < end_body_record[1]
+    )
+    _, body_tail = body_float_tail_report(aux_path, body_labels, conclusion_page)
+
+    exact_aux_fields = {
+        "body_pages": current_body_pages,
+        "conclusion_page": conclusion_page,
+        "end_body_page": end_body_page,
+        "end_exempt_page": end_exempt_page,
+        "appendix_start_page": appendix_start_page,
+        "conclusion_before_end_body": conclusion_before_end_body,
+        "body_float_pages": body_pages,
+        "all_float_pages": all_pages,
+        "missing_body_float_aux_labels": sorted(
+            label for label, page in body_pages.items() if page is None
+        ),
+        "missing_all_float_aux_labels": sorted(
+            label for label, page in all_pages.items() if page is None
+        ),
+        "body_float_tail_violations": body_tail,
+    }
+    for field, expected in exact_aux_fields.items():
+        _require_exact_layout_field(report, field, expected, errors)
+
+    if pdf_path is None:
+        return
+    preliminary = float_distribution_audit(
+        all_records, all_pages, appendix_start_page, None, column_mode
+    )
+    try:
+        whitespace = rendered_whitespace_audit(
+            pdf_path, preliminary["page_float_counts"], column_mode
+        )
+    except (OSError, ValueError, RuntimeError) as exc:
+        errors.append(f"qa/layout_report.json: cannot recompute rendered whitespace audit: {exc}")
+        return
+    total_pages = int(whitespace["page_count"])
+    distribution = float_distribution_audit(
+        all_records, all_pages, appendix_start_page, total_pages, column_mode
+    )
+    _require_exact_layout_field(report, "total_pages", total_pages, errors)
+    for field, expected in distribution.items():
+        _require_exact_layout_field(report, field, expected, errors)
+    rendered_fields = {
+        "rendered_column_inference": whitespace["rendered_column_inference"],
+        "rendered_page_geometry": whitespace["pages"],
+        "whitespace_thresholds": whitespace["thresholds"],
+        "whitespace_violations": whitespace["whitespace_violations"],
+        "media_box_overflows": whitespace["media_box_overflows"],
+    }
+    for field, expected in rendered_fields.items():
+        _require_exact_layout_field(report, field, expected, errors)
+
+
+def _normalized_overfull_box_list(
+    value: Any, field: str, errors: list[str]
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        errors.append(f"qa/layout_report.json: {field} must be a list")
+        return []
+    normalized: list[dict[str, Any]] = []
+    required = {"axis", "dimension", "excess_pt", "context", "material"}
+    for index, item in enumerate(value):
+        label = f"qa/layout_report.json: {field}[{index}]"
+        if not isinstance(item, dict) or set(item) != required:
+            errors.append(f"{label} has invalid fields")
+            continue
+        axis = item.get("axis")
+        dimension = item.get("dimension")
+        excess = item.get("excess_pt")
+        context = item.get("context")
+        material = item.get("material")
+        valid = True
+        if axis not in {"h", "v"}:
+            errors.append(f"{label}.axis must be h or v")
+            valid = False
+        if dimension not in {"wide", "high"} or (
+            axis in {"h", "v"} and dimension != {"h": "wide", "v": "high"}[axis]
+        ):
+            errors.append(f"{label}.dimension is inconsistent with axis")
+            valid = False
+        if (
+            isinstance(excess, bool)
+            or not isinstance(excess, (int, float))
+            or not math.isfinite(float(excess))
+            or float(excess) < 0.0
+        ):
+            errors.append(f"{label}.excess_pt must be a finite non-negative number")
+            valid = False
+        if not isinstance(context, str) or "\n" in context or "\r" in context:
+            errors.append(f"{label}.context must be a single-line string")
+            valid = False
+        if not isinstance(material, bool):
+            errors.append(f"{label}.material must be boolean")
+            valid = False
+        if not valid:
+            continue
+        expected_material = float(excess) > MATERIAL_OVERFULL_PT
+        if material is not expected_material:
+            errors.append(f"{label}.material does not match the fixed 2pt threshold")
+        normalized.append(
+            {
+                "axis": axis,
+                "dimension": dimension,
+                "excess_pt": float(excess),
+                "context": context,
+                "material": expected_material,
+            }
+        )
+    return normalized
+
+
+def validate_overfull_box_report(
+    report: dict[str, Any], errors: list[str], compiler_log: Path | None = None
+) -> None:
+    if report.get("overfull_box_threshold_pt") != MATERIAL_OVERFULL_PT:
+        errors.append("qa/layout_report.json: material overfull-box threshold is missing or altered")
+    all_boxes = _normalized_overfull_box_list(report.get("overfull_boxes"), "overfull_boxes", errors)
+    reported_material = _normalized_overfull_box_list(
+        report.get("material_overfull_boxes"), "material_overfull_boxes", errors
+    )
+    derived_material = [item for item in all_boxes if item["material"]]
+    if reported_material != derived_material:
+        errors.append(
+            "qa/layout_report.json: material_overfull_boxes is not exactly derived from overfull_boxes"
+        )
+    if compiler_log is not None:
+        actual = latex_overfull_boxes(
+            compiler_log.read_text(encoding="utf-8", errors="replace")
+        )
+        if all_boxes != actual:
+            errors.append("qa/layout_report.json: overfull-box diagnostics do not match compiler log")
+    if derived_material:
+        errors.append("qa/layout_report.json: manuscript contains clipped/material overfull boxes")
+
+
+def validate_tex_fuzz_binding(
+    paper: Path, report: dict[str, Any], errors: list[str]
+) -> None:
+    try:
+        current = tex_fuzz_register_uses(paper)
+    except (OSError, ValueError) as exc:
+        errors.append(f"qa/layout_report.json: cannot audit TeX fuzz registers: {exc}")
+        return
+    if report.get("tex_fuzz_register_uses") != current:
+        errors.append("qa/layout_report.json: TeX fuzz-register audit is stale or incomplete")
+    if current:
+        errors.append("qa/layout_report.json: active manuscript graph uses forbidden \\hfuzz/\\vfuzz")
+
+
+def _normalized_media_box_overflow_list(
+    value: Any, field: str, errors: list[str]
+) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        errors.append(f"qa/layout_report.json: {field} must be a list")
+        return []
+    required = {"page", "box_index", "kind", "edge", "excess_pt", "text"}
+    normalized: list[dict[str, Any]] = []
+    for index, item in enumerate(value):
+        label = f"qa/layout_report.json: {field}[{index}]"
+        if not isinstance(item, dict) or set(item) != required:
+            errors.append(f"{label} has invalid fields")
+            continue
+        page = item.get("page")
+        box_index = item.get("box_index")
+        kind = item.get("kind")
+        edge = item.get("edge")
+        excess = item.get("excess_pt")
+        text = item.get("text")
+        valid = True
+        if isinstance(page, bool) or not isinstance(page, int) or page < 1:
+            errors.append(f"{label}.page must be a positive integer")
+            valid = False
+        if isinstance(box_index, bool) or not isinstance(box_index, int) or box_index < 0:
+            errors.append(f"{label}.box_index must be a non-negative integer")
+            valid = False
+        if kind not in {"text", "image", "content"}:
+            errors.append(f"{label}.kind is invalid")
+            valid = False
+        if edge not in {"left", "right", "top", "bottom"}:
+            errors.append(f"{label}.edge is invalid")
+            valid = False
+        if (
+            isinstance(excess, bool)
+            or not isinstance(excess, (int, float))
+            or not math.isfinite(float(excess))
+            or float(excess) <= MEDIA_BOX_OVERFLOW_PT
+        ):
+            errors.append(f"{label}.excess_pt must be above the fixed 2pt threshold")
+            valid = False
+        if not isinstance(text, str) or len(text) > 160:
+            errors.append(f"{label}.text must be a string of at most 160 characters")
+            valid = False
+        if valid:
+            normalized.append(
+                {
+                    "page": page,
+                    "box_index": box_index,
+                    "kind": kind,
+                    "edge": edge,
+                    "excess_pt": float(excess),
+                    "text": text,
+                }
+            )
+    return normalized
+
+
+def validate_media_box_overflow_report(
+    report: dict[str, Any], errors: list[str], pdf_path: Path | None = None
+) -> None:
+    if report.get("media_box_overflow_threshold_pt") != MEDIA_BOX_OVERFLOW_PT:
+        errors.append("qa/layout_report.json: media-box overflow threshold is missing or altered")
+    thresholds = report.get("whitespace_thresholds")
+    if not isinstance(thresholds, dict) or thresholds.get(
+        "media_box_overflow_maximum_pt"
+    ) != MEDIA_BOX_OVERFLOW_PT:
+        errors.append("qa/layout_report.json: rendered media-box threshold is missing or altered")
+    reported = _normalized_media_box_overflow_list(
+        report.get("media_box_overflows"), "media_box_overflows", errors
+    )
+    pages = report.get("rendered_page_geometry")
+    flattened_raw: list[Any] = []
+    if not isinstance(pages, list):
+        errors.append("qa/layout_report.json: rendered page geometry must be a list")
+    else:
+        for page_index, page in enumerate(pages):
+            if not isinstance(page, dict) or not isinstance(page.get("media_box_overflows"), list):
+                errors.append(
+                    f"qa/layout_report.json: rendered_page_geometry[{page_index}] lacks media-box audit"
+                )
+                continue
+            flattened_raw.extend(page["media_box_overflows"])
+    flattened = _normalized_media_box_overflow_list(
+        flattened_raw, "rendered_page_geometry.media_box_overflows", errors
+    )
+    if reported != flattened:
+        errors.append("qa/layout_report.json: media-box overflow summary is stale or incomplete")
+    if pdf_path is not None:
+        try:
+            current = rendered_media_box_overflows(pdf_path)
+        except (OSError, ValueError, RuntimeError) as exc:
+            errors.append(f"qa/layout_report.json: cannot recompute PDF media-box audit: {exc}")
+        else:
+            if reported != current:
+                errors.append("qa/layout_report.json: media-box audit does not match compiled PDF")
+    if reported:
+        errors.append("qa/layout_report.json: rendered content exceeds the PDF media box")
+
+
 def validate_layout_and_review(
     project: Path,
     venue: dict[str, Any],
@@ -1501,14 +2980,14 @@ def validate_layout_and_review(
         errors.append("qa/layout_report.json: missing compile and page-budget report")
     else:
         report = read_json(layout_path, errors)
-        try:
-            layout_schema = int(report.get("schema_version", 0))
-        except (TypeError, ValueError):
-            layout_schema = 0
-        if layout_schema < 5:
+        layout_schema = report.get("schema_version")
+        if not isinstance(layout_schema, int) or isinstance(layout_schema, bool) or layout_schema != 9:
             errors.append("qa/layout_report.json: obsolete layout-audit schema")
-        if report.get("status") != "pass":
-            errors.append("qa/layout_report.json: LaTeX build or page check did not pass")
+        validate_layout_report_status(report, errors)
+        compiler_log = validate_compiler_log_binding(project, report, errors)
+        aux_path = validate_aux_binding(project, report, errors)
+        validate_overfull_box_report(report, errors, compiler_log)
+        validate_tex_fuzz_binding(project / "paper", report, errors)
         try:
             current_pagination = manual_pagination_commands(project / "paper")
             current_float_inventory = body_float_inventory(project / "paper")
@@ -1518,6 +2997,11 @@ def validate_layout_and_review(
             current_float_inventory = {
                 "active_body_files": [],
                 "records": [],
+                "labels": [],
+                "all_records": [],
+                "all_labels": [],
+                "appendix_records": [],
+                "active_appendix_files": [],
                 "structure_errors": [],
                 "after_conclusion_source": [],
             }
@@ -1529,6 +3013,14 @@ def validate_layout_and_review(
             errors.append("qa/layout_report.json: active-body source coverage is stale or incomplete")
         if report.get("tracked_body_float_count") != len(current_float_inventory["records"]):
             errors.append("qa/layout_report.json: body-float coverage count is stale or incomplete")
+        if report.get("tracked_appendix_float_count") != len(
+            current_float_inventory.get("appendix_records", [])
+        ):
+            errors.append("qa/layout_report.json: appendix-float coverage count is stale or incomplete")
+        if report.get("active_appendix_files") != current_float_inventory.get(
+            "active_appendix_files", []
+        ):
+            errors.append("qa/layout_report.json: active-appendix source coverage is stale or incomplete")
         if report.get("manuscript_structure_errors") != current_float_inventory["structure_errors"]:
             errors.append("qa/layout_report.json: manuscript-structure audit is stale or incomplete")
         if report.get("manuscript_structure_errors") != []:
@@ -1540,14 +3032,67 @@ def validate_layout_and_review(
             errors.append("qa/layout_report.json: post-Conclusion source audit is stale or incomplete")
         if report.get("source_body_floats_after_conclusion") != []:
             errors.append("qa/layout_report.json: source contains floats after Conclusion begins")
-        if report.get("unlabeled_body_floats") != []:
+        if report.get("unlabeled_body_floats") != current_float_inventory.get("unlabeled", []):
+            errors.append("qa/layout_report.json: unlabeled body-float audit is stale or incomplete")
+        if current_float_inventory.get("unlabeled", []):
             errors.append("qa/layout_report.json: active body contains unlabeled floats")
-        if report.get("duplicate_body_float_labels") != []:
+        if report.get("duplicate_body_float_labels") != current_float_inventory.get(
+            "duplicate_labels", []
+        ):
+            errors.append("qa/layout_report.json: duplicate body-label audit is stale or incomplete")
+        if current_float_inventory.get("duplicate_labels", []):
             errors.append("qa/layout_report.json: active body contains duplicate float labels")
+        if report.get("unlabeled_appendix_floats") != current_float_inventory.get(
+            "unlabeled_appendix_floats", []
+        ):
+            errors.append("qa/layout_report.json: unlabeled appendix-float audit is stale or incomplete")
+        if current_float_inventory.get("unlabeled_appendix_floats", []):
+            errors.append("qa/layout_report.json: active appendix contains unlabeled floats")
+        if report.get("duplicate_all_float_labels") != current_float_inventory.get(
+            "duplicate_all_float_labels", []
+        ):
+            errors.append("qa/layout_report.json: all-float duplicate-label audit is stale or incomplete")
+        if current_float_inventory.get("duplicate_all_float_labels", []):
+            errors.append("qa/layout_report.json: body/appendix float labels are not unique")
         if report.get("missing_body_float_aux_labels") != []:
             errors.append("qa/layout_report.json: body float labels are missing from compiled AUX")
+        if report.get("missing_all_float_aux_labels") != []:
+            errors.append("qa/layout_report.json: body/appendix float labels are missing from compiled AUX")
         if report.get("body_float_tail_violations") != []:
             errors.append("qa/layout_report.json: body floats appear after Conclusion begins")
+        if report.get("float_distribution_violations") != []:
+            errors.append("qa/layout_report.json: floats are overloaded or clustered across pages")
+        if report.get("whitespace_violations") != []:
+            errors.append("qa/layout_report.json: rendered pages contain avoidable large blank regions")
+        if report.get("column_mode") not in {1, 2}:
+            errors.append("qa/layout_report.json: missing audited one-/two-column mode")
+        column_audit = report.get("column_mode_audit")
+        if (
+            not isinstance(column_audit, dict)
+            or column_audit.get("mode") != report.get("column_mode")
+            or column_audit.get("override_verified") is not True
+            or column_audit.get("source") not in {
+                "explicit-two-column-evidence",
+                "audited-single-column-default",
+            }
+        ):
+            errors.append("qa/layout_report.json: column-mode source audit is missing or inconsistent")
+        rendered_column = report.get("rendered_column_inference")
+        if not isinstance(rendered_column, dict):
+            errors.append("qa/layout_report.json: rendered column-geometry audit is missing")
+        else:
+            try:
+                rendered_confidence = float(rendered_column.get("confidence", 0.0))
+            except (TypeError, ValueError):
+                rendered_confidence = 0.0
+            if (
+                rendered_confidence >= 0.70
+                and rendered_column.get("mode") in {1, 2}
+                and rendered_column.get("mode") != report.get("column_mode")
+            ):
+                errors.append("qa/layout_report.json: source and rendered column modes disagree")
+        if report.get("layout_dependencies") != {"pdfplumber": "required"}:
+            errors.append("qa/layout_report.json: rendered-layout dependency audit is missing")
         try:
             conclusion_page = int(report.get("conclusion_page", 0))
         except (TypeError, ValueError):
@@ -1560,6 +3105,12 @@ def validate_layout_and_review(
             end_body_page = 0
         if end_body_page <= 0 or report.get("conclusion_before_end_body") is not True:
             errors.append("qa/layout_report.json: invalid Conclusion/end-body boundary order")
+        try:
+            appendix_start_page = int(report.get("appendix_start_page", 0))
+        except (TypeError, ValueError):
+            appendix_start_page = 0
+        if appendix_start_page <= 0:
+            errors.append("qa/layout_report.json: missing appendix-start page audit")
         try:
             end_exempt_page = int(report.get("end_exempt_page", 0))
             exempt_page_span = int(report.get("exempt_page_span", -1))
@@ -1579,13 +3130,9 @@ def validate_layout_and_review(
             errors.append("qa/layout_report.json: paper sources changed after compilation")
         if not timezone_aware(str(report.get("compiled_at", ""))):
             errors.append("qa/layout_report.json: compiled_at must be timezone-aware")
-        build_value = Path(str(report.get("build_dir", ""))).expanduser()
-        try:
-            build_value.resolve().relative_to((project / "build").resolve())
-        except ValueError:
-            errors.append("qa/layout_report.json: build_dir must stay under the project build directory")
         pdf_value = report.get("pdf")
         pdf_path = Path(str(pdf_value)).expanduser() if pdf_value else Path("<missing>")
+        bound_pdf: Path | None = None
         if not pdf_value or not pdf_path.is_file():
             errors.append("qa/layout_report.json: compiled PDF is missing")
         else:
@@ -1593,8 +3140,24 @@ def validate_layout_and_review(
                 pdf_path.resolve().relative_to((project / "build").resolve())
             except ValueError:
                 errors.append("qa/layout_report.json: compiled PDF must stay under the project build directory")
+            else:
+                bound_pdf = pdf_path
+                reported_build = Path(str(report.get("build_dir", ""))).expanduser().resolve()
+                if pdf_path.resolve() != (reported_build / "main.pdf").resolve():
+                    errors.append("qa/layout_report.json: compiled PDF is not build_dir/main.pdf")
+                    bound_pdf = None
             if sha256_file(pdf_path) != str(report.get("pdf_sha256", "")).lower():
                 errors.append("qa/layout_report.json: compiled PDF hash mismatch")
+                bound_pdf = None
+        validate_media_box_overflow_report(report, errors, bound_pdf)
+        validate_recomputed_layout_audits(
+            project,
+            report,
+            current_float_inventory,
+            aux_path,
+            bound_pdf,
+            errors,
+        )
         selected = venue.get("selected") if isinstance(venue.get("selected"), dict) else {}
         page_rules = selected.get("page_rules") if isinstance(selected.get("page_rules"), dict) else {}
         try:
@@ -1622,6 +3185,7 @@ def validate_layout_and_review(
         review = review_path.read_text(encoding="utf-8", errors="replace")
         if not re.search(r"(?im)^\s*review status\s*:\s*pass\s*$", review):
             errors.append("qa/independent_review.md: review must contain 'Review status: pass'")
+    validate_paperjury_review(project, errors)
 
 
 def main() -> int:

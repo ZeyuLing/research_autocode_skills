@@ -238,6 +238,7 @@ def main() -> int:
         "paper/figures",
         "paper/appendix",
         "qa",
+        "qa/paperjury",
         "build",
     ]
     for relative in directories:
@@ -288,6 +289,45 @@ def main() -> int:
         {"schema_version": 1, "status": "pending", "selection_mode": project["venue_selection_mode"], "selected": None},
     )
     write_json_if_missing(root / "qa/todo_registry.json", {"schema_version": 1, "items": [], "errors": []})
+    write_json_if_missing(
+        root / "qa/paperjury/LEDGER.json",
+        {
+            "schema": 1,
+            "meta": {
+                "manuscript": str((root / "paper").resolve()),
+                "venue_family": None,
+                "created_round": 1,
+                "assignment_unverified": [],
+            },
+            "issues": [],
+        },
+    )
+    write_text_if_missing(
+        root / "qa/paperjury/LEDGER.md",
+        "# Ledger (rendered view -- do not edit; source of truth is the .json)\n\n"
+        f"Manuscript: {(root / 'paper').resolve()} | venue: (unset)\n\n"
+        "Active: 0 (major 0, minor 0; author-required 0). "
+        "Completion gate (0 gate-blocking active major): PASS "
+        "(gate-blocking majors: 0).\n\n"
+        "| id | sig | kind | status | section | summary | close_criterion | by | rounds |\n"
+        "|----|-----|------|--------|---------|---------|-----------------|----|--------|\n",
+    )
+    write_json_if_missing(
+        root / "qa/paperjury/final_report.json",
+        {
+            "schema_version": 1,
+            "status": "pending",
+            "mode": "review",
+            "author_authorized": False,
+            "rounds": 0,
+            "reviewer_count": 0,
+            "converged": False,
+            "gate_blocking_major": 0,
+            "unadjudicated_major": 0,
+            "source_sha256": None,
+            "review_snapshot_sha256": None,
+        },
+    )
     write_json_if_missing(
         root / "title/brief.json",
         {
@@ -340,7 +380,10 @@ def main() -> int:
     }
     for filename, content in section_titles.items():
         write_text_if_missing(root / "paper/sections" / filename, content)
-    write_text_if_missing(root / "paper/appendix/appendix.tex", "\\appendix\n\\section{Additional Material}\n")
+    write_text_if_missing(
+        root / "paper/appendix/appendix.tex",
+        "\\appendix\n\\label{idea2paper:start-appendix}\n\\section{Additional Material}\n",
+    )
     write_text_if_missing(root / "paper/references.bib", "")
 
     todo_report = lint_directory(root / "paper", mode="sketch")

@@ -72,10 +72,11 @@ Pushes the AI coding agent to exhaust every possible solution before admitting d
 - Designs the Method, benchmark tables, baselines, metrics, ablations, qualitative results, and linked predicted-result TODOs
 - Generates diverse paper-title candidates, checks prior-title collisions, runs independent positioning and faithfulness reviews, and freezes a title bound to the final claims and Method
 - Drafts Related Work, Introduction, Abstract, Conclusion, appendix material, and all content except measured experimental data
-- Uses the system `imagegen` skill exclusively for every paper figure, including overviews, modules, teasers, charts, qualitative layouts, and placeholders
-- Validates claim-method-experiment coverage, terminology, citations, page budget, tracked TODOs, state invalidation, LaTeX readiness, canonical section boundaries, complete float labeling, manual pagination, and post-Conclusion float spill
-- Includes standard-library Python helpers and offline regression tests; requires a working Python 3.10+ runtime rather than the Windows Store alias
-- Requires both `ai-literature-survey` and the system `imagegen` skill; `idea2paper` stops instead of silently substituting another literature or figure workflow when either dependency is unavailable
+- Uses the system `imagegen` skill exclusively for every paper figure, including overviews, modules, teasers, charts, qualitative layouts, and placeholders; a finite LaTeX raster-layout grammar keeps registered rasters as the subject and rejects TeX/math compositions or resize-wrapper evasions
+- Uses `paperjury:paperjury` for at least two isolated, adversarial review rounds with three reviewer lenses, schema-v2 structured major findings with frozen-snapshot-resolved file-line/label evidence and fix provenance, exact-hash-only legacy migration, an adjudicated issue ledger, and a final review bound to the manuscript hash
+- Validates claim-method-experiment coverage, terminology, citations, page budget, snapshot-portable tracked TODO paths/lines/messages, state invalidation, LaTeX readiness, canonical section boundaries, body/appendix float labeling, fresh compiler-log/AUX binding, independently recomputed column/float/whitespace gates, TeX clipping/overfull boxes, unsuppressed diagnostics, PDF media-box overflow, single-column leading/internal/trailing blank regions, sparse terminal-page stubs, per-page float overload, appendix-tail clustering, manual pagination/forced `[H]` placement, and post-Conclusion float spill
+- Includes offline regression tests; requires Python 3.10+ plus `pdfplumber` from `idea2paper/requirements.txt` for rendered page-geometry auditing (use a real runtime, not the Windows Store alias)
+- Requires `ai-literature-survey`, `paperjury:paperjury`, and the system `imagegen` skill; `idea2paper` stops instead of silently substituting another literature, review, or figure workflow when a dependency is unavailable
 
 **Trigger**: `idea2paper`, "turn this idea into a paper", "paper sketch", "from idea to paper", "从 idea 写论文", "一键写论文"
 
@@ -144,4 +145,4 @@ Three-phase workflow:
 
 ## Installation
 
-Standalone skills can be installed by copying their directory into the agent's skill directory. Orchestrator skills may declare hard dependencies: `idea2paper` additionally requires `ai-literature-survey` and Codex's system `imagegen` skill. For Codex, use `$CODEX_HOME/skills`; for Claude Code, use `.claude/skills`. Standalone wrapper repositories may include additional platform-specific instructions.
+Standalone skills can be installed by copying their directory into the agent's skill directory. Orchestrator skills may declare hard dependencies: `idea2paper` additionally requires `ai-literature-survey`, `paperjury:paperjury`, and Codex's system `imagegen` skill. For Codex, use `$CODEX_HOME/skills`; for Claude Code, use `.claude/skills`. Standalone wrapper repositories may include additional platform-specific instructions.

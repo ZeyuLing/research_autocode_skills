@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import binascii
+import contextlib
 import csv
 import hashlib
+import importlib.util
+import io
 import json
 import struct
 import subprocess
@@ -11,17 +14,33 @@ import tempfile
 import unittest
 import zlib
 from pathlib import Path
+from unittest import mock
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_ROOT / "scripts"
 sys.path.insert(0, str(SCRIPTS))
 
+import compile_paper as compile_paper_module  # noqa: E402
+import validate_project as validate_project_module  # noqa: E402
 from validate_project import (  # noqa: E402
     has_draft_marker,
+    paperjury_bind_blocking_findings,
+    paperjury_ledger_facts,
+    paperjury_review_tree_sha256,
+    render_paperjury_ledger,
     validate_figures,
     validate_no_alternate_figure_backends,
+    validate_compiler_log_binding,
+    validate_layout_report_status,
+    validate_aux_binding,
+    validate_media_box_overflow_report,
+    validate_overfull_box_report,
+    validate_paperjury_review,
+    validate_paperjury_major_finding,
+    validate_recomputed_layout_audits,
     validate_selection_binding,
+    validate_tex_fuzz_binding,
     validate_title,
 )
 from compile_paper import (  # noqa: E402
@@ -29,12 +48,23 @@ from compile_paper import (  # noqa: E402
     body_float_inventory,
     body_float_labels,
     body_float_tail_report,
+    clean_core_build_artifacts,
     command_for,
+    document_column_mode_audit,
+    float_distribution_audit,
+    infer_column_mode_from_pages,
+    latex_overfull_boxes,
     manual_pagination_commands,
     manuscript_structure_audit,
+    media_box_overflows_from_boxes,
+    page_geometry_from_boxes,
+    rendered_whitespace_audit,
+    sha256_file,
     source_tree_sha256,
+    tex_fuzz_register_uses,
 )
 from select_venue import load_registry  # noqa: E402
+from todo_lint import lint_directory  # noqa: E402
 
 
 def run_script(name: str, *arguments: object) -> subprocess.CompletedProcess[str]:
@@ -64,7 +94,555 @@ def make_png(width: int = 512, height: int = 256) -> bytes:
     )
 
 
+def make_minimal_pdf() -> bytes:
+    """Create one parseable text PDF without a PDF-writing dependency."""
+
+    stream = b"BT /F1 12 Tf 72 720 Td (Layout integration smoke test) Tj ET\n"
+    objects = [
+        b"<< /Type /Catalog /Pages 2 0 R >>",
+        b"<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+        b"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>",
+        b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>",
+        b"<< /Length %d >>\nstream\n" % len(stream) + stream + b"endstream",
+    ]
+    payload = bytearray(b"%PDF-1.4\n")
+    offsets = [0]
+    for index, obj in enumerate(objects, start=1):
+        offsets.append(len(payload))
+        payload.extend(f"{index} 0 obj\n".encode("ascii"))
+        payload.extend(obj)
+        payload.extend(b"\nendobj\n")
+    xref = len(payload)
+    payload.extend(f"xref\n0 {len(objects) + 1}\n".encode("ascii"))
+    payload.extend(b"0000000000 65535 f \n")
+    for offset in offsets[1:]:
+        payload.extend(f"{offset:010d} 00000 n \n".encode("ascii"))
+    payload.extend(
+        f"trailer\n<< /Size {len(objects) + 1} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n".encode(
+            "ascii"
+        )
+    )
+    return bytes(payload)
+
+
+def make_paperjury_rounds(
+    project: Path,
+    *,
+    first_round_blocker: dict[str, str] | None = None,
+    final_round_minor: dict[str, str] | None = None,
+) -> None:
+    paper = project / "paper"
+    root = project / "qa/paperjury"
+    paper.mkdir(parents=True)
+    root.mkdir(parents=True)
+    (paper / "main.tex").write_text("Final paper.\n", encoding="utf-8")
+    ledger = {
+        "schema": 1,
+        "meta": {
+            "manuscript": str(paper),
+            "venue_family": "ml",
+            "created_round": 1,
+            "assignment_unverified": [],
+        },
+        "issues": [],
+    }
+    ledger_path = root / "LEDGER.json"
+    ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+    ledger_errors: list[str] = []
+    facts = paperjury_ledger_facts(ledger, ledger_path, ledger_errors)
+    if ledger_errors:
+        raise AssertionError(ledger_errors)
+    (root / "LEDGER.md").write_text(
+        render_paperjury_ledger(ledger, facts), encoding="utf-8"
+    )
+
+    for round_number in (1, 2):
+        round_path = root / f"round_{round_number:02d}"
+        snapshot = round_path / "snapshot"
+        snapshot.mkdir(parents=True)
+        (snapshot / "main.tex").write_text("Final paper.\n", encoding="utf-8")
+        reviewer_hashes: dict[str, str] = {}
+        total_blocking = 0
+        total_minor = 0
+        all_pass = True
+        for lens in ("claims", "design", "repro"):
+            majors = (
+                [first_round_blocker]
+                if round_number == 1 and lens == "claims" and first_round_blocker
+                else []
+            )
+            minors = (
+                [final_round_minor]
+                if round_number == 2 and lens == "claims" and final_round_minor
+                else []
+            )
+            status = "pass" if not majors and not minors else "revise"
+            reviewer = {
+                "schema_version": 2,
+                "reviewer_id": f"r{round_number}_{lens}",
+                "status": status,
+                "blocking_major_findings": majors,
+                "minor_findings": minors,
+                "queued_empirical": [],
+                "verdict_rationale": "Independent review complete.",
+            }
+            reviewer_path = round_path / f"reviewer_{lens}.json"
+            reviewer_path.write_text(json.dumps(reviewer), encoding="utf-8")
+            reviewer_hashes[reviewer_path.name] = sha256_file(reviewer_path)
+            total_blocking += len(majors)
+            total_minor += len(minors)
+            all_pass = all_pass and status == "pass"
+        del total_minor
+        (round_path / "round_report.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "round": round_number,
+                    "snapshot_sha256": paperjury_review_tree_sha256(snapshot),
+                    "reviewer_count": 3,
+                    "reviewer_files": reviewer_hashes,
+                    "blocking_major_findings": total_blocking,
+                    "status": "pass" if all_pass else "revise",
+                }
+            ),
+            encoding="utf-8",
+        )
+    (root / "final_report.json").write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "mode": "review",
+                "author_authorized": True,
+                "rounds": 2,
+                "reviewer_count": 3,
+                "converged": True,
+                "gate_blocking_major": 0,
+                "unadjudicated_major": 0,
+                "source_sha256": source_tree_sha256(paper),
+                "review_snapshot_sha256": paperjury_review_tree_sha256(paper),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
 class Idea2PaperScriptTests(unittest.TestCase):
+    def test_todo_registry_uses_snapshot_portable_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary) / "portable-todos"
+            paper = project / "paper"
+            section = paper / "sections"
+            section.mkdir(parents=True)
+            (project / "qa").mkdir()
+            (section / "experiments.tex").write_text(
+                "\\PredResult{RESULT-01}{42}\\n"
+                "% TODO(RESULT-01): Replace with the measured value.\\n",
+                encoding="utf-8",
+            )
+            report = lint_directory(paper)
+            self.assertEqual(report["status"], "pass")
+            self.assertEqual(report["root"], ".")
+            item = report["items"][0]
+            self.assertEqual(
+                item["macro_occurrences"][0]["file"],
+                "sections/experiments.tex",
+            )
+            self.assertEqual(
+                item["todo_occurrences"][0]["file"],
+                "sections/experiments.tex",
+            )
+            self.assertNotIn(str(paper), json.dumps(report))
+            registry = project / "qa" / "todo_registry.json"
+            registry.write_text(json.dumps(report), encoding="utf-8")
+            errors: list[str] = []
+            validate_project_module.validate_todo_registry(project, report, errors)
+            self.assertEqual(errors, [])
+            stale = json.loads(json.dumps(report))
+            stale["items"][0]["todo_occurrences"][0]["line"] += 1
+            registry.write_text(json.dumps(stale), encoding="utf-8")
+            errors = []
+            validate_project_module.validate_todo_registry(project, report, errors)
+            self.assertTrue(any("does not exactly match" in error for error in errors))
+
+    def test_compile_log_overfull_audit_blocks_material_clipping(self) -> None:
+        diagnostics = latex_overfull_boxes(
+            "Overfull \\hbox (233.5427pt too wide) detected at line 122\n"
+            "Overfull \\hbox (1.41768pt too wide) in paragraph at lines 383--383\n"
+            "Overfull \\vbox (3.25pt too high) has occurred while \\output is active\n"
+            "Overfull \\hbox (2.0pt too wide) at the exact threshold\n"
+        )
+        self.assertEqual(len(diagnostics), 4)
+        self.assertEqual(diagnostics[0]["axis"], "h")
+        self.assertTrue(diagnostics[0]["material"])
+        self.assertFalse(diagnostics[1]["material"])
+        self.assertEqual(diagnostics[2]["dimension"], "high")
+        self.assertTrue(diagnostics[2]["material"])
+        self.assertFalse(diagnostics[3]["material"])
+
+    def test_overfull_validator_derives_material_and_binds_the_log(self) -> None:
+        material = latex_overfull_boxes(
+            "Overfull \\hbox (233.5427pt too wide) detected at line 122\n"
+        )
+        report = {
+            "overfull_box_threshold_pt": 2.0,
+            "overfull_boxes": material,
+            "material_overfull_boxes": [],
+        }
+        errors: list[str] = []
+        validate_overfull_box_report(report, errors)
+        self.assertTrue(any("not exactly derived" in error for error in errors))
+        self.assertTrue(any("clipped/material" in error for error in errors))
+
+        report["overfull_boxes"][0]["material"] = False
+        errors = []
+        validate_overfull_box_report(report, errors)
+        self.assertTrue(any("fixed 2pt threshold" in error for error in errors))
+
+        with tempfile.TemporaryDirectory() as temporary:
+            log = Path(temporary) / "main.log"
+            log.write_text(
+                "Overfull \\hbox (233.5427pt too wide) detected at line 122\n",
+                encoding="utf-8",
+            )
+            clean_report = {
+                "overfull_box_threshold_pt": 2.0,
+                "overfull_boxes": [],
+                "material_overfull_boxes": [],
+            }
+            errors = []
+            validate_overfull_box_report(clean_report, errors, log)
+            self.assertTrue(any("do not match compiler log" in error for error in errors))
+
+    def test_passing_layout_report_requires_empty_errors(self) -> None:
+        errors: list[str] = []
+        validate_layout_report_status(
+            {"status": "pass", "returncode": 0, "errors": ["hidden failure"]}, errors
+        )
+        self.assertTrue(any("errors=[]" in error for error in errors))
+
+    def test_tex_fuzz_registers_are_location_bound_across_active_graph(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary)
+            sections = paper / "sections"
+            sections.mkdir()
+            (paper / "main.tex").write_text(
+                "\\documentclass{article}\n"
+                "\\usepackage{venue}\n"
+                "\\begin{document}\n"
+                "\\input{sections/body}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            (sections / "body.tex").write_text(
+                "Safe text.\n  \\hfuzz=300pt\n% \\vfuzz=ignored\n", encoding="utf-8"
+            )
+            (paper / "venue.sty").write_text(
+                "% template comment\n\\vfuzz=30pt\n", encoding="utf-8"
+            )
+            uses = tex_fuzz_register_uses(paper)
+            self.assertEqual(
+                uses,
+                [
+                    {
+                        "path": "sections/body.tex",
+                        "line": 2,
+                        "column": 3,
+                        "command": "\\hfuzz",
+                    },
+                    {
+                        "path": "venue.sty",
+                        "line": 2,
+                        "column": 1,
+                        "command": "\\vfuzz",
+                    },
+                ],
+            )
+            with mock.patch.object(
+                compile_paper_module,
+                "_official_template_asset_hashes",
+                return_value={sha256_file(paper / "venue.sty")},
+            ):
+                bound_uses = tex_fuzz_register_uses(paper)
+            self.assertEqual(bound_uses, [uses[0]])
+            errors: list[str] = []
+            validate_tex_fuzz_binding(paper, {"tex_fuzz_register_uses": uses}, errors)
+            self.assertTrue(any("forbidden" in error for error in errors))
+
+    def test_fresh_build_cleanup_and_log_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            build = project / "build"
+            build.mkdir()
+            for name in ("main.pdf", "main.log", "main.aux", "main.fdb_latexmk"):
+                (build / name).write_text("stale", encoding="utf-8")
+            unrelated = build / "keep.me"
+            unrelated.write_text("preserve", encoding="utf-8")
+            removed = clean_core_build_artifacts(build)
+            self.assertEqual(
+                set(removed), {"main.pdf", "main.log", "main.aux", "main.fdb_latexmk"}
+            )
+            self.assertTrue(unrelated.is_file())
+            self.assertFalse((build / "main.log").exists())
+            self.assertIn("-g", command_for("latexmk", project, build))
+
+            log = build / "main.log"
+            log.write_text("fresh compiler log\n", encoding="utf-8")
+            report = {
+                "build_dir": str(build),
+                "fresh_build": True,
+                "fresh_build_removed_artifacts": removed,
+                "compiler_log": str(log),
+                "compiler_log_sha256": sha256_file(log),
+            }
+            errors: list[str] = []
+            self.assertEqual(validate_compiler_log_binding(project, report, errors), log)
+            self.assertEqual(errors, [])
+            report["compiler_log_sha256"] = "0" * 64
+            errors = []
+            self.assertIsNone(validate_compiler_log_binding(project, report, errors))
+            self.assertTrue(any("hash mismatch" in error for error in errors))
+
+    def test_layout_validator_binds_aux_and_recomputes_forged_float_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            paper = project / "paper"
+            build = project / "build"
+            paper.mkdir()
+            build.mkdir()
+            (paper / "main.tex").write_text(
+                "\\documentclass{article}\n\\begin{document}\nBody.\n\\end{document}\n",
+                encoding="utf-8",
+            )
+            aux = build / "main.aux"
+            aux.write_text(
+                "\\newlabel{fig:real}{{1}{2}}\n"
+                "\\newlabel{idea2paper:start-conclusion}{{}{3}}\n"
+                "\\newlabel{idea2paper:end-body}{{}{3}}\n"
+                "\\newlabel{idea2paper:end-exempt}{{}{3}}\n"
+                "\\newlabel{idea2paper:end-references}{{}{3}}\n"
+                "\\newlabel{idea2paper:start-appendix}{{}{3}}\n",
+                encoding="utf-8",
+            )
+            pdf = build / "main.pdf"
+            pdf.write_bytes(make_minimal_pdf())
+            column_audit = document_column_mode_audit(paper, "auto")
+            inventory = {
+                "records": [
+                    {
+                        "float_index": 1,
+                        "region": "body",
+                        "path": "main.tex",
+                        "line": 3,
+                        "labels": ["fig:real"],
+                    }
+                ],
+                "labels": ["fig:real"],
+                "all_records": [
+                    {
+                        "float_index": 1,
+                        "region": "body",
+                        "path": "main.tex",
+                        "line": 3,
+                        "labels": ["fig:real"],
+                    }
+                ],
+                "all_labels": ["fig:real"],
+            }
+            fake_whitespace = {
+                "page_count": 3,
+                "rendered_column_inference": {
+                    "mode": 1,
+                    "confidence": 1.0,
+                    "inspected_pages": 3,
+                    "eligible_text_rows": 30,
+                    "split_gutter_rows": 0,
+                    "split_gutter_ratio": 0.0,
+                },
+                "thresholds": {"media_box_overflow_maximum_pt": 2.0},
+                "pages": [],
+                "media_box_overflows": [],
+                "whitespace_violations": [],
+            }
+            forged_distribution = float_distribution_audit(
+                inventory["all_records"], {"fig:real": 1}, 3, 3, 1
+            )
+            report = {
+                "build_dir": str(build),
+                "aux": str(aux),
+                "aux_sha256": sha256_file(aux),
+                "column_mode": 1,
+                "column_mode_audit": column_audit,
+                "references_counted": False,
+                "body_pages": 3,
+                "conclusion_page": 3,
+                "end_body_page": 3,
+                "end_exempt_page": 3,
+                "appendix_start_page": 3,
+                "conclusion_before_end_body": True,
+                "body_float_pages": {"fig:real": 1},
+                "all_float_pages": {"fig:real": 1},
+                "missing_body_float_aux_labels": [],
+                "missing_all_float_aux_labels": [],
+                "body_float_tail_violations": [],
+                "total_pages": 3,
+                **forged_distribution,
+                "rendered_column_inference": fake_whitespace["rendered_column_inference"],
+                "rendered_page_geometry": [],
+                "whitespace_thresholds": fake_whitespace["thresholds"],
+                "whitespace_violations": [],
+                "media_box_overflows": [],
+            }
+            binding_errors: list[str] = []
+            self.assertEqual(validate_aux_binding(project, report, binding_errors), aux)
+            self.assertEqual(binding_errors, [])
+            report["aux_sha256"] = "0" * 64
+            tampered_errors: list[str] = []
+            self.assertIsNone(validate_aux_binding(project, report, tampered_errors))
+            self.assertTrue(any("AUX hash mismatch" in error for error in tampered_errors))
+            report["aux_sha256"] = sha256_file(aux)
+
+            errors: list[str] = []
+            with mock.patch.object(
+                validate_project_module,
+                "rendered_whitespace_audit",
+                return_value=fake_whitespace,
+            ):
+                validate_recomputed_layout_audits(
+                    project, report, inventory, aux, pdf, errors
+                )
+            self.assertTrue(any("body_float_pages" in error for error in errors))
+            self.assertTrue(any("page_float_counts" in error for error in errors))
+
+    def test_compile_main_fresh_log_gate_blocks_233pt_but_not_1pt(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            paper = project / "paper"
+            sections = paper / "sections"
+            appendix = paper / "appendix"
+            build = project / "build"
+            sections.mkdir(parents=True)
+            appendix.mkdir()
+            build.mkdir()
+            (paper / "references.bib").write_text("", encoding="utf-8")
+            (sections / "body.tex").write_text("Body.\n", encoding="utf-8")
+            (sections / "conclusion.tex").write_text(
+                "\\section{Conclusion}\n\\label{idea2paper:start-conclusion}\n",
+                encoding="utf-8",
+            )
+            (sections / "ai_use_statement.tex").write_text(
+                "\\subsection*{AI use statement}\nDisclosure.\n", encoding="utf-8"
+            )
+            (appendix / "appendix.tex").write_text(
+                "\\appendix\n\\label{idea2paper:start-appendix}\n"
+                "\\section{Additional Material}\n",
+                encoding="utf-8",
+            )
+            (paper / "main.tex").write_text(
+                "\\documentclass{article}\n\\begin{document}\n"
+                "\\input{sections/body}\n"
+                "\\input{sections/conclusion}\n"
+                "\\label{idea2paper:end-body}\n"
+                "\\input{sections/ai_use_statement}\n"
+                "\\label{idea2paper:end-exempt}\n"
+                "{\\small\\bibliographystyle{plain}\\bibliography{references}}\n"
+                "\\label{idea2paper:end-references}\n"
+                "\\input{appendix/appendix}\n\\end{document}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(manuscript_structure_audit(paper)["errors"], [])
+            aux_text = (
+                "\\newlabel{idea2paper:start-conclusion}{{}{1}}\n"
+                "\\newlabel{idea2paper:end-body}{{}{1}}\n"
+                "\\newlabel{idea2paper:end-exempt}{{}{1}}\n"
+                "\\newlabel{idea2paper:end-references}{{}{1}}\n"
+                "\\newlabel{idea2paper:start-appendix}{{}{1}}\n"
+            )
+            log_holder = {"text": ""}
+            unrelated = build / "keep.me"
+            unrelated.write_text("preserve", encoding="utf-8")
+
+            def fake_run(command: list[str], **_: object) -> subprocess.CompletedProcess[str]:
+                self.assertFalse((build / "main.log").exists())
+                self.assertFalse((build / "main.pdf").exists())
+                self.assertFalse((build / "main.aux").exists())
+                (build / "main.log").write_text(log_holder["text"], encoding="utf-8")
+                (build / "main.pdf").write_bytes(make_minimal_pdf())
+                (build / "main.aux").write_text(aux_text, encoding="utf-8")
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            whitespace = {
+                "page_count": 1,
+                "rendered_column_inference": {
+                    "mode": 1,
+                    "confidence": 1.0,
+                    "inspected_pages": 1,
+                    "eligible_text_rows": 1,
+                    "split_gutter_rows": 0,
+                    "split_gutter_ratio": 0.0,
+                },
+                "thresholds": {"media_box_overflow_maximum_pt": 2.0},
+                "pages": [{"page": 1, "media_box_overflows": [], "violations": []}],
+                "media_box_overflows": [],
+                "whitespace_violations": [],
+            }
+            cases = [
+                (
+                    "Overfull \\hbox (233.5427pt too wide) detected at line 122\n"
+                    "Overfull \\hbox (1.41768pt too wide) at lines 383--383\n",
+                    1,
+                ),
+                ("Overfull \\hbox (1.41768pt too wide) at lines 383--383\n", 0),
+            ]
+            for log_text, expected_returncode in cases:
+                with self.subTest(log_text=log_text):
+                    for name in ("main.log", "main.pdf", "main.aux"):
+                        (build / name).write_text("stale", encoding="utf-8")
+                    log_holder["text"] = log_text
+                    output = io.StringIO()
+                    with (
+                        mock.patch.object(
+                            compile_paper_module,
+                            "choose_engine",
+                            return_value=str(project / "tectonic.exe"),
+                        ),
+                        mock.patch.object(compile_paper_module, "pdf_pages", return_value=1),
+                        mock.patch.object(
+                            compile_paper_module,
+                            "rendered_whitespace_audit",
+                            return_value=whitespace,
+                        ),
+                        mock.patch.object(
+                            compile_paper_module.subprocess, "run", side_effect=fake_run
+                        ),
+                        mock.patch.object(
+                            sys,
+                            "argv",
+                            [
+                                "compile_paper.py",
+                                str(paper),
+                                "--engine",
+                                "tectonic",
+                                "--build-dir",
+                                str(build),
+                            ],
+                        ),
+                        contextlib.redirect_stdout(output),
+                    ):
+                        returncode = compile_paper_module.main()
+                    report = json.loads(output.getvalue())
+                    self.assertEqual(returncode, expected_returncode)
+                    self.assertEqual(report["schema_version"], 9)
+                    self.assertEqual(report["aux"], str(build / "main.aux"))
+                    self.assertTrue(report["fresh_build"])
+                    self.assertEqual(report["compiler_log_sha256"], sha256_file(build / "main.log"))
+                    self.assertTrue(unrelated.is_file())
+                    self.assertEqual(report["overfull_boxes"][0]["excess_pt"], float(log_text.split("(", 1)[1].split("pt", 1)[0]))
+                    if expected_returncode == 0:
+                        self.assertEqual(report["errors"], [])
+                        self.assertEqual(report["material_overfull_boxes"], [])
+                    else:
+                        self.assertEqual(report["material_overfull_boxes"][0]["excess_pt"], 233.5427)
+
     def test_compile_helpers_keep_intermediates_and_read_body_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -112,6 +690,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
             appended = appendix / "appendix.tex"
             appended.write_text(
                 "\\appendix\n"
+                "\\label{idea2paper:start-appendix}\n"
                 "\\begin{figure}[t]\\label{fig:appendix-only}\\end{figure}\n",
                 encoding="utf-8",
             )
@@ -137,6 +716,8 @@ class Idea2PaperScriptTests(unittest.TestCase):
             inventory = body_float_inventory(paper)
             self.assertEqual(inventory["unlabeled"], [])
             self.assertNotIn("appendix/appendix.tex", inventory["active_body_files"])
+            self.assertEqual(inventory["appendix_labels"], ["fig:appendix-only"])
+            self.assertEqual(len(inventory["appendix_records"]), 1)
             self.assertEqual(inventory["structure_errors"], [])
             self.assertEqual(inventory["after_conclusion_source"], [])
 
@@ -149,6 +730,12 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 body.write_text(labeled_source + command + "\n", encoding="utf-8")
                 commands = manual_pagination_commands(paper)
                 self.assertEqual([item["command"] for item in commands], [command])
+            body.write_text(
+                labeled_source.replace(r"\begin{figure}[t]", r"\begin{figure}[H]"),
+                encoding="utf-8",
+            )
+            commands = manual_pagination_commands(paper)
+            self.assertEqual([item["command"] for item in commands], [r"\begin{figure}[H]"])
             body.write_text(labeled_source, encoding="utf-8")
 
             aux = Path(temporary) / "main.aux"
@@ -222,6 +809,626 @@ class Idea2PaperScriptTests(unittest.TestCase):
             structure = manuscript_structure_audit(paper)
             self.assertTrue(any("boundaries must be ordered" in error for error in structure["errors"]))
 
+    def test_float_distribution_rejects_overload_dense_runs_and_terminal_dumping(self) -> None:
+        records = []
+        label_pages: dict[str, int | None] = {}
+        layout = [
+            ("body", 8, 2),
+            ("body", 9, 2),
+            ("appendix", 13, 2),
+            ("appendix", 15, 3),
+            ("appendix", 16, 2),
+            ("appendix", 17, 2),
+        ]
+        index = 0
+        for region, page, count in layout:
+            for _ in range(count):
+                index += 1
+                label = f"fig:f{index}"
+                records.append(
+                    {
+                        "float_index": index,
+                        "region": region,
+                        "path": "appendix/appendix.tex" if region == "appendix" else "sections/x.tex",
+                        "line": index,
+                        "labels": [label],
+                    }
+                )
+                label_pages[label] = page
+        report = float_distribution_audit(records, label_pages, 13, 17, 1)
+        codes = [item["code"] for item in report["float_distribution_violations"]]
+        self.assertIn("overloaded_float_page", codes)
+        self.assertIn("consecutive_dense_float_pages", codes)
+        self.assertIn("appendix_terminal_float_cluster", codes)
+        self.assertEqual(report["page_float_counts"]["15"], 3)
+
+    def test_float_distribution_accepts_balanced_appendix(self) -> None:
+        records = []
+        label_pages: dict[str, int | None] = {}
+        index = 0
+        for page, count in [(13, 1), (14, 1), (15, 2), (16, 1), (17, 1), (18, 1)]:
+            for _ in range(count):
+                index += 1
+                label = f"tab:t{index}"
+                records.append(
+                    {
+                        "float_index": index,
+                        "region": "appendix",
+                        "path": "appendix/appendix.tex",
+                        "line": index,
+                        "labels": [label],
+                    }
+                )
+                label_pages[label] = page
+        report = float_distribution_audit(records, label_pages, 13, 18, 1)
+        self.assertEqual(report["float_distribution_violations"], [])
+
+    def test_float_distribution_rejects_two_page_appendix_dump(self) -> None:
+        records = []
+        label_pages: dict[str, int | None] = {}
+        for index, page in enumerate((17, 17, 18, 18), start=1):
+            label = f"fig:terminal-{index}"
+            records.append(
+                {
+                    "float_index": index,
+                    "region": "appendix",
+                    "path": "appendix/appendix.tex",
+                    "line": index,
+                    "labels": [label],
+                }
+            )
+            label_pages[label] = page
+        report = float_distribution_audit(records, label_pages, 13, 18, 1)
+        codes = [item["code"] for item in report["float_distribution_violations"]]
+        self.assertIn("appendix_terminal_two_page_cluster", codes)
+
+    def test_float_distribution_rejects_adjacent_mid_appendix_two_plus_two(self) -> None:
+        records = []
+        label_pages: dict[str, int | None] = {}
+        for index, page in enumerate((13, 13, 14, 14), start=1):
+            label = f"fig:middle-{index}"
+            records.append(
+                {
+                    "float_index": index,
+                    "region": "appendix",
+                    "path": "appendix/appendix.tex",
+                    "line": index,
+                    "labels": [label],
+                }
+            )
+            label_pages[label] = page
+        report = float_distribution_audit(records, label_pages, 10, 20, 1)
+        codes = [item["code"] for item in report["float_distribution_violations"]]
+        self.assertIn("adjacent_dense_appendix_float_pages", codes)
+        self.assertNotIn("appendix_terminal_float_cluster", codes)
+
+    def test_column_mode_audit_uses_only_referenced_templates_and_checks_override(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary)
+            (paper / "main.tex").write_text(
+                "\\documentclass{article}\n\\usepackage{venue}\n", encoding="utf-8"
+            )
+            (paper / "venue.sty").write_text("\\twocolumn\n", encoding="utf-8")
+            (paper / "unused.sty").write_text("\\onecolumn\n", encoding="utf-8")
+            audit = document_column_mode_audit(paper)
+            self.assertEqual(audit["mode"], 2)
+            self.assertIn("venue.sty", audit["inspected_template_files"])
+            self.assertNotIn("unused.sty", audit["inspected_template_files"])
+            self.assertFalse(document_column_mode_audit(paper, "1")["override_verified"])
+
+    def test_column_mode_ignores_dormant_macro_but_follows_invoked_macro(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary)
+            main = paper / "main.tex"
+            main.write_text(
+                "\\documentclass{article}\n\\usepackage{venue}\n"
+                "\\begin{document}Single column.\\end{document}\n",
+                encoding="utf-8",
+            )
+            (paper / "venue.sty").write_text(
+                "\\newcommand{\\unusedlayout}{\\twocolumn}\n"
+                "\\newcommand{\\activelayout}{\\twocolumn}\n",
+                encoding="utf-8",
+            )
+            dormant = document_column_mode_audit(paper, "1")
+            self.assertEqual(dormant["mode"], 1)
+            self.assertTrue(dormant["override_verified"])
+
+            main.write_text(
+                "\\documentclass{article}\n\\usepackage{venue}\n"
+                "\\begin{document}\\activelayout Active.\\end{document}\n",
+                encoding="utf-8",
+            )
+            invoked = document_column_mode_audit(paper, "1")
+            self.assertEqual(invoked["mode"], 2)
+            self.assertFalse(invoked["override_verified"])
+            self.assertTrue(
+                any(item.get("kind") == "author-invoked-template-command" for item in invoked["evidence"])
+            )
+
+    def test_rendered_column_inference_detects_repeated_gutter(self) -> None:
+        two_column_pages = []
+        for _ in range(2):
+            words = []
+            for row in range(18):
+                top = 100 + row * 12
+                for column_start in (55, 330):
+                    for word in range(4):
+                        x0 = column_start + word * 42
+                        words.append({"x0": x0, "x1": x0 + 28, "top": top})
+            two_column_pages.append({"width": 612, "height": 792, "words": words})
+        inferred = infer_column_mode_from_pages(two_column_pages)
+        self.assertEqual(inferred["mode"], 2)
+        self.assertGreaterEqual(inferred["confidence"], 0.70)
+
+        single_words = []
+        for row in range(24):
+            top = 100 + row * 12
+            for word in range(10):
+                x0 = 70 + word * 45
+                single_words.append({"x0": x0, "x1": x0 + 34, "top": top})
+        single = infer_column_mode_from_pages(
+            [{"width": 612, "height": 792, "words": single_words}]
+        )
+        self.assertEqual(single["mode"], 1)
+
+    def test_single_column_geometry_flags_large_blank_bands_and_narrow_content(self) -> None:
+        boxes = [
+            {"x0": 200, "x1": 400, "top": 100, "bottom": 210, "text": "table"},
+            {"x0": 200, "x1": 400, "top": 400, "bottom": 470, "text": "caption"},
+        ]
+        report = page_geometry_from_boxes(
+            600,
+            800,
+            boxes,
+            page_number=4,
+            float_count=1,
+            column_mode=1,
+        )
+        codes = [item["code"] for item in report["violations"]]
+        self.assertIn("float_page_trailing_blank", codes)
+        self.assertIn("float_page_internal_blank_band", codes)
+        self.assertIn("single_column_narrow_content_block", codes)
+
+        balanced = page_geometry_from_boxes(
+            600,
+            800,
+            [{"x0": 95, "x1": 505, "top": 80, "bottom": 720, "text": "content"}],
+            page_number=5,
+            float_count=1,
+            column_mode=1,
+        )
+        self.assertEqual(balanced["violations"], [])
+
+        sparse_terminal = page_geometry_from_boxes(
+            600,
+            800,
+            [{"x0": 95, "x1": 505, "top": 80, "bottom": 220, "text": "float"}],
+            page_number=6,
+            float_count=1,
+            column_mode=1,
+            is_last_page=True,
+        )
+        terminal_codes = [item["code"] for item in sparse_terminal["violations"]]
+        self.assertIn("terminal_float_page_too_sparse", terminal_codes)
+
+        substantive_terminal = page_geometry_from_boxes(
+            600,
+            800,
+            [{"x0": 95, "x1": 505, "top": 80, "bottom": 520, "text": "content"}],
+            page_number=7,
+            float_count=1,
+            column_mode=1,
+            is_last_page=True,
+        )
+        self.assertEqual(substantive_terminal["violations"], [])
+
+        bottom_only_terminal = page_geometry_from_boxes(
+            600,
+            800,
+            [{"x0": 95, "x1": 505, "top": 310, "bottom": 720, "text": "bottom float"}],
+            page_number=8,
+            float_count=1,
+            column_mode=1,
+            is_last_page=True,
+        )
+        bottom_only_codes = [item["code"] for item in bottom_only_terminal["violations"]]
+        self.assertIn("float_page_leading_blank", bottom_only_codes)
+
+        prose_stub_terminal = page_geometry_from_boxes(
+            600,
+            800,
+            [{"x0": 95, "x1": 505, "top": 80, "bottom": 180, "text": "prose stub"}],
+            page_number=9,
+            float_count=0,
+            column_mode=1,
+            is_last_page=True,
+        )
+        prose_stub_codes = [item["code"] for item in prose_stub_terminal["violations"]]
+        self.assertIn("terminal_page_trailing_blank", prose_stub_codes)
+        self.assertIn("terminal_page_too_sparse", prose_stub_codes)
+
+        masked_by_prose = [
+            {"x0": 90, "x1": 510, "top": 80, "bottom": 100, "text": "prose"}
+        ]
+        masked_by_prose.extend(
+            {
+                "x0": 220,
+                "x1": 380,
+                "top": 300 + row * 9,
+                "bottom": 307 + row * 9,
+                "text": f"row {row}",
+            }
+            for row in range(16)
+        )
+        local = page_geometry_from_boxes(
+            600,
+            800,
+            masked_by_prose,
+            page_number=8,
+            float_count=1,
+            column_mode=1,
+        )
+        local_codes = [item["code"] for item in local["violations"]]
+        self.assertIn("single_column_sparse_float_region", local_codes)
+
+    def test_media_box_overflow_uses_unclamped_coordinates_and_validator_binding(self) -> None:
+        boxes = [
+            {
+                "x0": -1.41768,
+                "x1": 300,
+                "top": 100,
+                "bottom": 120,
+                "text": "small",
+                "kind": "text",
+            },
+            {
+                "x0": 100,
+                "x1": 833.5427,
+                "top": 200,
+                "bottom": 220,
+                "text": "clipped equation",
+                "kind": "text",
+            },
+        ]
+        overflows = media_box_overflows_from_boxes(600, 800, boxes, page_number=4)
+        self.assertEqual(len(overflows), 1)
+        self.assertEqual(overflows[0]["edge"], "right")
+        self.assertEqual(overflows[0]["excess_pt"], 233.5427)
+        geometry = page_geometry_from_boxes(
+            600,
+            800,
+            boxes,
+            page_number=4,
+            float_count=0,
+            column_mode=1,
+        )
+        self.assertEqual(geometry["media_box_overflows"], overflows)
+        self.assertIn("media_box_overflow", [item["code"] for item in geometry["violations"]])
+
+        report = {
+            "media_box_overflow_threshold_pt": 2.0,
+            "whitespace_thresholds": {"media_box_overflow_maximum_pt": 2.0},
+            "media_box_overflows": [],
+            "rendered_page_geometry": [{"media_box_overflows": overflows}],
+        }
+        errors: list[str] = []
+        validate_media_box_overflow_report(report, errors)
+        self.assertTrue(any("stale or incomplete" in error for error in errors))
+
+    @unittest.skipUnless(importlib.util.find_spec("pdfplumber"), "pdfplumber not installed")
+    def test_rendered_whitespace_audit_reads_a_real_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            pdf = Path(temporary) / "layout.pdf"
+            pdf.write_bytes(make_minimal_pdf())
+            report = rendered_whitespace_audit(pdf, {"1": 0}, 1)
+            self.assertEqual(report["page_count"], 1)
+            self.assertEqual(len(report["pages"]), 1)
+            layout_fields = {
+                "media_box_overflow_threshold_pt": 2.0,
+                "whitespace_thresholds": report["thresholds"],
+                "media_box_overflows": report["media_box_overflows"],
+                "rendered_page_geometry": report["pages"],
+            }
+            errors: list[str] = []
+            validate_media_box_overflow_report(layout_fields, errors, pdf)
+            self.assertEqual(errors, [])
+
+    def test_paperjury_self_reported_pass_without_artifacts_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            paper = project / "paper"
+            root = project / "qa/paperjury"
+            paper.mkdir(parents=True)
+            root.mkdir(parents=True)
+            (paper / "main.tex").write_text("Paper.\n", encoding="utf-8")
+            ledger = {
+                "schema": 1,
+                "meta": {
+                    "manuscript": str(paper),
+                    "venue_family": "ml",
+                    "created_round": 1,
+                    "assignment_unverified": [],
+                },
+                "issues": [],
+            }
+            ledger_path = root / "LEDGER.json"
+            ledger_path.write_text(json.dumps(ledger), encoding="utf-8")
+            ledger_errors: list[str] = []
+            facts = paperjury_ledger_facts(ledger, ledger_path, ledger_errors)
+            self.assertEqual(ledger_errors, [])
+            (root / "LEDGER.md").write_text(
+                render_paperjury_ledger(ledger, facts), encoding="utf-8"
+            )
+            (root / "final_report.json").write_text(
+                json.dumps(
+                    {
+                        "status": "pass",
+                        "mode": "review",
+                        "author_authorized": True,
+                        "rounds": 2,
+                        "reviewer_count": 3,
+                        "converged": True,
+                        "gate_blocking_major": 0,
+                        "unadjudicated_major": 0,
+                        "source_sha256": source_tree_sha256(paper),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_paperjury_review(project, errors)
+            self.assertTrue(any("verified isolated review rounds" in error for error in errors))
+
+    def test_paperjury_blocker_requires_exact_ledger_provenance(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            make_paperjury_rounds(
+                project,
+                first_round_blocker={
+                    "id": "CLAIMS-B01",
+                    "title": "Unregistered blocker",
+                    "evidence": "The claim is unsupported.",
+                    "why_blocking": "It changes the conclusion.",
+                    "required_fix": "Narrow the claim.",
+                },
+            )
+            errors: list[str] = []
+            validate_paperjury_review(project, errors)
+            self.assertTrue(any("CLAIMS-B01" in error and "LEDGER.json" in error for error in errors))
+
+    def test_paperjury_final_clean_round_rejects_minor_findings(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            make_paperjury_rounds(
+                project,
+                final_round_minor={"id": "FINAL-m01", "finding": "A fixable wording issue remains."},
+            )
+            errors: list[str] = []
+            validate_paperjury_review(project, errors)
+            self.assertTrue(any("final clean round" in error for error in errors))
+
+    def test_paperjury_round_number_cannot_forge_legacy_compatibility(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            make_paperjury_rounds(project)
+            source_round = project / "qa/paperjury/round_01"
+            forged_round = project / "qa/paperjury/round_07"
+            source_round.rename(forged_round)
+            manifest_path = forged_round / "round_report.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["round"] = 7
+            for reviewer_path in forged_round.glob("reviewer_*.json"):
+                reviewer = json.loads(reviewer_path.read_text(encoding="utf-8"))
+                reviewer.pop("schema_version", None)
+                reviewer_path.write_text(json.dumps(reviewer), encoding="utf-8")
+            manifest["reviewer_files"] = {
+                path.name: sha256_file(path)
+                for path in sorted(forged_round.glob("reviewer_*.json"))
+            }
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            final_path = project / "qa/paperjury/final_report.json"
+            final = json.loads(final_path.read_text(encoding="utf-8"))
+            final["rounds"] = 2
+            final_path.write_text(json.dumps(final), encoding="utf-8")
+
+            errors: list[str] = []
+            validate_paperjury_review(project, errors)
+            self.assertTrue(any("migration allowlist" in error for error in errors))
+
+    def test_paperjury_exact_legacy_migration_requires_later_v2_round(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            make_paperjury_rounds(project)
+            legacy_round = project / "qa/paperjury/round_01"
+            for reviewer_path in legacy_round.glob("reviewer_*.json"):
+                reviewer = json.loads(reviewer_path.read_text(encoding="utf-8"))
+                reviewer.pop("schema_version", None)
+                reviewer_path.write_text(json.dumps(reviewer), encoding="utf-8")
+            reviewer_hashes = {
+                path.name: sha256_file(path)
+                for path in sorted(legacy_round.glob("reviewer_*.json"))
+            }
+            manifest_path = legacy_round / "round_report.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["reviewer_files"] = reviewer_hashes
+            manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+            migration = {
+                "snapshot_sha256": paperjury_review_tree_sha256(
+                    legacy_round / "snapshot"
+                ),
+                "reviewer_files": reviewer_hashes,
+            }
+            errors: list[str] = []
+            with mock.patch.dict(
+                validate_project_module.PAPERJURY_LEGACY_MIGRATION,
+                {1: migration},
+                clear=True,
+            ):
+                validate_paperjury_review(project, errors)
+            self.assertEqual(errors, [])
+
+    def test_paperjury_binding_supports_explicit_and_legacy_motionplanner_formats(self) -> None:
+        ledger = {
+            "issues": [
+                {
+                    "id": "I-101",
+                    "round_raised": 5,
+                    "raised_by": ["reviewer_claims"],
+                    "significance": "major",
+                    "references": "reviewer_claims.json; finding=CNL-01",
+                    "summary": "Reference phases and order relations are absent.",
+                },
+                {
+                    "id": "I-102",
+                    "round_raised": 5,
+                    "raised_by": ["reviewer_claims"],
+                    "significance": "major",
+                    "summary": "The resource limits conflate equal ceilings with matched realized compute.",
+                    "evidence_anchor": "matched total compute",
+                    "close_criterion": "Separate equal ceilings from realized work.",
+                },
+            ]
+        }
+        errors: list[str] = []
+        bindings = paperjury_bind_blocking_findings(
+            ledger,
+            5,
+            "reviewer_claims",
+            [
+                {
+                    "id": "CNL-01",
+                    "title": "Reference phases and order relations are absent",
+                    "evidence": "No sealed phase records exist.",
+                },
+                {
+                    "issue": "Resource limits conflate equal ceilings and matched realized compute.",
+                    "why_blocking": "These are different estimands.",
+                    "required_fix": "Separate equal ceilings from realized work.",
+                },
+            ],
+            Path("reviewer_claims.json"),
+            errors,
+            allow_legacy=True,
+        )
+        self.assertEqual(errors, [])
+        self.assertEqual({item["ledger_issue_id"] for item in bindings}, {"I-101", "I-102"})
+        self.assertEqual({item["mode"] for item in bindings}, {"explicit-id", "legacy-semantic"})
+
+    def test_paperjury_v2_rejects_vague_string_and_semantic_ledger_binding(self) -> None:
+        ledger = {
+            "issues": [
+                {
+                    "id": "I-900",
+                    "round_raised": 8,
+                    "raised_by": ["r8_claims"],
+                    "significance": "major",
+                    "summary": "The resource limits conflate equal ceilings and realized compute.",
+                }
+            ]
+        }
+        reviewer = Path("reviewer_claims.json")
+        errors: list[str] = []
+        bindings = paperjury_bind_blocking_findings(
+            ledger,
+            8,
+            "r8_claims",
+            ["Resource limits conflate equal ceilings and realized compute."],
+            reviewer,
+            errors,
+        )
+        self.assertEqual(bindings, [])
+        self.assertTrue(any("explicit stable finding id" in error for error in errors))
+
+        schema_errors: list[str] = []
+        self.assertIsNone(
+            validate_paperjury_major_finding(
+                "A vague string blocker", reviewer, 1, schema_errors
+            )
+        )
+        self.assertTrue(any("must be an object" in error for error in schema_errors))
+        vague_anchor_errors: list[str] = []
+        validate_paperjury_major_finding(
+            {
+                "id": "R8-C-001",
+                "evidence": "Method is unclear.",
+                "required_fix": "Clarify it.",
+            },
+            reviewer,
+            1,
+            vague_anchor_errors,
+        )
+        self.assertTrue(any("exact file:line" in error for error in vague_anchor_errors))
+        for vague_evidence in (
+            "Introduction: novelty unsupported.",
+            "paper/sections/method.tex",
+        ):
+            vague_anchor_errors = []
+            validate_paperjury_major_finding(
+                {
+                    "id": "R8-C-001",
+                    "evidence": vague_evidence,
+                    "required_fix": "Clarify it.",
+                },
+                reviewer,
+                1,
+                vague_anchor_errors,
+            )
+            self.assertTrue(any("exact file:line" in error for error in vague_anchor_errors))
+        valid_errors: list[str] = []
+        self.assertEqual(
+            validate_paperjury_major_finding(
+                {
+                    "id": "R8-C-002",
+                    "evidence": "sections/method.tex:41-47 contradicts Table 2.",
+                    "required_fix": "Align the stated operator with the registered condition.",
+                },
+                reviewer,
+                2,
+                valid_errors,
+            ),
+            "R8-C-002",
+        )
+        self.assertEqual(valid_errors, [])
+
+        with tempfile.TemporaryDirectory() as temporary:
+            snapshot = Path(temporary) / "snapshot"
+            method = snapshot / "sections/method.tex"
+            method.parent.mkdir(parents=True)
+            method.write_text(
+                "first line\nsecond line\\label{fig:real-anchor}\nthird line\n",
+                encoding="utf-8",
+            )
+            invalid_errors: list[str] = []
+            validate_paperjury_major_finding(
+                {
+                    "id": "R8-C-003",
+                    "evidence": "sections/method.tex:99 cites a nonexistent line.",
+                    "required_fix": "Correct the cited defect.",
+                },
+                reviewer,
+                3,
+                invalid_errors,
+                snapshot,
+            )
+            self.assertTrue(any("outside the frozen snapshot" in error for error in invalid_errors))
+            resolved_errors: list[str] = []
+            self.assertEqual(
+                validate_paperjury_major_finding(
+                    {
+                        "id": "R8-C-004",
+                        "evidence": "sections/method.tex:2 and \\ref{fig:real-anchor}.",
+                        "required_fix": "Align the anchored statement.",
+                    },
+                    reviewer,
+                    4,
+                    resolved_errors,
+                    snapshot,
+                ),
+                "R8-C-004",
+            )
+            self.assertEqual(resolved_errors, [])
+
     def test_layout_gate_rejects_dynamic_tex_and_boundary_budget_bypasses(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -243,7 +1450,9 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "\\subsection*{AI use statement}\nA concise disclosure.\n", encoding="utf-8"
             )
             (appendix / "appendix.tex").write_text(
-                "\\appendix\n\\section{Additional Material}\n", encoding="utf-8"
+                "\\appendix\n\\label{idea2paper:start-appendix}\n"
+                "\\section{Additional Material}\n",
+                encoding="utf-8",
             )
             canonical_main = (
                 "\\input{sections/body}\n"
@@ -1430,6 +2639,78 @@ class Idea2PaperScriptTests(unittest.TestCase):
             errors: list[str] = []
             validate_no_alternate_figure_backends(project, errors)
             self.assertTrue(any("forbidden non-imagegen" in error for error in errors))
+
+    def test_includegraphics_cannot_be_redefined_as_a_tex_backend(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            paper = project / "paper"
+            paper.mkdir()
+            (paper / "main.tex").write_text(
+                "\\renewcommand{\\includegraphics}[2][]{%\n"
+                "\\begin{tabular}{cc}A&B\\\\C&D\\end{tabular}}\n"
+                "\\begin{figure}\\includegraphics{figures/token.png}"
+                "\\caption{Forged raster.}\\label{fig:forged}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_no_alternate_figure_backends(project, errors)
+            self.assertTrue(
+                any("protected raster command redefinition" in error for error in errors)
+            )
+
+    def test_tiny_registered_raster_cannot_cover_tex_composed_figure(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            paper = project / "paper"
+            paper.mkdir()
+            (paper / "main.tex").write_text(
+                "\\begin{figure}[t]\n"
+                "\\includegraphics[width=1pt]{figures/token.png}\n"
+                "\\begin{tabular}{cc}A & B\\\\C & D\\end{tabular}\n"
+                "\\caption{A TeX-composed diagram.}\\label{fig:bypass}\n"
+                "\\end{figure}\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_no_alternate_figure_backends(project, errors)
+            self.assertTrue(any("composition primitives" in error for error in errors))
+            self.assertTrue(any("token-sized" in error for error in errors))
+
+            bypasses = (
+                "\\begin{figure}\n"
+                "\\scalebox{0.01}{\\includegraphics{figures/token.png}}\n"
+                "\\[\\begin{aligned}A&\\to B\\\\B&\\to C\\end{aligned}\\]\n"
+                "\\caption{Math-built diagram.}\\label{fig:scale-bypass}\n"
+                "\\end{figure}\n",
+                "\\begin{figure}\n"
+                "\\resizebox{1pt}{!}{\\includegraphics{figures/token.png}}\n"
+                "\\begin{center}$A \\rightarrow B$\\end{center}\n"
+                "\\caption{Resized token.}\\label{fig:resize-bypass}\n"
+                "\\end{figure}\n",
+            )
+            for bypass in bypasses:
+                (paper / "main.tex").write_text(bypass, encoding="utf-8")
+                bypass_errors: list[str] = []
+                validate_no_alternate_figure_backends(project, bypass_errors)
+                self.assertTrue(
+                    any("unauthorized TeX structure" in error for error in bypass_errors)
+                )
+
+            (paper / "main.tex").write_text(
+                "\\begin{figure}[t]\n"
+                "\\begin{subfigure}{0.48\\linewidth}"
+                "\\includegraphics[width=\\linewidth]{figures/a.png}"
+                "\\caption{A}\\end{subfigure}\n"
+                "\\begin{subfigure}{0.48\\linewidth}"
+                "\\includegraphics[width=\\linewidth]{figures/b.png}"
+                "\\caption{B}\\end{subfigure}\n"
+                "\\caption{Standard imagegen raster subfigures.}\\label{fig:allowed}\n"
+                "\\end{figure}\n",
+                encoding="utf-8",
+            )
+            allowed_errors: list[str] = []
+            validate_no_alternate_figure_backends(project, allowed_errors)
+            self.assertEqual(allowed_errors, [])
 
 
 if __name__ == "__main__":

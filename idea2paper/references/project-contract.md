@@ -38,7 +38,9 @@ Do not ask for information that can be discovered safely. Record reasonable defa
   figures/{inputs/,prompts/,generated/,qa/,manifest.csv}
   paper/{main.tex,title.tex,idea2paper-draft.sty,sections/,tables/,figures/,appendix/,references.bib}
   qa/{todo_registry.json,citation_report.md,consistency_report.md,
-      figure_report.md,layout_report.md,final_report.json}
+      figure_report.md,layout_report.md,final_report.json,
+      paperjury/{LEDGER.json,LEDGER.md,final_report.json,
+                 round_XX/{snapshot/,reviewer_*.json,round_report.json}}}
   build/
 ```
 
