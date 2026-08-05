@@ -52,6 +52,7 @@ from compile_paper import (  # noqa: E402
     command_for,
     document_column_mode_audit,
     float_distribution_audit,
+    float_reading_order_violations_from_pages,
     infer_column_mode_from_pages,
     latex_overfull_boxes,
     manual_pagination_commands,
@@ -61,6 +62,7 @@ from compile_paper import (  # noqa: E402
     rendered_whitespace_audit,
     sha256_file,
     source_tree_sha256,
+    teaser_placement_audit,
     tex_fuzz_register_uses,
 )
 from select_venue import load_registry  # noqa: E402
@@ -631,7 +633,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                         returncode = compile_paper_module.main()
                     report = json.loads(output.getvalue())
                     self.assertEqual(returncode, expected_returncode)
-                    self.assertEqual(report["schema_version"], 9)
+                    self.assertEqual(report["schema_version"], 10)
                     self.assertEqual(report["aux"], str(build / "main.aux"))
                     self.assertTrue(report["fresh_build"])
                     self.assertEqual(report["compiler_log_sha256"], sha256_file(build / "main.log"))
@@ -684,7 +686,11 @@ class Idea2PaperScriptTests(unittest.TestCase):
             body = sections / "experiments.tex"
             body.write_text(
                 "% \\clearpage is only documentation\n"
-                "\\begin{figure}[t]\\caption{x}\\label{fig:late}\\end{figure}\n",
+                "\\begin{IdeaTwoPaperTitleTeaser}{caption}{fig:teaser}"
+                "\nx\\end{IdeaTwoPaperTitleTeaser}\n"
+                "\\begin{figure}[t]\\caption{x}\\label{fig:late}\\end{figure}\n"
+                "\\begin{minipage}{\\linewidth}\\captionof{table}{x}"
+                "\\label{tab:anchored}\\end{minipage}\n",
                 encoding="utf-8",
             )
             appended = appendix / "appendix.tex"
@@ -712,9 +718,15 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assertEqual(manual_pagination_commands(paper), [])
-            self.assertEqual(body_float_labels(paper), ["fig:late"])
+            self.assertEqual(
+                body_float_labels(paper), ["fig:late", "fig:teaser", "tab:anchored"]
+            )
             inventory = body_float_inventory(paper)
             self.assertEqual(inventory["unlabeled"], [])
+            self.assertEqual(
+                [item["placement"] for item in inventory["records"]],
+                ["source-anchored", "floating", "source-anchored"],
+            )
             self.assertNotIn("appendix/appendix.tex", inventory["active_body_files"])
             self.assertEqual(inventory["appendix_labels"], ["fig:appendix-only"])
             self.assertEqual(len(inventory["appendix_records"]), 1)
@@ -1048,6 +1060,23 @@ class Idea2PaperScriptTests(unittest.TestCase):
         self.assertIn("terminal_page_trailing_blank", prose_stub_codes)
         self.assertIn("terminal_page_too_sparse", prose_stub_codes)
 
+        source_anchored_artifact = page_geometry_from_boxes(
+            600,
+            800,
+            [
+                {"x0": 95, "x1": 505, "top": 80, "bottom": 380, "text": "<image>"},
+                {"x0": 95, "x1": 135, "top": 390, "bottom": 405, "text": "Figure"},
+                {"x0": 140, "x1": 155, "top": 390, "bottom": 405, "text": "4:"},
+            ],
+            page_number=10,
+            float_count=0,
+            column_mode=1,
+            is_last_page=True,
+        )
+        anchored_codes = [item["code"] for item in source_anchored_artifact["violations"]]
+        self.assertTrue(source_anchored_artifact["rendered_artifact_detected"])
+        self.assertIn("terminal_artifact_page_trailing_blank", anchored_codes)
+
         masked_by_prose = [
             {"x0": 90, "x1": 510, "top": 80, "bottom": 100, "text": "prose"}
         ]
@@ -1133,6 +1162,75 @@ class Idea2PaperScriptTests(unittest.TestCase):
             errors: list[str] = []
             validate_media_box_overflow_report(layout_fields, errors, pdf)
             self.assertEqual(errors, [])
+
+    def test_float_reading_order_rejects_caption_between_word_halves(self) -> None:
+        pages = [
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 700.0, "bottom": 710.0, "text": "diagno-"}
+                ],
+            },
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 90.0, "bottom": 100.0, "text": "Table"},
+                    {"x0": 140.0, "top": 90.0, "bottom": 100.0, "text": "3:"},
+                    {"x0": 110.0, "top": 500.0, "bottom": 510.0, "text": "sis"},
+                ],
+            },
+        ]
+        violations = float_reading_order_violations_from_pages(pages, {"2": 1})
+        self.assertEqual(
+            [item["code"] for item in violations], ["float_interrupted_hyphen"]
+        )
+
+    def test_float_reading_order_allows_immediate_word_continuation(self) -> None:
+        pages = [
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 700.0, "bottom": 710.0, "text": "diagno-"}
+                ],
+            },
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 90.0, "bottom": 100.0, "text": "sis"},
+                    {"x0": 110.0, "top": 650.0, "bottom": 660.0, "text": "Table"},
+                ],
+            },
+        ]
+        self.assertEqual(float_reading_order_violations_from_pages(pages, {"2": 1}), [])
+
+    def test_float_reading_order_rejects_caption_inside_unfinished_sentence(self) -> None:
+        pages = [
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 700.0, "bottom": 710.0, "text": "from"},
+                    {"x0": 150.0, "top": 700.0, "bottom": 710.0, "text": "complete"},
+                ],
+            },
+            {
+                "width": 600.0,
+                "height": 800.0,
+                "words": [
+                    {"x0": 110.0, "top": 90.0, "bottom": 100.0, "text": "Figure"},
+                    {"x0": 155.0, "top": 90.0, "bottom": 100.0, "text": "4:"},
+                    {"x0": 110.0, "top": 500.0, "bottom": 510.0, "text": "satisfaction"},
+                ],
+            },
+        ]
+        violations = float_reading_order_violations_from_pages(pages, {"2": 1})
+        self.assertEqual(
+            [item["code"] for item in violations], ["float_interrupted_sentence"]
+        )
 
     def test_paperjury_self_reported_pass_without_artifacts_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -1634,6 +1732,12 @@ class Idea2PaperScriptTests(unittest.TestCase):
             title_tex = (project / "paper/title.tex").read_text(encoding="utf-8")
             self.assertIn(r"\input{title}", main_tex)
             self.assertIn(r"\title{\papertitle}", main_tex)
+            self.assertIn(r"\IdeaTwoPaperPatchTitleTeaser", main_tex)
+            self.assertEqual(main_tex.count(r"\input{sections/teaser}"), 1)
+            self.assertLess(
+                main_tex.index(r"\IdeaTwoPaperPatchTitleTeaser"),
+                main_tex.index(r"\begin{document}"),
+            )
             self.assertIn(r"\label{idea2paper:end-exempt}", main_tex)
             self.assertIn("Working Title Pending", title_tex)
             self.assertNotIn("A&B_# uncertainty model", title_tex)
@@ -1722,6 +1826,68 @@ class Idea2PaperScriptTests(unittest.TestCase):
             explicit_decision = json.loads((parent / "explicit/venue/decision.json").read_text(encoding="utf-8"))
             self.assertEqual(explicit_project["venue_selection_mode"], "user_specified")
             self.assertEqual(explicit_decision["selection_mode"], "user_specified")
+
+    def test_teaser_requires_title_then_teaser_then_author_hook(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary) / "paper"
+            sections = paper / "sections"
+            sections.mkdir(parents=True)
+            teaser = sections / "teaser.tex"
+            teaser.write_text(
+                "\\begin{IdeaTwoPaperTitleTeaser}{Conceptual teaser.}{fig:teaser}\n"
+                "\\includegraphics[width=0.8\\linewidth]{figures/teaser.png}\n"
+                "\\end{IdeaTwoPaperTitleTeaser}\n",
+                encoding="utf-8",
+            )
+            main = paper / "main.tex"
+            main.write_text(
+                "\\documentclass{article}\n"
+                "\\title{A Title}\\author{Anonymous Authors}\n"
+                "\\makeatletter\n"
+                "\\IdeaTwoPaperPatchTitleTeaser{{\\LARGE \\@title \\par}}"
+                "{\\input{sections/teaser}}\n"
+                "\\makeatother\n"
+                "\\begin{document}\n"
+                "\\maketitle\n"
+                "\\begin{abstract}Abstract.\\end{abstract}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(teaser_placement_audit(paper), [])
+
+            main.write_text(
+                "\\documentclass{article}\n"
+                "\\title{A Title}\\author{Anonymous Authors}\n"
+                "\\begin{document}\n"
+                "\\maketitle\n"
+                "\\input{sections/teaser}\n"
+                "\\begin{abstract}Abstract.\\end{abstract}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            direct_errors = teaser_placement_audit(paper)
+            self.assertTrue(
+                any("IdeaTwoPaperPatchTitleTeaser" in error for error in direct_errors)
+            )
+
+            teaser.write_text(
+                "\\begin{figure}[t]\\includegraphics{figures/teaser.png}"
+                "\\caption{Wrong float.}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            main.write_text(
+                "\\documentclass{article}\n"
+                "\\title{A Title}\\author{Anonymous Authors}\n"
+                "\\makeatletter\n"
+                "\\IdeaTwoPaperPatchTitleTeaser{{\\LARGE \\@title \\par}}"
+                "{\\input{sections/teaser}}\n"
+                "\\makeatother\n"
+                "\\begin{document}\\maketitle"
+                "\\begin{abstract}Abstract.\\end{abstract}\\end{document}\n",
+                encoding="utf-8",
+            )
+            float_errors = teaser_placement_audit(paper)
+            self.assertTrue(any("non-floating" in error for error in float_errors))
 
     def test_auto_venue_uses_open_abstract_or_paper_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2516,13 +2682,44 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
             prompt.write_text(
                 "Use case: scientific-educational\n"
-                "Primary request: Explain the novel uncertainty-aware mechanism.\n",
+                "Primary request: Explain the novel uncertainty-aware mechanism.\n"
+                "Figure role: overview\n"
+                "10-second message: The verifier enables localized repair.\n"
+                "Paper claim: C-001\n"
+                "Final-size target: 7.0 inches by 3.0 inches; 7:3.\n"
+                "Reference synthesis: Three accepted-paper overviews; compact spine.\n"
+                "Composition grammar: Three aligned phases on one rectangular grid.\n"
+                "Reading order: left to right, then one subordinate repair return.\n"
+                "Novelty emphasis: verifier and repair receive the largest central region.\n"
+                "Color semantics: blue data, coral failure, teal repair.\n"
+                "Text budget: eight labels, at most three words each.\n"
+                "Domain visual evidence: pose sequence; trajectory; contact schedule.\n"
+                "Generic-box area budget: <= 35%\n"
+                "Three-glance hierarchy: claim; mechanism; local evidence.\n"
+                "Composition archetypes evaluated: 3\n"
+                "Hard vetoes: no crossings, dead corners, paragraphs, or equal-weight cards.\n"
+                "Candidate directions evaluated: 6\n"
+                "Targeted refinements completed: 3\n",
                 encoding="utf-8",
             )
             image_bytes = make_png()
             generated.write_bytes(image_bytes)
             paper_asset.write_bytes(image_bytes)
-            qa.write_text("QA status: pass\n\nTerminology, arrows, values, color, readability, and watermark checked.\n", encoding="utf-8")
+            qa.write_text(
+                "QA status: pass\n"
+                "Faithfulness: pass\n"
+                "Conciseness: pass\n"
+                "Readability: pass\n"
+                "Aesthetics: pass\n"
+                "Domain evidence: pass\n"
+                "Non-generic composition: pass\n"
+                "Three-glance hierarchy: pass\n"
+                "Novelty salience: pass\n"
+                "Rectangular efficiency: pass\n"
+                "Final-size inspection: pass\n\n"
+                "Terminology, arrows, values, color, readability, and watermark checked.\n",
+                encoding="utf-8",
+            )
             imagegen_skill.write_text(
                 '---\nname: "imagegen"\ndescription: test image generator\n---\n',
                 encoding="utf-8",
@@ -2583,30 +2780,30 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "output_sha256",
             ]
 
-            def write_manifest(backend: str) -> None:
+            def write_manifest(backend: str, **overrides: str) -> None:
                 with manifest.open("w", newline="", encoding="utf-8") as handle:
                     writer = csv.DictWriter(handle, fieldnames=fields)
                     writer.writeheader()
-                    writer.writerow(
-                        {
-                            "figure_id": "FIG-OVERVIEW",
-                            "type": "overview",
-                            "claim_ids": "C-001",
-                            "module_ids": "M-001",
-                            "result_ids": "",
-                            "backend": backend,
-                            "mode": "generate",
-                            "prompt_path": "figures/prompts/overview.md",
-                            "input_paths": "",
-                            "generated_path": "figures/generated/overview.png",
-                            "paper_path": "paper/figures/overview.png",
-                            "version": "v1",
-                            "status": "final",
-                            "qa_path": "figures/qa/overview.md",
-                            "provenance_path": "figures/qa/overview-provenance.json",
-                            "output_sha256": output_hash,
-                        }
-                    )
+                    row = {
+                        "figure_id": "FIG-OVERVIEW",
+                        "type": "overview",
+                        "claim_ids": "C-001",
+                        "module_ids": "M-001",
+                        "result_ids": "",
+                        "backend": backend,
+                        "mode": "generate",
+                        "prompt_path": "figures/prompts/overview.md",
+                        "input_paths": "",
+                        "generated_path": "figures/generated/overview.png",
+                        "paper_path": "paper/figures/overview.png",
+                        "version": "v1",
+                        "status": "final",
+                        "qa_path": "figures/qa/overview.md",
+                        "provenance_path": "figures/qa/overview-provenance.json",
+                        "output_sha256": output_hash,
+                    }
+                    row.update(overrides)
+                    writer.writerow(row)
 
             write_manifest("drawio")
             errors: list[str] = []
@@ -2617,6 +2814,103 @@ class Idea2PaperScriptTests(unittest.TestCase):
             errors = []
             validate_figures(project, errors, require_overview=True)
             self.assertEqual(errors, [])
+
+            child_prompt = project / "figures/prompts/overview_v2.md"
+            child_generated = project / "figures/generated/overview_v2.png"
+            child_paper = project / "paper/figures/overview_v2.png"
+            child_qa = project / "figures/qa/overview_v2.md"
+            child_receipt = project / "figures/qa/overview_v2-receipt.json"
+            child_provenance = project / "figures/qa/overview_v2-provenance.json"
+            child_prompt.write_text(
+                "Make exactly one surgical typography edit to the overview. "
+                "Preserve absolutely everything else in content and composition.",
+                encoding="utf-8",
+            )
+            child_generated.write_bytes(image_bytes)
+            child_paper.write_bytes(image_bytes)
+            child_qa.write_text(
+                "QA status: passed\n"
+                "Faithfulness: pass\n"
+                "Readability: pass\n"
+                "Aesthetics: pass\n"
+                "Domain evidence: pass\n"
+                "Non-generic composition: pass\n"
+                "Three-glance hierarchy: pass\n"
+                "Final-size inspection: pass\n",
+                encoding="utf-8",
+            )
+            child_receipt.write_text(
+                json.dumps(
+                    {
+                        "skill_name": "imagegen",
+                        "tool": "image_gen.imagegen",
+                        "call_id": "image-call-002",
+                        "skill_sha256": hashlib.sha256(imagegen_skill.read_bytes()).hexdigest(),
+                        "started_at": "2026-08-01T00:02:00Z",
+                        "completed_at": "2026-08-01T00:03:00Z",
+                        "prompt_sha256": hashlib.sha256(child_prompt.read_bytes()).hexdigest(),
+                        "output_sha256": output_hash,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            child_provenance.write_text(
+                json.dumps(
+                    {
+                        "skill_name": "imagegen",
+                        "tool": "image_gen.imagegen",
+                        "mode": "edit",
+                        "generated_at": "2026-08-01T00:02:00Z",
+                        "prompt_sha256": hashlib.sha256(child_prompt.read_bytes()).hexdigest(),
+                        "output_sha256": output_hash,
+                        "input_path": "figures/generated/overview.png",
+                        "input_sha256": output_hash,
+                        "receipt_path": "figures/qa/overview_v2-receipt.json",
+                        "receipt_sha256": hashlib.sha256(child_receipt.read_bytes()).hexdigest(),
+                        "skill_snapshot_path": "figures/qa/imagegen-SKILL.md",
+                        "skill_snapshot_sha256": hashlib.sha256(imagegen_skill.read_bytes()).hexdigest(),
+                    }
+                ),
+                encoding="utf-8",
+            )
+            main_tex.write_text(
+                "\\includegraphics{figures/overview_v2.png}\n", encoding="utf-8"
+            )
+            write_manifest(
+                "imagegen",
+                mode="edit",
+                prompt_path="figures/prompts/overview_v2.md",
+                input_paths="figures/generated/overview.png",
+                generated_path="figures/generated/overview_v2.png",
+                paper_path="paper/figures/overview_v2.png",
+                version="v2",
+                qa_path="figures/qa/overview_v2.md",
+                provenance_path="figures/qa/overview_v2-provenance.json",
+            )
+            inherited_errors: list[str] = []
+            validate_figures(project, inherited_errors, require_overview=True)
+            self.assertEqual(inherited_errors, [])
+
+            strong_prompt = prompt.read_text(encoding="utf-8")
+            weak_prompt = (
+                strong_prompt.replace(
+                    "Domain visual evidence: pose sequence; trajectory; contact schedule.",
+                    "Domain visual evidence: pose sequence; trajectory.",
+                )
+                .replace("Generic-box area budget: <= 35%", "Generic-box area budget: <= 60%")
+                .replace("Composition archetypes evaluated: 3", "Composition archetypes evaluated: 2")
+                .replace("Candidate directions evaluated: 6", "Candidate directions evaluated: 4")
+                .replace("Targeted refinements completed: 3", "Targeted refinements completed: 2")
+            )
+            prompt.write_text(weak_prompt, encoding="utf-8")
+            errors = []
+            validate_figures(project, errors, require_overview=True)
+            self.assertTrue(any("at least six" in error for error in errors))
+            self.assertTrue(any("at least three composition archetypes" in error for error in errors))
+            self.assertTrue(any("at least three domain visual-evidence" in error for error in errors))
+            self.assertTrue(any("at most 35%" in error for error in errors))
+            self.assertTrue(any("at least three targeted" in error for error in errors))
+            prompt.write_text(strong_prompt, encoding="utf-8")
 
             unregistered = project / "paper/figures/unregistered.png"
             unregistered.write_bytes(b"not-registered")

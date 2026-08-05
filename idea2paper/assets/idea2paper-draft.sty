@@ -1,7 +1,8 @@
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{idea2paper-draft}[2026/08/01 Tracked draft placeholders for idea2paper]
+\ProvidesPackage{idea2paper-draft}[2026/08/04 Tracked draft placeholders and title-teaser hook for idea2paper]
 
 \RequirePackage{xcolor}
+\RequirePackage{etoolbox}
 
 \definecolor{IdeaTwoPaperDraftRed}{RGB}{190,35,35}
 
@@ -17,6 +18,37 @@
 \newcommand{\TemplateTODO}[2]{%
   \PackageWarningNoLine{idea2paper-draft}{#1: #2}%
   \par\noindent\textcolor{IdeaTwoPaperDraftRed}{\textbf{Template TODO (#1):} #2}\par%
+}
+
+% The venue template remains byte-for-byte unchanged. This adapter splices a
+% non-floating teaser immediately after the template's title token sequence and
+% therefore before the author block. A missing template anchor is a hard error:
+% silently falling back would put the teaser in the wrong visual position.
+\newcommand{\IdeaTwoPaperPatchTitleTeaser}[2]{%
+  \patchcmd{\@maketitle}{#1}{#1#2}{}{%
+    \PackageError{idea2paper-draft}%
+      {Could not install the title--teaser--author hook}%
+      {Update the first argument of \string\IdeaTwoPaperPatchTitleTeaser\space to the exact title token sequence in the active venue template.}%
+  }%
+}
+
+% A title-block teaser cannot be a LaTeX float because it is rendered inside
+% \@maketitle. Keep includegraphics literal in the environment body so project
+% validation can still bind the raster to the imagegen manifest.
+\newenvironment{IdeaTwoPaperTitleTeaser}[2]{%
+  \def\IdeaTwoPaperTeaserCaption{#1}%
+  \def\IdeaTwoPaperTeaserLabel{#2}%
+  \par\vspace{0.8em}%
+  \begin{center}%
+}{%
+  \par\vspace{0.35em}%
+  \refstepcounter{figure}%
+  \begin{minipage}{0.96\linewidth}%
+    \small\textbf{Figure~\thefigure:} \IdeaTwoPaperTeaserCaption%
+    \label{\IdeaTwoPaperTeaserLabel}%
+  \end{minipage}%
+  \end{center}%
+  \vspace{0.5em}%
 }
 
 \endinput

@@ -56,6 +56,10 @@ INPUT_RE = re.compile(
 FLOAT_RE = re.compile(
     r"\\begin\{((?:figure|table)\*?)\}([\s\S]*?)\\end\{(?:figure|table)\*?\}"
 )
+CAPTIONOF_RE = re.compile(r"\\captionof\{(?P<kind>figure|table)\}")
+TITLE_TEASER_RE = re.compile(
+    r"\\begin\{IdeaTwoPaperTitleTeaser\}(?P<header>[^\r\n]*)"
+)
 LABEL_RE = re.compile(r"\\label\{([^}]+)\}")
 BODY_END_MARKER = r"\label{idea2paper:end-body}"
 BODY_EXEMPT_END_MARKER = r"\label{idea2paper:end-exempt}"
@@ -592,6 +596,139 @@ def _normalized_input_target(value: str) -> str:
     return target[:-4].casefold() if target.casefold().endswith(".tex") else target.casefold()
 
 
+def _balanced_command_calls(
+    source: str, command: str, argument_count: int
+) -> list[dict[str, Any]]:
+    """Extract fixed-arity TeX command calls without accepting unbalanced groups."""
+
+    calls: list[dict[str, Any]] = []
+    pattern = re.compile(re.escape(command) + r"(?![A-Za-z@])")
+    for match in pattern.finditer(source):
+        cursor = match.end()
+        arguments: list[dict[str, Any]] = []
+        valid = True
+        for _ in range(argument_count):
+            while cursor < len(source) and source[cursor].isspace():
+                cursor += 1
+            if cursor >= len(source) or source[cursor] != "{":
+                valid = False
+                break
+            end = _balanced_group_end(source, cursor)
+            if end is None:
+                valid = False
+                break
+            arguments.append(
+                {
+                    "start": cursor,
+                    "end": end,
+                    "body": source[cursor + 1 : end - 1],
+                }
+            )
+            cursor = end
+        calls.append(
+            {
+                "start": match.start(),
+                "end": cursor,
+                "arguments": arguments,
+                "valid": valid,
+            }
+        )
+    return calls
+
+
+def teaser_placement_audit(paper: Path) -> list[str]:
+    """Enforce the rendered Title -> Teaser -> Authors -> Abstract contract."""
+
+    paper = paper.resolve()
+    main_path = paper / "main.tex"
+    teaser_path = paper / "sections/teaser.tex"
+    if not main_path.is_file():
+        return []
+
+    main_source = strip_tex_comments(main_path.read_text(encoding="utf-8", errors="replace"))
+    teaser_source = (
+        strip_tex_comments(teaser_path.read_text(encoding="utf-8", errors="replace"))
+        if teaser_path.is_file()
+        else ""
+    )
+    teaser_inputs = []
+    for match in INPUT_RE.finditer(main_source):
+        target = (match.group("braced") or match.group("bare") or "").strip()
+        if _normalized_input_target(target) == "sections/teaser":
+            teaser_inputs.append(match)
+    patch_calls = _balanced_command_calls(
+        main_source, r"\IdeaTwoPaperPatchTitleTeaser", 2
+    )
+    active = bool(teaser_source.strip() or teaser_inputs or patch_calls)
+    if not active:
+        return []
+
+    errors: list[str] = []
+    if not teaser_path.is_file():
+        errors.append("title-block teaser hook is active but sections/teaser.tex is missing")
+        return errors
+    if len(patch_calls) != 1 or not patch_calls[0]["valid"]:
+        errors.append(
+            "main.tex must contain exactly one balanced "
+            r"\IdeaTwoPaperPatchTitleTeaser{<title-anchor>}{\input{sections/teaser}} call"
+        )
+        return errors
+
+    call = patch_calls[0]
+    title_anchor = str(call["arguments"][0]["body"])
+    insertion = str(call["arguments"][1]["body"])
+    if r"\@title" not in title_anchor:
+        errors.append("title-teaser hook anchor must contain the active template's \\@title token")
+    if re.sub(r"\s+", "", insertion) != r"\input{sections/teaser}":
+        errors.append(
+            "title-teaser hook second argument must be exactly "
+            r"\input{sections/teaser}"
+        )
+    if len(teaser_inputs) != 1 or not (
+        call["arguments"][1]["start"]
+        < teaser_inputs[0].start()
+        < call["arguments"][1]["end"]
+    ):
+        errors.append(
+            "sections/teaser must be input exactly once, inside the title-teaser hook only"
+        )
+
+    begin_document = re.search(r"\\begin\{document\}", main_source)
+    make_titles = list(re.finditer(r"\\maketitle\b", main_source))
+    abstracts = list(re.finditer(r"\\begin\{abstract\}", main_source))
+    if begin_document is None or len(make_titles) != 1 or len(abstracts) != 1:
+        errors.append(
+            "title-teaser placement requires one begin{document}, one maketitle, and one abstract"
+        )
+    elif not (
+        call["end"]
+        < begin_document.start()
+        < make_titles[0].start()
+        < abstracts[0].start()
+    ):
+        errors.append(
+            "source order must be title-teaser hook < begin{document} < maketitle < Abstract"
+        )
+
+    if teaser_source.strip():
+        begins = list(
+            re.finditer(r"\\begin\{IdeaTwoPaperTitleTeaser\}", teaser_source)
+        )
+        ends = list(re.finditer(r"\\end\{IdeaTwoPaperTitleTeaser\}", teaser_source))
+        if len(begins) != 1 or len(ends) != 1 or begins[0].start() >= ends[0].start():
+            errors.append(
+                "sections/teaser.tex must contain exactly one "
+                "IdeaTwoPaperTitleTeaser environment"
+            )
+        if re.search(r"\\begin\{figure\*?\}", teaser_source):
+            errors.append(
+                "title-block teaser must be non-floating; figure/figure* is forbidden"
+            )
+        if not INCLUDE_GRAPHICS_RE.search(teaser_source):
+            errors.append("title-block teaser must contain a literal \\includegraphics raster")
+    return errors
+
+
 def manuscript_structure_audit(paper: Path) -> dict[str, Any]:
     """Bind canonical boundary labels to the actual Conclusion, bibliography, and appendix."""
 
@@ -613,6 +750,7 @@ def manuscript_structure_audit(paper: Path) -> dict[str, Any]:
     segments = active_tex_segments(paper)
     source = _combined_source(segments)
     errors: list[str] = []
+    errors.extend(teaser_placement_audit(paper))
     conditional_commands = list(TEX_CONDITIONAL_RE.finditer(source))
     if conditional_commands:
         path, line = _segment_origin(segments, conditional_commands[0].start())
@@ -884,7 +1022,7 @@ def manual_pagination_commands(paper: Path) -> list[dict[str, Any]]:
 
 
 def manuscript_float_inventory(paper: Path) -> dict[str, Any]:
-    """Inventory every active body and appendix float in source order."""
+    """Inventory floating and source-anchored figure/table artifacts in source order."""
 
     structure = manuscript_structure_audit(paper)
     segments = list(structure["segments"])
@@ -894,22 +1032,69 @@ def manuscript_float_inventory(paper: Path) -> dict[str, Any]:
     conclusion_position = structure["conclusion_position"]
     all_records: list[dict[str, Any]] = []
     all_labels: list[str] = []
-    for index, match in enumerate(FLOAT_RE.finditer(source), start=1):
-        path, line = _segment_origin(segments, match.start())
-        float_labels = LABEL_RE.findall(match.group(2))
-        region = "body" if match.start() < cutoff else "appendix"
+    floating_matches = list(FLOAT_RE.finditer(source))
+    candidates: list[dict[str, Any]] = [
+        {
+            "start": match.start(),
+            "environment": match.group(1),
+            "content": match.group(2),
+            "placement": "floating",
+        }
+        for match in floating_matches
+    ]
+    for match in CAPTIONOF_RE.finditer(source):
+        if any(item.start() <= match.start() < item.end() for item in floating_matches):
+            continue
+        block_end = source.find(r"\end{minipage}", match.end())
+        if block_end < 0:
+            block_end = min(len(source), match.end() + 5000)
+        candidates.append(
+            {
+                "start": match.start(),
+                "environment": f"captionof_{match.group('kind')}",
+                "content": source[match.end() : block_end],
+                "placement": "source-anchored",
+            }
+        )
+    for match in TITLE_TEASER_RE.finditer(source):
+        label_match = re.search(r"\{(?P<label>[^{}]+)\}\s*$", match.group("header"))
+        if label_match is None:
+            candidates.append(
+                {
+                    "start": match.start(),
+                    "environment": "title_teaser",
+                    "content": "",
+                    "placement": "source-anchored",
+                }
+            )
+            continue
+        candidates.append(
+            {
+                "start": match.start(),
+                "environment": "title_teaser",
+                "content": rf"\label{{{label_match.group('label')}}}",
+                "placement": "source-anchored",
+            }
+        )
+    candidates.sort(key=lambda item: int(item["start"]))
+    for index, item in enumerate(candidates, start=1):
+        offset = int(item["start"])
+        path, line = _segment_origin(segments, offset)
+        float_labels = LABEL_RE.findall(str(item["content"]))
+        region = "body" if offset < cutoff else "appendix"
         record = {
             "float_index": index,
-            "environment": match.group(1),
+            "environment": item["environment"],
+            "placement": item["placement"],
             "path": path,
             "line": line,
             "labels": float_labels,
-            "source_offset": match.start(),
+            "source_offset": offset,
             "region": region,
             "after_conclusion_source": (
                 region == "body"
                 and isinstance(conclusion_position, int)
-                and match.start() > conclusion_position
+                and offset > conclusion_position
             ),
         }
         all_records.append(record)
@@ -1582,7 +1767,12 @@ def page_geometry_from_boxes(
         }
         for item in media_box_overflows
     ]
-    if float_count > 0:
+    visible_text = " ".join(str(box.get("text", "")) for box in boxes)
+    has_rendered_artifact = re.search(
+        r"\b(?:Table|Figure)\s+(?:\d+|[A-Z])\s*:", visible_text, re.IGNORECASE
+    ) is not None
+    effective_artifact_count = max(float_count, 1 if has_rendered_artifact else 0)
+    if effective_artifact_count > 0:
         if leading_blank > 0.22:
             violations.append(
                 {
@@ -1596,7 +1786,11 @@ def page_geometry_from_boxes(
             if trailing_blank > 0.45:
                 violations.append(
                     {
-                        "code": "terminal_float_page_trailing_blank",
+                    "code": (
+                        "terminal_float_page_trailing_blank"
+                        if float_count > 0
+                        else "terminal_artifact_page_trailing_blank"
+                    ),
                         "page": page_number,
                         "fraction": round(trailing_blank, 4),
                         "maximum": 0.45,
@@ -1605,7 +1799,11 @@ def page_geometry_from_boxes(
             if occupied_height < 0.35:
                 violations.append(
                     {
-                        "code": "terminal_float_page_too_sparse",
+                    "code": (
+                        "terminal_float_page_too_sparse"
+                        if float_count > 0
+                        else "terminal_artifact_page_too_sparse"
+                    ),
                         "page": page_number,
                         "fraction": round(occupied_height, 4),
                         "minimum": 0.35,
@@ -1614,7 +1812,7 @@ def page_geometry_from_boxes(
         elif trailing_blank > 0.22:
             violations.append(
                 {
-                    "code": "float_page_trailing_blank",
+                    "code": "float_page_trailing_blank" if float_count > 0 else "artifact_page_trailing_blank",
                     "page": page_number,
                     "fraction": round(trailing_blank, 4),
                     "maximum": 0.22,
@@ -1642,7 +1840,7 @@ def page_geometry_from_boxes(
                     "minimum": 0.20,
                 }
             )
-    if float_count > 0 and largest_internal > 0.16:
+    if effective_artifact_count > 0 and largest_internal > 0.16:
         violations.append(
             {
                 "code": "float_page_internal_blank_band",
@@ -1660,7 +1858,7 @@ def page_geometry_from_boxes(
                 "maximum": 0.30,
             }
         )
-    if column_mode == 1 and float_count > 0 and occupied_height > 0.20:
+    if column_mode == 1 and effective_artifact_count > 0 and occupied_height > 0.20:
         if content_width < 0.50:
             violations.append(
                 {
@@ -1684,6 +1882,7 @@ def page_geometry_from_boxes(
     return {
         "page": page_number,
         "float_count": float_count,
+        "rendered_artifact_detected": has_rendered_artifact,
         "content_box_count": len(filtered),
         "leading_blank_fraction": round(leading_blank, 4),
         "largest_internal_blank_fraction": round(largest_internal, 4),
@@ -1747,6 +1946,91 @@ def rendered_media_box_overflows(pdf_path: Path) -> list[dict[str, Any]]:
     return overflows
 
 
+def float_reading_order_violations_from_pages(
+    page_samples: list[dict[str, Any]], page_float_counts: dict[str, int]
+) -> list[dict[str, Any]]:
+    """Detect a top artifact inserted inside a word or unfinished sentence."""
+
+    violations: list[dict[str, Any]] = []
+    for index in range(len(page_samples) - 1):
+        current = page_samples[index]
+        following = page_samples[index + 1]
+        page_number = index + 1
+        next_page_number = page_number + 1
+        if int(page_float_counts.get(str(next_page_number), 0)) <= 0:
+            continue
+
+        def content_words(sample: dict[str, Any]) -> list[dict[str, Any]]:
+            width = float(sample["width"])
+            height = float(sample["height"])
+            kept: list[dict[str, Any]] = []
+            for word in sample.get("words", []):
+                text = str(word.get("text", "")).strip()
+                x0 = float(word.get("x0", 0.0))
+                top = float(word.get("top", 0.0))
+                bottom = float(word.get("bottom", top))
+                if not text or x0 < width * 0.16:
+                    continue
+                if top < height * 0.075 or bottom > height * 0.93:
+                    continue
+                kept.append(word)
+            return sorted(
+                kept,
+                key=lambda word: (
+                    float(word.get("top", 0.0)),
+                    float(word.get("x0", 0.0)),
+                ),
+            )
+
+        current_words = content_words(current)
+        next_words = content_words(following)
+        if not current_words or not next_words:
+            continue
+        trailing = str(current_words[-1].get("text", "")).strip()
+        first_top = float(next_words[0].get("top", 0.0))
+        first_line = " ".join(
+            str(word.get("text", "")).strip()
+            for word in next_words
+            if abs(float(word.get("top", 0.0)) - first_top) <= 3.5
+        )
+        starts_with_artifact = re.match(
+            r"^(?:Table|Figure)\s*(?:\d+|[A-Z])?\s*[:.]?",
+            first_line,
+            re.IGNORECASE,
+        ) is not None
+        if not starts_with_artifact:
+            continue
+        if re.fullmatch(r"[A-Za-z]{3,}-", trailing) is not None:
+            violations.append(
+                {
+                    "code": "float_interrupted_hyphen",
+                    "page": page_number,
+                    "next_page": next_page_number,
+                    "trailing_token": trailing,
+                    "next_page_first_line": first_line,
+                }
+            )
+            continue
+        if re.search(r"[.!?][\"')\]}]*$", trailing) is None and not trailing.endswith(":"):
+            last_top = float(current_words[-1].get("top", 0.0))
+            last_line = " ".join(
+                str(word.get("text", "")).strip()
+                for word in current_words
+                if abs(float(word.get("top", 0.0)) - last_top) <= 3.5
+            )
+            violations.append(
+                {
+                    "code": "float_interrupted_sentence",
+                    "page": page_number,
+                    "next_page": next_page_number,
+                    "trailing_token": trailing,
+                    "previous_page_last_line": last_line,
+                    "next_page_first_line": first_line,
+                }
+            )
+    return violations
+
+
 def rendered_whitespace_audit(
     pdf_path: Path, page_float_counts: dict[str, int], column_mode: int
 ) -> dict[str, Any]:
@@ -1759,6 +2043,7 @@ def rendered_whitespace_audit(
 
     pages: list[dict[str, Any]] = []
     column_samples: list[dict[str, Any]] = []
+    page_samples: list[dict[str, Any]] = []
     violations: list[dict[str, Any]] = []
     media_box_overflows: list[dict[str, Any]] = []
     with pdfplumber.open(pdf_path) as document:
@@ -1780,15 +2065,21 @@ def rendered_whitespace_audit(
             column_samples.append(
                 {"width": float(page.width), "height": float(page.height), "words": words}
             )
+            page_samples.append(
+                {"width": float(page.width), "height": float(page.height), "words": words}
+            )
     column_inference = infer_column_mode_from_pages(column_samples)
+    reading_order_violations = float_reading_order_violations_from_pages(
+        page_samples, page_float_counts
+    )
     return {
         "page_count": total_pages,
         "rendered_column_inference": column_inference,
         "thresholds": {
             "float_page_trailing_blank_maximum": 0.22,
             "float_page_leading_blank_maximum": 0.22,
-            "terminal_float_page_trailing_blank_maximum": 0.45,
-            "terminal_float_page_occupied_height_minimum": 0.35,
+            "terminal_artifact_page_trailing_blank_maximum": 0.45,
+            "terminal_artifact_page_occupied_height_minimum": 0.35,
             "terminal_page_trailing_blank_maximum": 0.70,
             "terminal_page_occupied_height_minimum": 0.20,
             "float_page_internal_blank_maximum": 0.16,
@@ -1802,6 +2093,7 @@ def rendered_whitespace_audit(
         "pages": pages,
         "media_box_overflows": media_box_overflows,
         "whitespace_violations": violations,
+        "float_reading_order_violations": reading_order_violations,
     }
 
 
@@ -2111,6 +2403,7 @@ def main() -> int:
         "pages": [],
         "media_box_overflows": [],
         "whitespace_violations": [],
+        "float_reading_order_violations": [],
     }
     if returncode == 0 and current_pdf:
         try:
@@ -2190,6 +2483,13 @@ def main() -> int:
             for item in whitespace["whitespace_violations"]
         )
         errors.append("rendered page geometry violates whitespace gates: " + rendered_codes)
+    reading_order_violations = whitespace.get("float_reading_order_violations", [])
+    if reading_order_violations:
+        rendered_codes = ", ".join(
+            f"{item.get('code')}@p{item.get('page')}->p{item.get('next_page')}"
+            for item in reading_order_violations
+        )
+        errors.append("rendered floats interrupt reading continuity: " + rendered_codes)
     exempt_page_span = (
         end_exempt_page - end_body_page
         if end_exempt_page is not None and end_body_page is not None
@@ -2211,7 +2511,7 @@ def main() -> int:
             )
 
     report: dict[str, Any] = {
-        "schema_version": 9,
+        "schema_version": 10,
         "paper": str(paper),
         "source_sha256": source_tree_sha256(paper),
         "engine": engine,
@@ -2271,6 +2571,7 @@ def main() -> int:
         "rendered_page_geometry": whitespace["pages"],
         "whitespace_thresholds": whitespace["thresholds"],
         "whitespace_violations": whitespace["whitespace_violations"],
+        "float_reading_order_violations": reading_order_violations,
         "page_check_note": "Body pages are read from explicit LaTeX boundary labels; total_pages includes the appendix.",
         "status": "pass" if not errors else "fail",
         "errors": errors,

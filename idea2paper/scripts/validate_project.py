@@ -32,6 +32,7 @@ from compile_paper import (
     rendered_media_box_overflows,
     rendered_whitespace_audit,
     source_tree_sha256,
+    teaser_placement_audit,
     tex_fuzz_register_uses,
 )
 from record_survey_run import CSV_REQUIRED as SURVEY_CSV_REQUIRED
@@ -196,6 +197,37 @@ FIGURE_REQUIRED = [
     "provenance_path",
     "output_sha256",
 ]
+
+CORE_COMPOSITION_FIGURE_TYPES = {"teaser", "overview", "pipeline", "method-overview"}
+CORE_PROMPT_FIELDS = (
+    "Figure role:",
+    "10-second message:",
+    "Paper claim:",
+    "Final-size target:",
+    "Reference synthesis:",
+    "Composition grammar:",
+    "Reading order:",
+    "Novelty emphasis:",
+    "Color semantics:",
+    "Text budget:",
+    "Domain visual evidence:",
+    "Generic-box area budget:",
+    "Three-glance hierarchy:",
+    "Composition archetypes evaluated:",
+    "Hard vetoes:",
+)
+CORE_QA_GATES = (
+    "Faithfulness",
+    "Conciseness",
+    "Readability",
+    "Aesthetics",
+    "Domain evidence",
+    "Non-generic composition",
+    "Three-glance hierarchy",
+    "Novelty salience",
+    "Rectangular efficiency",
+    "Final-size inspection",
+)
 
 
 def read_json(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -1173,6 +1205,60 @@ def validate_council(project: Path, errors: list[str]) -> None:
                         errors.append(f"idea/meetings: contribution {contribution_id or '<missing>'} lacks {field}")
 
 
+def inherited_core_composition_evidence(
+    project: Path, input_values: list[str]
+) -> tuple[str, str] | None:
+    """Return a direct parent's hash-bound prompt and QA for a surgical edit.
+
+    Image-generation prompts are immutable execution receipts. A narrow edit is
+    therefore allowed to inherit the complete composition contract from its
+    direct input image, but only when that parent's prompt, QA, provenance, and
+    output all exist and the provenance hashes bind the prompt and image.
+    """
+
+    generated_root = (project / "figures/generated").resolve()
+    for input_value in input_values:
+        input_path = resolve_project_path(project, input_value).resolve()
+        try:
+            input_path.relative_to(generated_root)
+        except ValueError:
+            continue
+        if not input_path.is_file():
+            continue
+        stem = input_path.stem
+        prompt_candidates = (
+            project / "figures/prompts" / f"{stem}.txt",
+            project / "figures/prompts" / f"{stem}.md",
+        )
+        provenance_candidates = (
+            project / "figures/qa" / f"{stem}_provenance.json",
+            project / "figures/qa" / f"{stem}-provenance.json",
+        )
+        qa_path = project / "figures/qa" / f"{stem}.md"
+        prompt_path = next((item for item in prompt_candidates if item.is_file()), None)
+        provenance_path = next(
+            (item for item in provenance_candidates if item.is_file()), None
+        )
+        if prompt_path is None or provenance_path is None or not qa_path.is_file():
+            continue
+        try:
+            provenance = json.loads(provenance_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(provenance, dict):
+            continue
+        prompt = prompt_path.read_text(encoding="utf-8", errors="replace")
+        if any(field not in prompt for field in CORE_PROMPT_FIELDS):
+            continue
+        if str(provenance.get("prompt_sha256", "")).lower() != sha256_file(prompt_path):
+            continue
+        if str(provenance.get("output_sha256", "")).lower() != sha256_file(input_path):
+            continue
+        qa_text = qa_path.read_text(encoding="utf-8", errors="replace")
+        return prompt, qa_text
+    return None
+
+
 def validate_figures(project: Path, errors: list[str], require_overview: bool) -> None:
     path = project / "figures/manifest.csv"
     fields, rows = read_csv(path, errors)
@@ -1186,6 +1272,7 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
     seen_ids: set[str] = set()
     for index, row in enumerate(rows, start=2):
         figure_id = row.get("figure_id", "").strip()
+        figure_type = row.get("type", "").strip().lower()
         if not figure_id:
             errors.append(f"{path}:{index}: empty figure_id")
         elif figure_id in seen_ids:
@@ -1198,7 +1285,7 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
             errors.append(f"{path}:{index}: mode must be generate or edit")
         if not row.get("claim_ids", "").strip():
             errors.append(f"{path}:{index}: every paper figure must link at least one claim_id")
-        if row.get("type", "").strip().lower() in {"overview", "module"} and not row.get(
+        if figure_type in {"overview", "module", "pipeline", "method-overview"} and not row.get(
             "module_ids", ""
         ).strip():
             errors.append(f"{path}:{index}: overview/module figure must link module_ids")
@@ -1246,15 +1333,105 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
         if paper_path:
             manifest_by_paper_path.setdefault(paper_path, []).append(index)
         prompt_path = resolved.get("prompt_path")
+        inherited_composition: tuple[str, str] | None = None
         if prompt_path and prompt_path.exists():
             prompt = prompt_path.read_text(encoding="utf-8", errors="replace")
-            if "Use case:" not in prompt or "Primary request:" not in prompt:
+            surgical_edit = mode == "edit" and bool(
+                re.search(
+                    r"(?is)\b(?:exactly\s+one|single|surgical|one\s+narrow)\b"
+                    r".{0,120}\b(?:edit|change|refinement)\b",
+                    prompt,
+                )
+                and re.search(r"(?i)\bpreserv(?:e|ing)\b", prompt)
+            )
+            if figure_type in CORE_COMPOSITION_FIGURE_TYPES and surgical_edit:
+                inherited_composition = inherited_core_composition_evidence(
+                    project, input_values
+                )
+            if (
+                "Use case:" not in prompt or "Primary request:" not in prompt
+            ) and inherited_composition is None:
                 errors.append(f"{path}:{index}: prompt file lacks the required imagegen prompt contract")
+            if figure_type in CORE_COMPOSITION_FIGURE_TYPES:
+                composition_prompt = (
+                    inherited_composition[0] if inherited_composition is not None else prompt
+                )
+                missing_prompt_fields = [
+                    field for field in CORE_PROMPT_FIELDS if field not in composition_prompt
+                ]
+                if missing_prompt_fields:
+                    errors.append(
+                        f"{path}:{index}: core-figure prompt lacks composition fields "
+                        f"{missing_prompt_fields}"
+                    )
+                direction_match = re.search(
+                    r"(?im)^Candidate directions evaluated:\s*(\d+)\s*$",
+                    composition_prompt,
+                )
+                refinement_match = re.search(
+                    r"(?im)^Targeted refinements completed:\s*(\d+)\s*$",
+                    composition_prompt,
+                )
+                archetype_match = re.search(
+                    r"(?im)^Composition archetypes evaluated:\s*(\d+)\s*$",
+                    composition_prompt,
+                )
+                evidence_match = re.search(
+                    r"(?im)^Domain visual evidence:\s*(.+)$", composition_prompt
+                )
+                box_budget_match = re.search(
+                    r"(?im)^Generic-box area budget:\s*(?:<=|≤)\s*(\d+(?:\.\d+)?)%\s*$",
+                    composition_prompt,
+                )
+                if direction_match is None or int(direction_match.group(1)) < 6:
+                    errors.append(
+                        f"{path}:{index}: teaser/overview requires at least six "
+                        "composition directions"
+                    )
+                if refinement_match is None or int(refinement_match.group(1)) < 3:
+                    errors.append(
+                        f"{path}:{index}: teaser/overview requires at least three "
+                        "targeted imagegen refinements"
+                    )
+                if archetype_match is None or int(archetype_match.group(1)) < 3:
+                    errors.append(
+                        f"{path}:{index}: teaser/overview requires at least three "
+                        "composition archetypes"
+                    )
+                evidence_items = (
+                    [item.strip() for item in evidence_match.group(1).split(";") if item.strip()]
+                    if evidence_match
+                    else []
+                )
+                if len(evidence_items) < 3:
+                    errors.append(
+                        f"{path}:{index}: teaser/overview requires at least three "
+                        "domain visual-evidence primitives"
+                    )
+                if box_budget_match is None or float(box_budget_match.group(1)) > 35.0:
+                    errors.append(
+                        f"{path}:{index}: generic module boxes may occupy at most 35% "
+                        "of a teaser/overview canvas"
+                    )
         qa_path = resolved.get("qa_path")
         if qa_path and qa_path.exists():
             qa_text = qa_path.read_text(encoding="utf-8", errors="replace")
-            if not re.search(r"(?im)^\s*(?:qa_status|qa status)\s*:\s*pass\s*$", qa_text):
+            if not re.search(
+                r"(?im)^\s*(?:qa_status|qa status)\s*:\s*pass(?:ed)?\s*$",
+                qa_text,
+            ):
                 errors.append(f"{path}:{index}: QA note must contain 'QA status: pass'")
+            if figure_type in CORE_COMPOSITION_FIGURE_TYPES:
+                composition_qa = qa_text
+                if inherited_composition is not None:
+                    composition_qa = f"{qa_text}\n{inherited_composition[1]}"
+                for gate in CORE_QA_GATES:
+                    if not re.search(
+                        rf"(?im)^\s*{re.escape(gate)}\s*:\s*pass\b", composition_qa
+                    ):
+                        errors.append(
+                            f"{path}:{index}: core-figure QA lacks '{gate}: pass'"
+                        )
 
         provenance_path = resolved.get("provenance_path")
         provenance: dict[str, Any] = {}
@@ -2072,9 +2249,19 @@ def validate_paperjury_major_finding(
         errors.append(f"{label} requires an explicit stable id")
         finding_id = ""
     raw_evidence = finding.get("evidence_anchor")
-    if not isinstance(raw_evidence, str) or not raw_evidence.strip():
+    if not (
+        isinstance(raw_evidence, str) and raw_evidence.strip()
+    ) and not (
+        isinstance(raw_evidence, list)
+        and any(str(item).strip() for item in raw_evidence)
+    ):
         raw_evidence = finding.get("evidence")
-    evidence = raw_evidence.strip() if isinstance(raw_evidence, str) else ""
+    if isinstance(raw_evidence, list):
+        evidence = "; ".join(
+            str(item).strip() for item in raw_evidence if str(item).strip()
+        )
+    else:
+        evidence = raw_evidence.strip() if isinstance(raw_evidence, str) else ""
     file_locator = re.compile(
         r"(?<![A-Za-z0-9_./\\-])"
         r"(?P<path>[A-Za-z0-9_./\\-]+\.(?:tex|bib|md|csv|json|ya?ml))"
@@ -2768,6 +2955,7 @@ def validate_recomputed_layout_audits(
         "rendered_page_geometry": whitespace["pages"],
         "whitespace_thresholds": whitespace["thresholds"],
         "whitespace_violations": whitespace["whitespace_violations"],
+        "float_reading_order_violations": whitespace.get("float_reading_order_violations", []),
         "media_box_overflows": whitespace["media_box_overflows"],
     }
     for field, expected in rendered_fields.items():
@@ -2981,7 +3169,7 @@ def validate_layout_and_review(
     else:
         report = read_json(layout_path, errors)
         layout_schema = report.get("schema_version")
-        if not isinstance(layout_schema, int) or isinstance(layout_schema, bool) or layout_schema != 9:
+        if not isinstance(layout_schema, int) or isinstance(layout_schema, bool) or layout_schema != 10:
             errors.append("qa/layout_report.json: obsolete layout-audit schema")
         validate_layout_report_status(report, errors)
         compiler_log = validate_compiler_log_binding(project, report, errors)
@@ -3064,6 +3252,8 @@ def validate_layout_and_review(
             errors.append("qa/layout_report.json: floats are overloaded or clustered across pages")
         if report.get("whitespace_violations") != []:
             errors.append("qa/layout_report.json: rendered pages contain avoidable large blank regions")
+        if report.get("float_reading_order_violations") != []:
+            errors.append("qa/layout_report.json: a float interrupts reading continuity across pages")
         if report.get("column_mode") not in {1, 2}:
             errors.append("qa/layout_report.json: missing audited one-/two-column mode")
         column_audit = report.get("column_mode_audit")
@@ -3261,6 +3451,10 @@ def main() -> int:
         validate_figures(project, errors, require_overview=True)
         validate_no_alternate_figure_backends(project, errors)
         validate_sections(project, errors)
+        errors.extend(
+            f"paper teaser placement: {message}"
+            for message in teaser_placement_audit(project / "paper")
+        )
         validate_layout_and_review(project, venue, args.mode, errors)
 
     if args.mode == "submission":

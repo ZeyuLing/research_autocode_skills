@@ -6,6 +6,11 @@ The registered raster must be the graphical subject, not a provenance token. Ins
 
 LaTeX tables and mathematical equations remain LaTeX, not image assets.
 
+For teasers, overviews, pipelines, and graphical abstracts, also read
+[figure-composition.md](figure-composition.md). Its reference-board, claim-first
+brief, multi-candidate, targeted-refinement, and independent-critic gates are
+mandatory.
+
 ## Imagegen execution
 
 1. Load the installed `imagegen` skill and follow its built-in-tool-first policy.
@@ -25,6 +30,12 @@ Derive visual emphasis from the frozen novelty and claim graph. Include only det
 - Quantitative chart: use `productivity-visual` with exact labels and values.
 - Qualitative layout: use `compositing` when real outputs are inputs; use a clearly marked scientific placeholder before results.
 
+Do not render a teaser or overview directly from Method prose. First complete the
+reference-board preflight and claim-first figure brief in
+`figure-composition.md`. Generate at least six composition directions spanning at
+least three composition archetypes, then apply at least three single-change
+imagegen refinements to the selected direction.
+
 ## Prompt contract
 
 Save each prompt under `figures/prompts/<figure-id>-vN.md` with:
@@ -33,11 +44,28 @@ Save each prompt under `figures/prompts/<figure-id>-vN.md` with:
 Use case: <imagegen taxonomy slug>
 Asset type: publication figure for <venue>; <single-column|double-column|page-width>
 Primary request: <one-sentence visual objective>
+Figure role: <teaser|overview|pipeline|module|qualitative|chart>
+10-second message: <one reviewer takeaway>
+Paper claim: <claim and contribution IDs>
+Final-size target: <physical width, maximum height, aspect ratio>
+Reference synthesis: <reference-board path and transferred principles>
+Composition grammar: <panels/zones, alignment grid, dominant spine>
+Reading order: <numbered flow and branch semantics>
+Novelty emphasis: <focal mechanism and visual-weight device>
+Color semantics: <one stable meaning per color and line style>
+Text budget: <exact labels, maximum count, maximum words per label>
+Hard vetoes: <overlap, crossings, dead corners, dense prose, and figure-specific failures>
+Candidate directions evaluated: <integer; at least 6 for teaser/overview>
+Targeted refinements completed: <integer; at least 3 for teaser/overview>
 Input images: <index and role for every input>
 Scene/backdrop: clean paper-compatible background
 Subject: <problem, method flow, or comparison>
 Style/medium: polished raster scientific infographic
 Composition/framing: <landscape/portrait and reading flow>
+Domain visual evidence: <at least three semicolon-separated problem-native primitives>
+Generic-box area budget: <= 35%
+Three-glance hierarchy: <first glance>; <second glance>; <third glance>
+Composition archetypes evaluated: <integer; at least 3>
 Color palette: low-saturation palette with accessible contrast
 Text (verbatim): "<only required terms from terminology.csv>"
 Constraints: emphasize <claim/module IDs>; preserve evidence; readable at final size; no watermark
@@ -45,6 +73,15 @@ Avoid: decorative detail, dense prose, unused whitespace, high-saturation clashe
 ```
 
 Quote exact in-image text. Keep labels few and short because raster text is error-prone. Require no extra characters or labels.
+
+Treat every saved prompt as an immutable execution receipt: never rewrite it to
+make a later validator pass. A genuinely surgical edit may use a short prompt
+that specifies exactly one change and explicitly preserves everything else. In
+that case, its full composition contract and critic gates may be inherited only
+from the direct input image's prompt and QA, and only when the parent's
+provenance hashes bind both that prompt and that exact input raster. Keep the
+child prompt, child input path/hash, and parent chain intact. A redesign,
+multi-change edit, or unbound input must restate and satisfy the full contract.
 
 ## Design principles
 
@@ -55,6 +92,10 @@ Quote exact in-image text. Keep labels few and short because raster text is erro
 - Match terminology, capitalization, color mapping, and module order to Method exactly.
 - Make the core problem, innovation, and flow clear at a glance; leave fine detail to the caption and paper.
 - Prefer one overview. Split into subfigures or a separate module figure only when complexity justifies it.
+- Reject a generic card-grid or equal-weight module inventory when the paper has a
+  clear focal contribution.
+- Inspect teasers and overviews inside the compiled PDF at their intended physical
+  width; full-screen readability does not count.
 
 ## Evidence preservation
 
@@ -124,4 +165,17 @@ Save final raster images under `figures/generated/` and paper-consumed copies un
 - readability at actual single/double-column size;
 - consistency with caption and Method.
 
+For teasers and overviews, the QA note must additionally contain the exact
+pass/fail headings defined in `figure-composition.md`: Faithfulness, Conciseness,
+Readability, Aesthetics, Domain evidence, Non-generic composition, Three-glance
+hierarchy, Novelty salience, Rectangular efficiency, and Final-size inspection.
+Any failure blocks selection.
+
 Iterate with one targeted imagegen edit at a time and repeat critical invariants on every edit.
+
+Before PaperJury, freeze a path-resolvable figure evidence bundle inside the review
+snapshot. Copy the complete `figures/` tree (manifest, prompts, selected and input
+images, candidates, QA notes, receipts, provenance, skill snapshot, and reference
+boards) plus every paper-consumed file under `paper/figures/`. Preserve project-relative
+paths so every manifest path resolves from the frozen snapshot; a final PNG without its
+prompt/input/receipt chain is not reviewable evidence.
