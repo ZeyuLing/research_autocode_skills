@@ -45,6 +45,7 @@ from validate_project import (  # noqa: E402
     validate_title,
 )
 from compile_paper import (  # noqa: E402
+    artifact_file_structure_audit,
     aux_label_page,
     body_float_inventory,
     body_float_labels,
@@ -634,7 +635,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                         returncode = compile_paper_module.main()
                     report = json.loads(output.getvalue())
                     self.assertEqual(returncode, expected_returncode)
-                    self.assertEqual(report["schema_version"], 10)
+                    self.assertEqual(report["schema_version"], 11)
                     self.assertEqual(report["aux"], str(build / "main.aux"))
                     self.assertTrue(report["fresh_build"])
                     self.assertEqual(report["compiler_log_sha256"], sha256_file(build / "main.log"))
@@ -1743,6 +1744,11 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 main_tex.index(r"\input{sections/teaser}"),
                 main_tex.index(r"\begin{abstract}"),
             )
+            self.assertEqual(
+                (project / "paper/sections/teaser.tex").read_text(encoding="utf-8").strip(),
+                r"\input{figures/fig_teaser}",
+            )
+            self.assertTrue((project / "paper/figures/fig_teaser.tex").is_file())
             self.assertIn(r"\label{idea2paper:end-exempt}", main_tex)
             self.assertIn("Working Title Pending", title_tex)
             self.assertNotIn("A&B_# uncertainty model", title_tex)
@@ -1837,8 +1843,12 @@ class Idea2PaperScriptTests(unittest.TestCase):
             paper = Path(temporary) / "paper"
             sections = paper / "sections"
             sections.mkdir(parents=True)
+            figures = paper / "figures"
+            figures.mkdir(parents=True)
             teaser = sections / "teaser.tex"
-            teaser.write_text(
+            teaser.write_text("\\input{figures/fig_teaser}\n", encoding="utf-8")
+            teaser_artifact = figures / "fig_teaser.tex"
+            teaser_artifact.write_text(
                 "\\begin{IdeaTwoPaperTitleTeaser}{Conceptual teaser.}{fig:teaser}\n"
                 "\\includegraphics[width=0.8\\linewidth]{figures/teaser.png}\n"
                 "\\end{IdeaTwoPaperTitleTeaser}\n",
@@ -1875,7 +1885,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 any("IdeaTwoPaperPatchTitleTeaser" in error for error in legacy_errors)
             )
 
-            teaser.write_text(
+            teaser_artifact.write_text(
                 "\\begin{figure}[t]\\includegraphics{figures/teaser.png}"
                 "\\caption{Wrong float.}\\end{figure}\n",
                 encoding="utf-8",
@@ -1891,7 +1901,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
             float_errors = teaser_placement_audit(paper)
             self.assertTrue(any("non-floating" in error for error in float_errors))
 
-            teaser.write_text(
+            teaser_artifact.write_text(
                 "\\begin{IdeaTwoPaperTitleTeaser}{Conceptual teaser.}{fig:teaser}\n"
                 "\\includegraphics[width=0.8\\linewidth]{figures/teaser.png}\n"
                 "\\end{IdeaTwoPaperTitleTeaser}\n",
@@ -1908,6 +1918,78 @@ class Idea2PaperScriptTests(unittest.TestCase):
             )
             interrupted_errors = teaser_placement_audit(paper)
             self.assertTrue(any("immediately follow maketitle" in error for error in interrupted_errors))
+
+            teaser.write_text(
+                "\\begin{IdeaTwoPaperTitleTeaser}{Inline teaser.}{fig:inline}\n"
+                "\\includegraphics{figures/teaser.png}\n"
+                "\\end{IdeaTwoPaperTitleTeaser}\n",
+                encoding="utf-8",
+            )
+            inline_errors = teaser_placement_audit(paper)
+            self.assertTrue(any("must contain only one" in error for error in inline_errors))
+
+    def test_artifact_units_require_one_dedicated_input_file_each(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paper = Path(temporary) / "paper"
+            sections = paper / "sections"
+            figures = paper / "figures"
+            tables = paper / "tables"
+            for directory in (sections, figures, tables):
+                directory.mkdir(parents=True, exist_ok=True)
+
+            (paper / "main.tex").write_text(
+                "\\documentclass{article}\n"
+                "\\begin{document}\n"
+                "\\input{sections/body}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            body = sections / "body.tex"
+            body.write_text(
+                "Body prose.\n"
+                "\\input{figures/fig_overview}\n"
+                "More prose.\n"
+                "\\input{tables/tab_main}\n",
+                encoding="utf-8",
+            )
+            figure = figures / "fig_overview.tex"
+            figure.write_text(
+                "\\begin{figure}[t]\\includegraphics{figures/overview.png}"
+                "\\caption{Overview.}\\label{fig:overview}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            table = tables / "tab_main.tex"
+            table.write_text(
+                "\\begin{center}\\captionof{table}{Main.}\\label{tab:main}"
+                "\\begin{tabular}{c}x\\\\\\end{tabular}\\end{center}\n",
+                encoding="utf-8",
+            )
+
+            valid = artifact_file_structure_audit(paper)
+            self.assertEqual(valid["errors"], [])
+            self.assertEqual(len(valid["records"]), 2)
+            self.assertEqual(valid["input_counts"]["figures/fig_overview.tex"], 1)
+            self.assertEqual(valid["input_counts"]["tables/tab_main.tex"], 1)
+
+            body.write_text(
+                body.read_text(encoding="utf-8")
+                + "\\begin{figure}\\caption{Inline.}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            inline = artifact_file_structure_audit(paper)
+            self.assertTrue(any("inline artifact" in error for error in inline["errors"]))
+
+            body.write_text(
+                "\\input{figures/fig_overview}\n\\input{tables/tab_main}\n",
+                encoding="utf-8",
+            )
+            figure.write_text(
+                figure.read_text(encoding="utf-8")
+                + "\\begin{figure}\\caption{Second.}\\end{figure}\n",
+                encoding="utf-8",
+            )
+            multiple = artifact_file_structure_audit(paper)
+            self.assertTrue(any("exactly one" in error for error in multiple["errors"]))
 
     def test_auto_venue_uses_open_abstract_or_paper_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

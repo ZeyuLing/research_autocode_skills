@@ -23,6 +23,7 @@ from compile_paper import (
     MEDIA_BOX_OVERFLOW_PT,
     aux_label_page,
     aux_label_record,
+    artifact_file_structure_audit,
     body_float_inventory,
     body_float_tail_report,
     document_column_mode_audit,
@@ -3438,7 +3439,7 @@ def validate_layout_and_review(
     else:
         report = read_json(layout_path, errors)
         layout_schema = report.get("schema_version")
-        if not isinstance(layout_schema, int) or isinstance(layout_schema, bool) or layout_schema != 10:
+        if not isinstance(layout_schema, int) or isinstance(layout_schema, bool) or layout_schema != 11:
             errors.append("qa/layout_report.json: obsolete layout-audit schema")
         validate_layout_report_status(report, errors)
         compiler_log = validate_compiler_log_binding(project, report, errors)
@@ -3448,6 +3449,9 @@ def validate_layout_and_review(
         try:
             current_pagination = manual_pagination_commands(project / "paper")
             current_float_inventory = body_float_inventory(project / "paper")
+            current_artifact_source_audit = artifact_file_structure_audit(
+                project / "paper"
+            )
         except ValueError as exc:
             errors.append(f"qa/layout_report.json: cannot audit active LaTeX inputs: {exc}")
             current_pagination = []
@@ -3462,10 +3466,32 @@ def validate_layout_and_review(
                 "structure_errors": [],
                 "after_conclusion_source": [],
             }
+            current_artifact_source_audit = {
+                "records": [],
+                "active_files": [],
+                "input_counts": {},
+                "errors": [],
+            }
         if report.get("manual_pagination_commands") != current_pagination:
             errors.append("qa/layout_report.json: manual-pagination audit is stale or incomplete")
         if report.get("manual_pagination_commands") != []:
             errors.append("qa/layout_report.json: manuscript contains manual pagination commands")
+        if report.get("artifact_source_records") != current_artifact_source_audit["records"]:
+            errors.append("qa/layout_report.json: artifact-source inventory is stale or incomplete")
+        if report.get("artifact_source_files") != current_artifact_source_audit["active_files"]:
+            errors.append("qa/layout_report.json: artifact-source file coverage is stale or incomplete")
+        if report.get("artifact_input_counts") != current_artifact_source_audit["input_counts"]:
+            errors.append("qa/layout_report.json: artifact input-count audit is stale or incomplete")
+        if (
+            report.get("artifact_source_structure_errors")
+            != current_artifact_source_audit["errors"]
+        ):
+            errors.append("qa/layout_report.json: artifact-source structure audit is stale")
+        if current_artifact_source_audit["errors"]:
+            errors.extend(
+                "paper artifact structure: " + str(message)
+                for message in current_artifact_source_audit["errors"]
+            )
         if report.get("active_body_files") != current_float_inventory["active_body_files"]:
             errors.append("qa/layout_report.json: active-body source coverage is stale or incomplete")
         if report.get("tracked_body_float_count") != len(current_float_inventory["records"]):

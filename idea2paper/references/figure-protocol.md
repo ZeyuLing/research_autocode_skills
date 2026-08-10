@@ -172,6 +172,16 @@ record; do not register an unused selected/final asset.
 
 Save final raster images under `figures/generated/` and paper-consumed copies under `paper/figures/`. Save a QA note under `figures/qa/` covering:
 
+For each paper-consumed figure, also create one dedicated LaTeX wrapper under
+`paper/figures/<figure-id>.tex`. That wrapper contains the complete single figure
+unit---float or source-anchored placement, `\includegraphics`, caption, label, and
+artifact-local TODOs. The section or appendix contains only
+`\input{figures/<figure-id>}` at the intended source position. Never place two
+figure units in the same wrapper and never inline the unit in a prose file. The
+wrapper is source organization; the raster remains the graphical subject and must
+still satisfy every ImageGen provenance rule above. The teaser uses the same rule:
+`sections/teaser.tex` only inputs its dedicated non-floating wrapper.
+
 - exact text and terminology;
 - arrows and flow direction;
 - scientific/content accuracy;

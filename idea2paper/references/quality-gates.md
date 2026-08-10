@@ -86,6 +86,11 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - LaTeX compiles without unresolved citations or references.
 - `qa/layout_report.json` records a passing build, the correct body/reference counting rule, and body pages within the permitted budget.
 - Every main-paper figure/table is rendered near its discussion and no body float appears on a page after Conclusion begins.
+- Every figure, table, source-anchored `\captionof` unit, and teaser is stored as
+  exactly one artifact in a dedicated `paper/figures/*.tex` or
+  `paper/tables/*.tex` file and is referenced exactly once by `\input`; section
+  and appendix prose files contain no inline artifact units, and no dedicated file
+  groups multiple artifacts.
 - Every body and appendix floating or source-anchored `\captionof` artifact has a unique label and is represented in the compiled AUX/page-density audit.
 - In one-column mode, no page contains more than two floats; no adjacent appendix pages each contain at least two floats; no three-page run in either region contains at least two floats per page; the last two appendix pages do not contain a four-float/75%-share dump; and the final three appendix pages contain at most 70% of appendix floats when the appendix has at least four floats over four or more pages.
 - Rendered artifact pages contain no leading blank region above 22% of the usable page. Nonterminal artifact pages also contain no trailing blank region above 22%, internal blank band above 16%, whole-page content block narrower than 50% of page width, tall local artifact region narrower than 46%, or severe one-sided occupancy. The final page may end naturally, but a final page containing a floating or source-anchored artifact must occupy at least 35% of usable height and leave no more than 45% trailing blank space; a prose-only final page must occupy at least 20% and leave no more than 70% trailing blank space. These gates prevent vertically centered artifact-only tails and accidental near-empty stubs without demanding filler prose. Treat the thresholds as failure detectors, not permission to stop visually checking smaller but conspicuous gaps.

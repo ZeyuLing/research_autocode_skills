@@ -369,11 +369,7 @@ def main() -> int:
     write_text_if_missing(root / "paper/title.tex", "\\newcommand{\\papertitle}{Working Title Pending}\n")
     write_text_if_missing(root / "paper/main.tex", main_tex())
     section_titles = {
-        "teaser.tex": (
-            "% If the venue permits a teaser, use exactly one non-floating\n"
-            "% IdeaTwoPaperTitleTeaser environment here. main.tex inputs it\n"
-            "% after the complete title/author block and before the abstract.\n"
-        ),
+        "teaser.tex": "\\input{figures/fig_teaser}\n",
         "abstract.tex": "% Abstract prose.\n",
         "introduction.tex": "\\section{Introduction}\n",
         "related_work.tex": "\\section{Related Work}\n",
@@ -384,6 +380,12 @@ def main() -> int:
     }
     for filename, content in section_titles.items():
         write_text_if_missing(root / "paper/sections" / filename, content)
+    write_text_if_missing(
+        root / "paper/figures/fig_teaser.tex",
+        "% If the venue permits a teaser, place exactly one non-floating\n"
+        "% IdeaTwoPaperTitleTeaser environment in this dedicated file.\n"
+        "% sections/teaser.tex must contain only its \\input command.\n",
+    )
     write_text_if_missing(
         root / "paper/appendix/appendix.tex",
         "\\appendix\n\\label{idea2paper:start-appendix}\n\\section{Additional Material}\n",

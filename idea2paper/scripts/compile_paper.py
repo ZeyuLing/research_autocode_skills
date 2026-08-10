@@ -292,6 +292,110 @@ def active_tex_segments(paper: Path, stop_marker: str | None = None) -> list[dic
     return segments
 
 
+def artifact_file_structure_audit(paper: Path) -> dict[str, Any]:
+    """Require one active figure/table unit per dedicated artifact .tex file."""
+
+    paper = paper.resolve()
+    main_tex = paper / "main.tex"
+    if not main_tex.is_file():
+        return {"records": [], "active_files": [], "input_counts": {}, "errors": []}
+
+    sources: dict[str, str] = {}
+    input_counts: dict[str, int] = {}
+
+    def visit(path: Path, stack: tuple[Path, ...]) -> None:
+        if path in stack:
+            chain = " -> ".join(item.name for item in (*stack, path))
+            raise ValueError(f"Circular LaTeX input chain: {chain}")
+        relative = path.relative_to(paper).as_posix()
+        if relative in sources:
+            return
+        source = strip_tex_comments(path.read_text(encoding="utf-8", errors="replace"))
+        sources[relative] = source
+        for match in INPUT_RE.finditer(source):
+            target = match.group("braced") or match.group("bare") or ""
+            child = _resolve_input(path, target, paper)
+            child_relative = child.relative_to(paper).as_posix()
+            input_counts[child_relative] = input_counts.get(child_relative, 0) + 1
+            visit(child, (*stack, path))
+
+    visit(main_tex, ())
+
+    records: list[dict[str, Any]] = []
+    by_path: dict[str, list[dict[str, Any]]] = {}
+    for relative, source in sources.items():
+        floating_matches = list(FLOAT_RE.finditer(source))
+        for match in floating_matches:
+            environment = match.group(1)
+            kind = "figure" if environment.startswith("figure") else "table"
+            record = {
+                "path": relative,
+                "line": source.count("\n", 0, match.start()) + 1,
+                "environment": environment,
+                "kind": kind,
+            }
+            records.append(record)
+            by_path.setdefault(relative, []).append(record)
+        for match in CAPTIONOF_RE.finditer(source):
+            if any(item.start() <= match.start() < item.end() for item in floating_matches):
+                continue
+            kind = str(match.group("kind"))
+            record = {
+                "path": relative,
+                "line": source.count("\n", 0, match.start()) + 1,
+                "environment": f"captionof_{kind}",
+                "kind": kind,
+            }
+            records.append(record)
+            by_path.setdefault(relative, []).append(record)
+        for match in TITLE_TEASER_RE.finditer(source):
+            record = {
+                "path": relative,
+                "line": source.count("\n", 0, match.start()) + 1,
+                "environment": "title_teaser",
+                "kind": "figure",
+            }
+            records.append(record)
+            by_path.setdefault(relative, []).append(record)
+
+    errors: list[str] = []
+    for relative, path_records in sorted(by_path.items()):
+        expected_roots = {
+            "figures" if item["kind"] == "figure" else "tables"
+            for item in path_records
+        }
+        top_level = relative.split("/", 1)[0]
+        if len(expected_roots) != 1 or top_level not in expected_roots:
+            rendered_kinds = ", ".join(str(item["kind"]) for item in path_records)
+            errors.append(
+                f"{relative}: contains inline artifact(s) [{rendered_kinds}]; move every "
+                "figure to its own figures/*.tex file and every table to its own "
+                r"tables/*.tex file, then reference each file with \input"
+            )
+            continue
+        if len(path_records) != 1:
+            errors.append(
+                f"{relative}: dedicated artifact files must contain exactly one numbered "
+                f"figure or table; found {len(path_records)}"
+            )
+        count = input_counts.get(relative, 0)
+        if count != 1:
+            errors.append(
+                f"{relative}: dedicated artifact file must be referenced exactly once via "
+                rf"\input; found {count} active references"
+            )
+        if re.search(r"\\(?:part|chapter|section|subsection|subsubsection)\*?\s*\{", sources[relative]):
+            errors.append(f"{relative}: dedicated artifact files may not contain section headings")
+
+    records.sort(key=lambda item: (str(item["path"]), int(item["line"])))
+    return {
+        "records": records,
+        "active_files": sorted(sources),
+        "input_counts": dict(sorted(input_counts.items())),
+        "errors": errors,
+    }
+
+
 def _combined_source(segments: list[dict[str, Any]]) -> str:
     return "".join(str(segment["text"]) for segment in segments)
 
@@ -651,6 +755,8 @@ def teaser_placement_audit(paper: Path) -> list[str]:
         if teaser_path.is_file()
         else ""
     )
+    teaser_artifact_path: Path | None = None
+    teaser_artifact_source = ""
     teaser_inputs = []
     for match in INPUT_RE.finditer(main_source):
         target = (match.group("braced") or match.group("bare") or "").strip()
@@ -674,6 +780,29 @@ def teaser_placement_audit(paper: Path) -> list[str]:
         errors.append(
             "main.tex must input sections/teaser exactly once after maketitle and before Abstract"
         )
+
+    section_inputs = list(INPUT_RE.finditer(teaser_source))
+    if len(section_inputs) != 1 or INPUT_RE.sub("", teaser_source).strip():
+        errors.append(
+            r"sections/teaser.tex must contain only one \input{figures/<teaser-file>} command"
+        )
+    else:
+        target = (
+            section_inputs[0].group("braced")
+            or section_inputs[0].group("bare")
+            or ""
+        ).strip()
+        normalized_target = _normalized_input_target(target)
+        if not normalized_target.startswith("figures/"):
+            errors.append("sections/teaser.tex must input a dedicated figures/*.tex file")
+        else:
+            try:
+                teaser_artifact_path = _resolve_input(teaser_path, target, paper)
+                teaser_artifact_source = strip_tex_comments(
+                    teaser_artifact_path.read_text(encoding="utf-8", errors="replace")
+                )
+            except (OSError, ValueError) as exc:
+                errors.append(str(exc))
 
     begin_document = re.search(r"\\begin\{document\}", main_source)
     make_titles = list(re.finditer(r"\\maketitle\b", main_source))
@@ -707,21 +836,23 @@ def teaser_placement_audit(paper: Path) -> list[str]:
                     "Abstract must immediately follow sections/teaser; no rendered content or command may intervene"
                 )
 
-    if teaser_source.strip():
+    if teaser_artifact_source.strip():
         begins = list(
-            re.finditer(r"\\begin\{IdeaTwoPaperTitleTeaser\}", teaser_source)
+            re.finditer(r"\\begin\{IdeaTwoPaperTitleTeaser\}", teaser_artifact_source)
         )
-        ends = list(re.finditer(r"\\end\{IdeaTwoPaperTitleTeaser\}", teaser_source))
+        ends = list(
+            re.finditer(r"\\end\{IdeaTwoPaperTitleTeaser\}", teaser_artifact_source)
+        )
         if len(begins) != 1 or len(ends) != 1 or begins[0].start() >= ends[0].start():
             errors.append(
-                "sections/teaser.tex must contain exactly one "
-                "IdeaTwoPaperTitleTeaser environment"
+                f"{teaser_artifact_path.relative_to(paper).as_posix()}: must contain "
+                "exactly one IdeaTwoPaperTitleTeaser environment"
             )
-        if re.search(r"\\begin\{figure\*?\}", teaser_source):
+        if re.search(r"\\begin\{figure\*?\}", teaser_artifact_source):
             errors.append(
                 "front-matter teaser must be non-floating; figure/figure* is forbidden"
             )
-        if not INCLUDE_GRAPHICS_RE.search(teaser_source):
+        if not INCLUDE_GRAPHICS_RE.search(teaser_artifact_source):
             errors.append("front-matter teaser must contain a literal \\includegraphics raster")
     return errors
 
@@ -2170,6 +2301,12 @@ def main() -> int:
         "duplicate_all_float_labels": [],
         "structure_errors": [],
     }
+    artifact_source_audit: dict[str, Any] = {
+        "records": [],
+        "active_files": [],
+        "input_counts": {},
+        "errors": [],
+    }
     column_audit: dict[str, Any] = {
         "mode": 1,
         "requested": args.columns,
@@ -2190,6 +2327,7 @@ def main() -> int:
             pagination_commands = manual_pagination_commands(paper)
             fuzz_register_uses = tex_fuzz_register_uses(paper)
             float_inventory = body_float_inventory(paper)
+            artifact_source_audit = artifact_file_structure_audit(paper)
         except ValueError as exc:
             errors.append(str(exc))
     if paper.exists():
@@ -2224,6 +2362,11 @@ def main() -> int:
         errors.extend(
             "invalid manuscript structure: " + str(error)
             for error in float_inventory["structure_errors"]
+        )
+    if artifact_source_audit["errors"]:
+        errors.extend(
+            "invalid artifact source structure: " + str(error)
+            for error in artifact_source_audit["errors"]
         )
     if float_inventory["unlabeled"]:
         rendered_unlabeled = ", ".join(
@@ -2511,7 +2654,7 @@ def main() -> int:
             )
 
     report: dict[str, Any] = {
-        "schema_version": 10,
+        "schema_version": 11,
         "paper": str(paper),
         "source_sha256": source_tree_sha256(paper),
         "engine": engine,
@@ -2536,6 +2679,10 @@ def main() -> int:
         "manual_pagination_commands": pagination_commands,
         "tex_fuzz_register_uses": fuzz_register_uses,
         "active_document_files": active_document_files,
+        "artifact_source_records": artifact_source_audit["records"],
+        "artifact_source_files": artifact_source_audit["active_files"],
+        "artifact_input_counts": artifact_source_audit["input_counts"],
+        "artifact_source_structure_errors": artifact_source_audit["errors"],
         "active_body_files": float_inventory["active_body_files"],
         "conclusion_page": conclusion_page,
         "end_body_page": end_body_page,
