@@ -42,6 +42,27 @@ Do not finish the literature stage until:
 
 Describe coverage as near-complete under stated sources and dates, never as literally all literature.
 
+For a full paper sketch, source-family coverage alone is insufficient. The audited
+corpus must also satisfy all of the following relevance floors:
+
+- at least 30 screened records with tier `core`, `adjacent`, or `background`;
+- at least 10 `core` papers with completed reading-matrix evidence extraction;
+- at least five non-empty `coverage_family` groups, chosen from task foundations,
+  closest competing mechanisms, datasets/evaluation, control/physics/safety,
+  application-specific work, and genuinely analogous adjacent mechanisms;
+- at least eight included papers from the current year or previous two calendar years;
+- at least eight accepted/published included works with status evidence;
+- at least three included records marked `novelty_risk=yes` as closest collisions;
+- at least 25 distinct audited corpus citations in the complete manuscript and at
+  least 20 in Related Work.
+
+These are floors, not targets. Do not satisfy them with citation padding: an included
+paper must be relevant to a claim, method choice, benchmark, evaluation protocol, or
+novelty boundary. Excluded papers and BibTeX entries never cited by the manuscript do
+not count. If a search initially yields fewer records, expand query families, inspect
+anchor references/citations, search benchmark and venue clusters, and repair missing
+coverage before drafting Related Work.
+
 ## Enriched paper record
 
 Run `scripts/enrich_literature.py` after merge. Add these fields without guessing:
@@ -49,6 +70,7 @@ Run `scripts/enrich_literature.py` after merge. Add these fields without guessin
 | Field | Allowed examples |
 |---|---|
 | stable_id, bib_key | Persistent local identity and the LaTeX citation key |
+| `coverage_family` | One or more semicolon-separated audited taxonomy families. |
 | `publication_status` | `accepted`, `published`, `preprint_only`, `under_review`, `withdrawn`, `retracted`, `rejected`, `unknown` |
 | `status_venue`, `status_year` | Verified venue and edition or blank |
 | `status_evidence_url`, `status_checked_at` | Evidence and access time |

@@ -13,6 +13,7 @@ from pathlib import Path
 
 
 EXTRA_COLUMNS = [
+    "coverage_family",
     "stable_id",
     "bib_key",
     "publication_status",
@@ -86,6 +87,16 @@ def main() -> int:
     parser.add_argument("--output", "-o", type=Path, required=True)
     parser.add_argument("--records-dir", type=Path, required=True)
     parser.add_argument("--idea-version", default="idea_v0")
+    parser.add_argument(
+        "--overrides",
+        type=Path,
+        help="Optional audited JSON object keyed by record_id with explicit enrichment fields",
+    )
+    parser.add_argument(
+        "--bib-keys",
+        type=Path,
+        help="Optional audited JSON object mapping record_id to canonical BibTeX key",
+    )
     args = parser.parse_args()
 
     if not args.input.exists():
@@ -96,6 +107,32 @@ def main() -> int:
             raise SystemExit("Input must contain the ai-literature-survey paper columns")
         base_columns = list(reader.fieldnames)
         rows = list(reader)
+
+    overrides: dict[str, dict[str, str]] = {}
+    if args.overrides:
+        try:
+            loaded = json.loads(args.overrides.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Cannot read enrichment overrides: {exc}") from exc
+        if not isinstance(loaded, dict) or any(
+            not isinstance(record_id, str) or not isinstance(values, dict)
+            for record_id, values in loaded.items()
+        ):
+            raise SystemExit("Enrichment overrides must be a JSON object of record_id objects")
+        overrides = loaded
+
+    bib_keys: dict[str, str] = {}
+    if args.bib_keys:
+        try:
+            loaded_bib_keys = json.loads(args.bib_keys.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise SystemExit(f"Cannot read BibTeX-key map: {exc}") from exc
+        if not isinstance(loaded_bib_keys, dict) or any(
+            not isinstance(record_id, str) or not isinstance(value, str) or not value.strip()
+            for record_id, value in loaded_bib_keys.items()
+        ):
+            raise SystemExit("BibTeX-key map must be a JSON object of non-empty strings")
+        bib_keys = loaded_bib_keys
 
     columns = base_columns + [column for column in EXTRA_COLUMNS if column not in base_columns]
     args.records_dir.mkdir(parents=True, exist_ok=True)
@@ -110,6 +147,17 @@ def main() -> int:
 
     seen_stable_ids: set[str] = set()
     for row in rows:
+        record_id = row.get("record_id", "").strip()
+        explicit = overrides.get(record_id, {})
+        unknown_fields = sorted(set(explicit) - set(columns))
+        if unknown_fields:
+            raise SystemExit(
+                f"Unknown enrichment override fields for {record_id or '<missing>'}: {unknown_fields}"
+            )
+        for field, value in explicit.items():
+            row[field] = str(value)
+        if record_id in bib_keys:
+            row["bib_key"] = bib_keys[record_id].strip()
         aliases = identity_aliases(row)
         if not aliases:
             raise SystemExit("Every survey record must have a non-empty title or persistent identifier")
@@ -136,6 +184,7 @@ def main() -> int:
         seen_stable_ids.add(sid)
         row["stable_id"] = sid
         default_if_blank(row, "bib_key", sid)
+        default_if_blank(row, "coverage_family", "")
         default_if_blank(row, "publication_status", "unknown")
         default_if_blank(row, "status_venue", "")
         default_if_blank(row, "status_year", "")

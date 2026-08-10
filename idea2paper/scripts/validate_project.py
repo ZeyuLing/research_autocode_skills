@@ -103,6 +103,7 @@ ENRICHED_REQUIRED = {
     "record_id",
     "title",
     "tier",
+    "coverage_family",
     "stable_id",
     "bib_key",
     "publication_status",
@@ -122,6 +123,15 @@ ENRICHED_REQUIRED = {
     "discovery_idea_version",
     "local_record_path",
 }
+
+MIN_INCLUDED_LITERATURE = 30
+MIN_CORE_LITERATURE = 10
+MIN_COVERAGE_FAMILIES = 5
+MIN_RECENT_LITERATURE = 8
+MIN_ACCEPTED_OR_PUBLISHED = 8
+MIN_NOVELTY_RISK_RECORDS = 3
+MIN_MANUSCRIPT_CORPUS_CITATIONS = 25
+MIN_RELATED_WORK_CORPUS_CITATIONS = 20
 
 PUBLICATION_STATUSES = {
     "accepted",
@@ -228,6 +238,15 @@ CORE_QA_GATES = (
     "Rectangular efficiency",
     "Final-size inspection",
 )
+QUALITATIVE_PLACEHOLDER_QA_GATES = (
+    "Placeholder disclosure",
+    "No measured-result simulation",
+    "Planned comparison fidelity",
+)
+QUALITATIVE_MEASURED_QA_GATES = (
+    "Input evidence preservation",
+    "Baseline-output association",
+)
 
 
 def read_json(path: Path, errors: list[str]) -> dict[str, Any]:
@@ -282,6 +301,99 @@ def has_draft_marker(source: str, macro_name: str, item_id: str) -> bool:
         match.group(1) == macro_name and match.group(2).strip() == item_id
         for match in MACRO_RE.finditer(cleaned)
     )
+
+
+def citation_keys_from_tex(path: Path) -> set[str]:
+    """Collect active citation keys from one LaTeX source file."""
+
+    if not path.is_file():
+        return set()
+    source = strip_tex_comments(path.read_text(encoding="utf-8", errors="replace"))
+    keys: set[str] = set()
+    for match in re.finditer(r"\\cite[a-zA-Z*]*\s*\{([^}]+)\}", source):
+        keys.update(key.strip() for key in match.group(1).split(",") if key.strip())
+    return keys
+
+
+def manuscript_citation_keys(paper_root: Path) -> set[str]:
+    keys: set[str] = set()
+    for path in paper_root.rglob("*.tex"):
+        keys.update(citation_keys_from_tex(path))
+    return keys
+
+
+def semicolon_values(value: str) -> set[str]:
+    return {item.strip() for item in value.split(";") if item.strip()}
+
+
+def validate_qualitative_figure_bindings(
+    project: Path,
+    manifest_rows: list[dict[str, str]],
+    errors: list[str],
+    require_qualitative: bool,
+) -> None:
+    """Bind every red qualitative placeholder to a same-block ImageGen raster."""
+
+    paper_root = project / "paper"
+    rows_by_result_id: dict[str, list[dict[str, str]]] = {}
+    for row in manifest_rows:
+        if row.get("type", "").strip().lower() != "qualitative":
+            continue
+        for result_id in semicolon_values(row.get("result_ids", "")):
+            rows_by_result_id.setdefault(result_id, []).append(row)
+
+    occurrences = 0
+    figure_re = re.compile(
+        r"\\begin\{figure\*?\}(?P<body>.*?)\\end\{figure\*?\}", re.DOTALL
+    )
+    placeholder_re = re.compile(r"\\QualPlaceholder\s*\{([^}]+)\}")
+    include_re = re.compile(r"\\includegraphics\*?(?:\[[^]]*\])?\s*\{([^}]+)\}")
+    for tex_path in paper_root.rglob("*.tex"):
+        source = strip_tex_comments(tex_path.read_text(encoding="utf-8", errors="replace"))
+        covered_spans: list[tuple[int, int]] = []
+        for figure_match in figure_re.finditer(source):
+            body = figure_match.group("body")
+            placeholder_ids = [item.strip() for item in placeholder_re.findall(body) if item.strip()]
+            if not placeholder_ids:
+                continue
+            covered_spans.append(figure_match.span())
+            included_targets: set[Path] = set()
+            for value in include_re.findall(body):
+                candidate = paper_root / value.strip()
+                if not candidate.suffix:
+                    candidate = candidate.with_suffix(".png")
+                included_targets.add(candidate.resolve())
+            for placeholder_id in placeholder_ids:
+                occurrences += 1
+                mapped = rows_by_result_id.get(placeholder_id, [])
+                if not mapped:
+                    errors.append(
+                        f"{tex_path}: QualPlaceholder {placeholder_id} lacks a manifest type=qualitative "
+                        "row with the same result_ids binding"
+                    )
+                    continue
+                mapped_targets = {
+                    resolve_project_path(project, row.get("paper_path", "")).resolve()
+                    for row in mapped
+                    if row.get("paper_path", "").strip()
+                }
+                if not (included_targets & mapped_targets):
+                    errors.append(
+                        f"{tex_path}: QualPlaceholder {placeholder_id} is not in the same figure "
+                        "environment as its registered ImageGen qualitative raster"
+                    )
+
+        for placeholder_match in placeholder_re.finditer(source):
+            if not any(start <= placeholder_match.start() < end for start, end in covered_spans):
+                placeholder_id = placeholder_match.group(1).strip()
+                errors.append(
+                    f"{tex_path}: QualPlaceholder {placeholder_id} must render inside a figure "
+                    "that contains its registered ImageGen raster"
+                )
+    if require_qualitative and occurrences == 0:
+        errors.append(
+            "paper: full sketch must contain at least one tracked qualitative ImageGen figure"
+        )
 
 
 def latex_escape(text: str) -> str:
@@ -1036,13 +1148,121 @@ def validate_literature(project: Path, project_data: dict[str, Any], errors: lis
             if not record_path or not (root / record_path).exists():
                 errors.append(f"{enriched_path}:{index}: missing local paper record directory")
 
-    related_text = (project / "paper/sections/related_work.tex").read_text(
-        encoding="utf-8", errors="replace"
+    included_rows = [
+        row for row in rows if row.get("tier", "").strip().lower() != "exclude"
+    ]
+    core_rows = [row for row in included_rows if row.get("tier", "").strip().lower() == "core"]
+    if len(included_rows) < MIN_INCLUDED_LITERATURE:
+        errors.append(
+            f"{enriched_path}: full paper sketch needs at least {MIN_INCLUDED_LITERATURE} "
+            f"screened included records; found {len(included_rows)}"
+        )
+    if len(core_rows) < MIN_CORE_LITERATURE:
+        errors.append(
+            f"{enriched_path}: full paper sketch needs at least {MIN_CORE_LITERATURE} "
+            f"core records; found {len(core_rows)}"
+        )
+
+    coverage_families: set[str] = set()
+    for index, row in enumerate(rows, start=2):
+        if row.get("tier", "").strip().lower() == "exclude":
+            continue
+        families = semicolon_values(row.get("coverage_family", ""))
+        if not families:
+            errors.append(f"{enriched_path}:{index}: included paper lacks coverage_family")
+        coverage_families.update(item.casefold() for item in families)
+    if len(coverage_families) < MIN_COVERAGE_FAMILIES:
+        errors.append(
+            f"{enriched_path}: literature must span at least {MIN_COVERAGE_FAMILIES} "
+            f"audited coverage families; found {len(coverage_families)}"
+        )
+
+    current_year = datetime.now(timezone.utc).year
+    recent_rows = []
+    for row in included_rows:
+        try:
+            year = int(row.get("year", ""))
+        except (TypeError, ValueError):
+            continue
+        if year >= current_year - 2:
+            recent_rows.append(row)
+    if len(recent_rows) < MIN_RECENT_LITERATURE:
+        errors.append(
+            f"{enriched_path}: literature needs at least {MIN_RECENT_LITERATURE} "
+            f"included papers from {current_year - 2}--{current_year}; found {len(recent_rows)}"
+        )
+
+    accepted_rows = [
+        row
+        for row in included_rows
+        if row.get("publication_status", "").strip().lower() in {"accepted", "published"}
+    ]
+    if len(accepted_rows) < MIN_ACCEPTED_OR_PUBLISHED:
+        errors.append(
+            f"{enriched_path}: literature needs at least {MIN_ACCEPTED_OR_PUBLISHED} "
+            f"accepted/published included papers with status evidence; found {len(accepted_rows)}"
+        )
+
+    screening_by_id = {
+        row.get("record_id", "").strip(): row for row in screening_rows if row.get("record_id", "").strip()
+    }
+    novelty_risk_ids = {
+        record_id
+        for record_id, row in screening_by_id.items()
+        if row.get("novelty_risk", "").strip().lower() == "yes"
+        and record_id in enriched_by_record_id
+        and enriched_by_record_id[record_id].get("tier", "").strip().lower() != "exclude"
+    }
+    if len(novelty_risk_ids) < MIN_NOVELTY_RISK_RECORDS:
+        errors.append(
+            f"related_works/screening.csv: mark at least {MIN_NOVELTY_RISK_RECORDS} "
+            f"closest/novelty-threatening included papers; found {len(novelty_risk_ids)}"
+        )
+
+    _, reading_rows = read_csv(root / "reading_matrix.csv", errors)
+    read_ids = {row.get("record_id", "").strip() for row in reading_rows}
+    missing_core_readings = sorted(
+        row.get("record_id", "").strip()
+        for row in core_rows
+        if row.get("record_id", "").strip() not in read_ids
     )
-    cited_keys: set[str] = set()
-    for match in re.finditer(r"\\cite[a-zA-Z*]*\s*\{([^}]+)\}", related_text):
-        cited_keys.update(key.strip() for key in match.group(1).split(",") if key.strip())
+    if missing_core_readings:
+        errors.append(
+            "related_works/reading_matrix.csv: core records lack evidence extraction: "
+            + ", ".join(missing_core_readings)
+        )
+
+    related_path = project / "paper/sections/related_work.tex"
+    related_cited_keys = citation_keys_from_tex(related_path)
+    manuscript_cited_keys = manuscript_citation_keys(project / "paper")
     bib_text = (project / "paper/references.bib").read_text(encoding="utf-8", errors="replace")
+    corpus_bib_keys = {
+        row.get("bib_key", "").strip()
+        for row in included_rows
+        if row.get("bib_key", "").strip()
+    }
+    cited_corpus_keys = manuscript_cited_keys & corpus_bib_keys
+    related_corpus_keys = related_cited_keys & corpus_bib_keys
+    if len(cited_corpus_keys) < MIN_MANUSCRIPT_CORPUS_CITATIONS:
+        errors.append(
+            f"paper manuscript cites only {len(cited_corpus_keys)} audited corpus papers; "
+            f"at least {MIN_MANUSCRIPT_CORPUS_CITATIONS} are required for a full sketch"
+        )
+    if len(related_corpus_keys) < MIN_RELATED_WORK_CORPUS_CITATIONS:
+        errors.append(
+            f"paper/sections/related_work.tex cites only {len(related_corpus_keys)} audited "
+            f"corpus papers; at least {MIN_RELATED_WORK_CORPUS_CITATIONS} are required"
+        )
+    missing_bib_entries = sorted(
+        key
+        for key in cited_corpus_keys
+        if not re.search(rf"@\w+\s*\{{\s*{re.escape(key)}\s*,", bib_text)
+    )
+    if missing_bib_entries:
+        errors.append(
+            "paper/references.bib: cited audited corpus keys lack entries: "
+            + ", ".join(missing_bib_entries)
+        )
     must_cite_ids = {
         row.get("record_id", "").strip()
         for row in screening_rows
@@ -1065,7 +1285,7 @@ def validate_literature(project: Path, project_data: dict[str, Any], errors: lis
         if not bib_key:
             errors.append(f"{enriched_path}: must-cite paper {record_id} lacks bib_key")
             continue
-        if bib_key not in cited_keys:
+        if bib_key not in related_cited_keys:
             errors.append(f"paper/sections/related_work.tex: must-cite paper is not cited: {bib_key}")
         if not re.search(rf"@\w+\s*\{{\s*{re.escape(bib_key)}\s*,", bib_text):
             errors.append(f"paper/references.bib: missing must-cite entry {bib_key}")
@@ -1259,7 +1479,12 @@ def inherited_core_composition_evidence(
     return None
 
 
-def validate_figures(project: Path, errors: list[str], require_overview: bool) -> None:
+def validate_figures(
+    project: Path,
+    errors: list[str],
+    require_overview: bool,
+    require_qualitative: bool = False,
+) -> None:
     path = project / "figures/manifest.csv"
     fields, rows = read_csv(path, errors)
     missing_fields = [field for field in FIGURE_REQUIRED if field not in fields]
@@ -1289,6 +1514,8 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
             "module_ids", ""
         ).strip():
             errors.append(f"{path}:{index}: overview/module figure must link module_ids")
+        if figure_type == "qualitative" and not row.get("result_ids", "").strip():
+            errors.append(f"{path}:{index}: qualitative figure must link result_ids")
         if not re.fullmatch(r"v[1-9][0-9]*", row.get("version", "").strip().lower()):
             errors.append(f"{path}:{index}: version must use vN syntax")
 
@@ -1413,6 +1640,26 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
                         f"{path}:{index}: generic module boxes may occupy at most 35% "
                         "of a teaser/overview canvas"
                     )
+            if figure_type == "qualitative":
+                evidence_match = re.search(
+                    r"(?im)^Evidence status:\s*(conceptual-placeholder|measured-outputs)\s*$",
+                    prompt,
+                )
+                if evidence_match is None:
+                    errors.append(
+                        f"{path}:{index}: qualitative prompt must declare Evidence status as "
+                        "conceptual-placeholder or measured-outputs"
+                    )
+                elif evidence_match.group(1).lower() == "conceptual-placeholder":
+                    required_banner = re.search(
+                        r"(?i)CONCEPTUAL\s+PLACEHOLDER.{0,80}REPLACE\s+WITH\s+RAW\s+OUTPUTS",
+                        prompt,
+                    )
+                    if required_banner is None:
+                        errors.append(
+                            f"{path}:{index}: qualitative placeholder prompt must request an "
+                            "unmistakable 'CONCEPTUAL PLACEHOLDER - REPLACE WITH RAW OUTPUTS' disclosure"
+                        )
         qa_path = resolved.get("qa_path")
         if qa_path and qa_path.exists():
             qa_text = qa_path.read_text(encoding="utf-8", errors="replace")
@@ -1432,6 +1679,26 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
                         errors.append(
                             f"{path}:{index}: core-figure QA lacks '{gate}: pass'"
                         )
+            if figure_type == "qualitative":
+                evidence_match = re.search(
+                    r"(?im)^Evidence status:\s*(conceptual-placeholder|measured-outputs)\s*$",
+                    qa_text,
+                )
+                if evidence_match is None:
+                    errors.append(f"{path}:{index}: qualitative QA lacks an Evidence status")
+                else:
+                    gates = (
+                        QUALITATIVE_PLACEHOLDER_QA_GATES
+                        if evidence_match.group(1).lower() == "conceptual-placeholder"
+                        else QUALITATIVE_MEASURED_QA_GATES
+                    )
+                    for gate in gates:
+                        if not re.search(
+                            rf"(?im)^\s*{re.escape(gate)}\s*:\s*pass\b", qa_text
+                        ):
+                            errors.append(
+                                f"{path}:{index}: qualitative QA lacks '{gate}: pass'"
+                            )
 
         provenance_path = resolved.get("provenance_path")
         provenance: dict[str, Any] = {}
@@ -1568,6 +1835,8 @@ def validate_figures(project: Path, errors: list[str], require_overview: bool) -
     for paper_path in manifest_by_paper_path:
         if paper_path not in included_paths:
             errors.append(f"{path}: selected/final manifest asset is not included by the paper: {paper_path}")
+
+    validate_qualitative_figure_bindings(project, rows, errors, require_qualitative)
 
 
 def validate_no_alternate_figure_backends(project: Path, errors: list[str]) -> None:
@@ -3448,7 +3717,7 @@ def main() -> int:
         validate_claims(project, errors)
         validate_design(project, errors)
         validate_title(project, project_data, venue, errors)
-        validate_figures(project, errors, require_overview=True)
+        validate_figures(project, errors, require_overview=True, require_qualitative=True)
         validate_no_alternate_figure_backends(project, errors)
         validate_sections(project, errors)
         errors.extend(

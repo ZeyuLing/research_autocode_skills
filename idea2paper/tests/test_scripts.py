@@ -30,6 +30,7 @@ from validate_project import (  # noqa: E402
     paperjury_review_tree_sha256,
     render_paperjury_ledger,
     validate_figures,
+    validate_qualitative_figure_bindings,
     validate_no_alternate_figure_backends,
     validate_compiler_log_binding,
     validate_layout_report_status,
@@ -1554,8 +1555,8 @@ class Idea2PaperScriptTests(unittest.TestCase):
             )
             canonical_main = (
                 "\\input{sections/body}\n"
-                "\\input{sections/conclusion}\n"
                 "\\input{sections/limitations}\n"
+                "\\input{sections/conclusion}\n"
                 "\\label{idea2paper:end-body}\n"
                 "\\input{sections/ai_use_statement}\n"
                 "\\label{idea2paper:end-exempt}\n"
@@ -1732,11 +1733,15 @@ class Idea2PaperScriptTests(unittest.TestCase):
             title_tex = (project / "paper/title.tex").read_text(encoding="utf-8")
             self.assertIn(r"\input{title}", main_tex)
             self.assertIn(r"\title{\papertitle}", main_tex)
-            self.assertIn(r"\IdeaTwoPaperPatchTitleTeaser", main_tex)
+            self.assertNotIn(r"\IdeaTwoPaperPatchTitleTeaser", main_tex)
             self.assertEqual(main_tex.count(r"\input{sections/teaser}"), 1)
             self.assertLess(
-                main_tex.index(r"\IdeaTwoPaperPatchTitleTeaser"),
-                main_tex.index(r"\begin{document}"),
+                main_tex.index(r"\maketitle"),
+                main_tex.index(r"\input{sections/teaser}"),
+            )
+            self.assertLess(
+                main_tex.index(r"\input{sections/teaser}"),
+                main_tex.index(r"\begin{abstract}"),
             )
             self.assertIn(r"\label{idea2paper:end-exempt}", main_tex)
             self.assertIn("Working Title Pending", title_tex)
@@ -1827,7 +1832,7 @@ class Idea2PaperScriptTests(unittest.TestCase):
             self.assertEqual(explicit_project["venue_selection_mode"], "user_specified")
             self.assertEqual(explicit_decision["selection_mode"], "user_specified")
 
-    def test_teaser_requires_title_then_teaser_then_author_hook(self) -> None:
+    def test_teaser_requires_title_author_then_teaser_then_abstract(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             paper = Path(temporary) / "paper"
             sections = paper / "sections"
@@ -1843,6 +1848,18 @@ class Idea2PaperScriptTests(unittest.TestCase):
             main.write_text(
                 "\\documentclass{article}\n"
                 "\\title{A Title}\\author{Anonymous Authors}\n"
+                "\\begin{document}\n"
+                "\\maketitle\n"
+                "\\input{sections/teaser}\n"
+                "\\begin{abstract}Abstract.\\end{abstract}\n"
+                "\\end{document}\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(teaser_placement_audit(paper), [])
+
+            main.write_text(
+                "\\documentclass{article}\n"
+                "\\title{A Title}\\author{Anonymous Authors}\n"
                 "\\makeatletter\n"
                 "\\IdeaTwoPaperPatchTitleTeaser{{\\LARGE \\@title \\par}}"
                 "{\\input{sections/teaser}}\n"
@@ -1853,21 +1870,9 @@ class Idea2PaperScriptTests(unittest.TestCase):
                 "\\end{document}\n",
                 encoding="utf-8",
             )
-            self.assertEqual(teaser_placement_audit(paper), [])
-
-            main.write_text(
-                "\\documentclass{article}\n"
-                "\\title{A Title}\\author{Anonymous Authors}\n"
-                "\\begin{document}\n"
-                "\\maketitle\n"
-                "\\input{sections/teaser}\n"
-                "\\begin{abstract}Abstract.\\end{abstract}\n"
-                "\\end{document}\n",
-                encoding="utf-8",
-            )
-            direct_errors = teaser_placement_audit(paper)
+            legacy_errors = teaser_placement_audit(paper)
             self.assertTrue(
-                any("IdeaTwoPaperPatchTitleTeaser" in error for error in direct_errors)
+                any("IdeaTwoPaperPatchTitleTeaser" in error for error in legacy_errors)
             )
 
             teaser.write_text(
@@ -1878,16 +1883,31 @@ class Idea2PaperScriptTests(unittest.TestCase):
             main.write_text(
                 "\\documentclass{article}\n"
                 "\\title{A Title}\\author{Anonymous Authors}\n"
-                "\\makeatletter\n"
-                "\\IdeaTwoPaperPatchTitleTeaser{{\\LARGE \\@title \\par}}"
-                "{\\input{sections/teaser}}\n"
-                "\\makeatother\n"
-                "\\begin{document}\\maketitle"
+                "\\begin{document}\\maketitle\n"
+                "\\input{sections/teaser}\n"
                 "\\begin{abstract}Abstract.\\end{abstract}\\end{document}\n",
                 encoding="utf-8",
             )
             float_errors = teaser_placement_audit(paper)
             self.assertTrue(any("non-floating" in error for error in float_errors))
+
+            teaser.write_text(
+                "\\begin{IdeaTwoPaperTitleTeaser}{Conceptual teaser.}{fig:teaser}\n"
+                "\\includegraphics[width=0.8\\linewidth]{figures/teaser.png}\n"
+                "\\end{IdeaTwoPaperTitleTeaser}\n",
+                encoding="utf-8",
+            )
+            main.write_text(
+                "\\documentclass{article}\n"
+                "\\title{A Title}\\author{Anonymous Authors}\n"
+                "\\begin{document}\\maketitle\n"
+                "Rendered interruption.\n"
+                "\\input{sections/teaser}\n"
+                "\\begin{abstract}Abstract.\\end{abstract}\\end{document}\n",
+                encoding="utf-8",
+            )
+            interrupted_errors = teaser_placement_audit(paper)
+            self.assertTrue(any("immediately follow maketitle" in error for error in interrupted_errors))
 
     def test_auto_venue_uses_open_abstract_or_paper_deadline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -2918,6 +2938,43 @@ class Idea2PaperScriptTests(unittest.TestCase):
             errors = []
             validate_figures(project, errors, require_overview=True)
             self.assertTrue(any("unregistered paper figure" in error for error in errors))
+
+    def test_qualitative_placeholder_must_bind_same_figure_imagegen_raster(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            project = Path(temporary)
+            section = project / "paper/sections/experiments.tex"
+            section.parent.mkdir(parents=True)
+            manifest_rows = [
+                {
+                    "figure_id": "FIG-QUAL",
+                    "type": "qualitative",
+                    "result_ids": "QUAL-MAIN",
+                    "paper_path": "paper/figures/qualitative.png",
+                }
+            ]
+            section.write_text(
+                "\\QualPlaceholder{QUAL-MAIN}{Generate this later.}\n",
+                encoding="utf-8",
+            )
+            errors: list[str] = []
+            validate_qualitative_figure_bindings(
+                project, manifest_rows, errors, require_qualitative=True
+            )
+            self.assertTrue(any("must render inside a figure" in error for error in errors))
+
+            section.write_text(
+                "\\begin{figure}[t]\n"
+                "\\includegraphics[width=\\linewidth]{figures/qualitative.png}\n"
+                "\\caption{\\QualPlaceholder{QUAL-MAIN}{Conceptual layout only.}}\n"
+                "\\label{fig:qualitative}\n"
+                "\\end{figure}\n",
+                encoding="utf-8",
+            )
+            errors = []
+            validate_qualitative_figure_bindings(
+                project, manifest_rows, errors, require_qualitative=True
+            )
+            self.assertEqual(errors, [])
 
     def test_inline_tikz_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

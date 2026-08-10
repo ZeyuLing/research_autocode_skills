@@ -637,7 +637,7 @@ def _balanced_command_calls(
 
 
 def teaser_placement_audit(paper: Path) -> list[str]:
-    """Enforce the rendered Title -> Teaser -> Authors -> Abstract contract."""
+    """Enforce the rendered Title -> Authors -> Teaser -> Abstract contract."""
 
     paper = paper.resolve()
     main_path = paper / "main.tex"
@@ -656,41 +656,23 @@ def teaser_placement_audit(paper: Path) -> list[str]:
         target = (match.group("braced") or match.group("bare") or "").strip()
         if _normalized_input_target(target) == "sections/teaser":
             teaser_inputs.append(match)
-    patch_calls = _balanced_command_calls(
-        main_source, r"\IdeaTwoPaperPatchTitleTeaser", 2
-    )
+    patch_calls = _balanced_command_calls(main_source, r"\IdeaTwoPaperPatchTitleTeaser", 2)
     active = bool(teaser_source.strip() or teaser_inputs or patch_calls)
     if not active:
         return []
 
     errors: list[str] = []
     if not teaser_path.is_file():
-        errors.append("title-block teaser hook is active but sections/teaser.tex is missing")
+        errors.append("front-matter teaser is active but sections/teaser.tex is missing")
         return errors
-    if len(patch_calls) != 1 or not patch_calls[0]["valid"]:
+    if patch_calls:
         errors.append(
-            "main.tex must contain exactly one balanced "
-            r"\IdeaTwoPaperPatchTitleTeaser{<title-anchor>}{\input{sections/teaser}} call"
+            r"\IdeaTwoPaperPatchTitleTeaser is obsolete: do not patch template-internal "
+            r"\@maketitle tokens; input sections/teaser immediately after \maketitle"
         )
-        return errors
-
-    call = patch_calls[0]
-    title_anchor = str(call["arguments"][0]["body"])
-    insertion = str(call["arguments"][1]["body"])
-    if r"\@title" not in title_anchor:
-        errors.append("title-teaser hook anchor must contain the active template's \\@title token")
-    if re.sub(r"\s+", "", insertion) != r"\input{sections/teaser}":
+    if len(teaser_inputs) != 1:
         errors.append(
-            "title-teaser hook second argument must be exactly "
-            r"\input{sections/teaser}"
-        )
-    if len(teaser_inputs) != 1 or not (
-        call["arguments"][1]["start"]
-        < teaser_inputs[0].start()
-        < call["arguments"][1]["end"]
-    ):
-        errors.append(
-            "sections/teaser must be input exactly once, inside the title-teaser hook only"
+            "main.tex must input sections/teaser exactly once after maketitle and before Abstract"
         )
 
     begin_document = re.search(r"\\begin\{document\}", main_source)
@@ -698,17 +680,32 @@ def teaser_placement_audit(paper: Path) -> list[str]:
     abstracts = list(re.finditer(r"\\begin\{abstract\}", main_source))
     if begin_document is None or len(make_titles) != 1 or len(abstracts) != 1:
         errors.append(
-            "title-teaser placement requires one begin{document}, one maketitle, and one abstract"
+            "front-matter teaser placement requires one begin{document}, one maketitle, and one abstract"
         )
-    elif not (
-        call["end"]
-        < begin_document.start()
-        < make_titles[0].start()
-        < abstracts[0].start()
-    ):
-        errors.append(
-            "source order must be title-teaser hook < begin{document} < maketitle < Abstract"
-        )
+    elif len(teaser_inputs) == 1:
+        teaser_input = teaser_inputs[0]
+        make_title = make_titles[0]
+        abstract = abstracts[0]
+        if not (
+            begin_document.start()
+            < make_title.start()
+            < teaser_input.start()
+            < abstract.start()
+        ):
+            errors.append(
+                "source order must be begin{document} < maketitle < sections/teaser < Abstract"
+            )
+        else:
+            between_title_and_teaser = main_source[make_title.end() : teaser_input.start()]
+            between_teaser_and_abstract = main_source[teaser_input.end() : abstract.start()]
+            if between_title_and_teaser.strip():
+                errors.append(
+                    "sections/teaser must immediately follow maketitle; no rendered content or command may intervene"
+                )
+            if between_teaser_and_abstract.strip():
+                errors.append(
+                    "Abstract must immediately follow sections/teaser; no rendered content or command may intervene"
+                )
 
     if teaser_source.strip():
         begins = list(
@@ -722,10 +719,10 @@ def teaser_placement_audit(paper: Path) -> list[str]:
             )
         if re.search(r"\\begin\{figure\*?\}", teaser_source):
             errors.append(
-                "title-block teaser must be non-floating; figure/figure* is forbidden"
+                "front-matter teaser must be non-floating; figure/figure* is forbidden"
             )
         if not INCLUDE_GRAPHICS_RE.search(teaser_source):
-            errors.append("title-block teaser must contain a literal \\includegraphics raster")
+            errors.append("front-matter teaser must contain a literal \\includegraphics raster")
     return errors
 
 
@@ -875,14 +872,17 @@ def manuscript_structure_audit(paper: Path) -> dict[str, Any]:
             errors.append("main.tex places end-body before the Conclusion input")
         if len(limitation_inputs) > 1:
             errors.append("main.tex may input sections/limitations at most once")
-        elif limitation_inputs and limitation_inputs[0]["start"] <= conclusion_inputs[0]["start"]:
-            errors.append("main.tex must place Limitations after Conclusion")
-        final_body_input = limitation_inputs[0] if limitation_inputs else conclusion_inputs[0]
+        elif limitation_inputs and limitation_inputs[0]["start"] >= conclusion_inputs[0]["start"]:
+            errors.append(
+                "main.tex must place Limitations before Conclusion so Conclusion remains "
+                "the final body section"
+            )
+        final_body_input = conclusion_inputs[0]
         if final_body_input["end"] >= main_end_position:
             errors.append("main.tex places end-body before the final body-section input")
         elif main_source[final_body_input["end"] : main_end_position].strip():
             errors.append(
-                "main.tex must place end-body immediately after Conclusion/Limitations; "
+                "main.tex must place end-body immediately after Conclusion; "
                 "additional body prose or inputs are not allowed in between"
             )
 

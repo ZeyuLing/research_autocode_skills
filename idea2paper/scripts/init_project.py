@@ -146,27 +146,22 @@ def main_tex() -> str:
 \\title{{\\papertitle}}
 \\author{{Anonymous Authors}}
 
-% The bootstrap article title is atomic. Splice the teaser after its title and
-% before its author block; update only the anchor when migrating venue templates.
-\\makeatletter
-\\IdeaTwoPaperPatchTitleTeaser{{{{\\LARGE \\@title \\par}}}}{{\\input{{sections/teaser}}}}
-\\makeatother
-
 \\begin{{document}}
 \\maketitle
-\\TemplateTODO{{TEMPLATE-UPDATE}}{{Replace the bootstrap article class with the official target-venue template.}}
-% TODO(TEMPLATE-UPDATE): Replace with the official current-cycle venue template and recheck layout.
-
+\\input{{sections/teaser}}
 \\begin{{abstract}}
 \\input{{sections/abstract}}
 \\end{{abstract}}
+
+\\TemplateTODO{{TEMPLATE-UPDATE}}{{Replace the bootstrap article class with the official target-venue template.}}
+% TODO(TEMPLATE-UPDATE): Replace with the official current-cycle venue template and recheck layout.
 
 \\input{{sections/introduction}}
 \\input{{sections/related_work}}
 \\input{{sections/method}}
 \\input{{sections/experiments}}
-\\input{{sections/conclusion}}
 \\input{{sections/limitations}}
+\\input{{sections/conclusion}}
 \\label{{idea2paper:end-body}}
 \\label{{idea2paper:end-exempt}}
 
@@ -376,8 +371,8 @@ def main() -> int:
     section_titles = {
         "teaser.tex": (
             "% If the venue permits a teaser, use exactly one non-floating\n"
-            "% IdeaTwoPaperTitleTeaser environment here. main.tex injects it\n"
-            "% between the rendered title and author block.\n"
+            "% IdeaTwoPaperTitleTeaser environment here. main.tex inputs it\n"
+            "% after the complete title/author block and before the abstract.\n"
         ),
         "abstract.tex": "% Abstract prose.\n",
         "introduction.tex": "\\section{Introduction}\n",

@@ -97,6 +97,15 @@ After the survey:
 4. Save legal open-access PDFs locally. For unavailable PDFs, keep metadata and landing links; never bypass access controls.
 5. Mark directly relevant accepted top-conference and top-journal papers `must_cite=yes`.
 6. Require the survey coverage gates and two citation-snowball passes over core anchors.
+7. For a full paper sketch, require at least 30 screened included records, including at
+   least 10 core papers, at least five mechanism/task/evaluation coverage families,
+   at least eight papers from the current or previous two calendar years, at least
+   eight accepted/published papers with status evidence, and at least three explicitly
+   marked closest or novelty-threatening works. These are relevance floors, not a
+   license to pad the bibliography: excluded or uncited off-topic records do not count.
+8. Require at least 25 distinct audited corpus papers to be cited in the manuscript
+   and at least 20 in Related Work. Every core paper must have a reading-matrix
+   extraction, and every citation must resolve to a verified BibTeX entry.
 
 Set `LITERATURE_AUDITED` complete only after the coverage audit states searched sources, blind spots, and its stopping decision.
 
@@ -171,6 +180,14 @@ themselves.
 
 The selected imagegen raster must remain the graphical subject of every `figure` environment. Use only the finite raster-layout grammar: placement, centering, `includegraphics`, captions, labels, tracked draft macros, spacing, and ordinary raster `subfigure` environments. TeX text/math bodies, outer scale/resize wrappers, `tabular`, `array`, `rule`, `minipage`, boxes, inputs, custom drawing macros, or any unrecognized structure are forbidden, including attempts to satisfy provenance with a token-sized registered raster.
 6. For real qualitative outputs, require preservation of the input evidence. Reject any generated layout that changes the underlying observation.
+7. Before real outputs exist, every planned qualitative comparison must already be a
+   real ImageGen-generated raster, not a red prose sentence or an empty box. Put an
+   unmistakable `CONCEPTUAL PLACEHOLDER - REPLACE WITH RAW OUTPUTS` disclosure inside
+   the generated composition, declare `Evidence status: conceptual-placeholder` in
+   its prompt and QA, register the relevant qualitative result/TODO ID in
+   `manifest.csv`, and render the matching `\QualPlaceholder` inside the same LaTeX
+   figure environment. The placeholder may visualize the intended comparison layout
+   and diagnostic overlays, but it must not imitate measured model evidence.
 
 ### 8. Write the manuscript
 
@@ -184,9 +201,11 @@ Read `manuscript-writing.md`. Draft in this order after the idea and claim graph
 
 Cover all relevant `must_cite` accepted top-venue work in Related Work. Write result-dependent Abstract and Conclusion claims under the successful-experiment assumption, using the same red result IDs and adjacent TODOs.
 
-When the venue permits a teaser, render it strictly between the title and author
-block using the audited title-hook adapter; never place it above the title, after
-authors, or as a float. Allow the sketch to exceed the official body limit by at
+When the venue permits a teaser, render it strictly after the complete title/author
+block and before the abstract: `\maketitle`, then `\input{sections/teaser}`, then
+`\begin{abstract}`. Never place it above the title, between title and authors,
+after the abstract, or as a float, and never patch template-internal `\@maketitle`
+tokens to position it. Allow the sketch to exceed the official body limit by at
 most one page; move secondary material to the appendix and cite it from the main
 text. Keep core claims, method, and decisive evidence in the main paper.
 
@@ -214,6 +233,8 @@ Invoke `paperjury:paperjury` after the first complete draft. Give each reviewer 
 After revision, create a new immutable snapshot and run a clean PaperJury round whose reviewers cannot see prior reports or the ledger. Continue until a clean round adds no fixable writing/claim-alignment issue and no gate-blocking or unadjudicated major issue remains; require at least two rounds. Save `qa/paperjury/final_report.json` with `status=pass`, `mode=review`, `author_authorized=true`, the artifact-derived round/reviewer counts, `converged=true`, zero ledger-derived blocking/unadjudicated majors, the current complete `paper/` source hash, and the final review-visible `.tex`/`.bib` snapshot hash. Validation must derive the pass from reviewer files, round manifests, snapshots, and the official ledger rather than trusting this summary. Rerun PaperJury after any later material claim, result-narrative, or layout/caption rewrite.
 
 Declare `SKETCH_COMPLETE` only when every non-experimental component is publication-quality and the only unresolved items are registered predicted results, qualitative placeholders, method alternatives, or a temporary-template update.
+Text-only qualitative placeholders do not qualify: each one must be bound to a
+paper-consumed ImageGen raster with prompt, receipt, provenance, manifest, and QA.
 
 After real results arrive, replace every prediction, regenerate affected imagegen figures, rewrite Results/Abstract/Conclusion, run the submission-mode checks, and declare `SUBMISSION_READY` only with zero draft macros and TODOs.
 

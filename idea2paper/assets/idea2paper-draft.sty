@@ -1,8 +1,7 @@
 \NeedsTeXFormat{LaTeX2e}
-\ProvidesPackage{idea2paper-draft}[2026/08/04 Tracked draft placeholders and title-teaser hook for idea2paper]
+\ProvidesPackage{idea2paper-draft}[2026/08/10 Tracked draft placeholders and non-floating teaser for idea2paper]
 
 \RequirePackage{xcolor}
-\RequirePackage{etoolbox}
 
 \definecolor{IdeaTwoPaperDraftRed}{RGB}{190,35,35}
 
@@ -10,30 +9,26 @@
 \newcommand{\PredResult}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
 \newcommand{\PredClaim}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
 \newcommand{\DraftChoice}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
-\newcommand{\QualPlaceholder}[2]{%
-  \fcolorbox{IdeaTwoPaperDraftRed}{white}{%
-    \parbox{0.92\linewidth}{\centering\textcolor{IdeaTwoPaperDraftRed}{#2}}%
-  }%
-}
+% Keep qualitative replacement text breakable inside captions. The generated
+% placeholder raster carries the prominent disclosure; an unbreakable fbox here
+% can overflow a single-column caption and disturb float placement.
+\newcommand{\QualPlaceholder}[2]{\textcolor{IdeaTwoPaperDraftRed}{#2}}
 \newcommand{\TemplateTODO}[2]{%
   \PackageWarningNoLine{idea2paper-draft}{#1: #2}%
   \par\noindent\textcolor{IdeaTwoPaperDraftRed}{\textbf{Template TODO (#1):} #2}\par%
 }
 
-% The venue template remains byte-for-byte unchanged. This adapter splices a
-% non-floating teaser immediately after the template's title token sequence and
-% therefore before the author block. A missing template anchor is a hard error:
-% silently falling back would put the teaser in the wrong visual position.
+% Obsolete compatibility guard. A teaser belongs after the complete title/author
+% block and before the abstract, so main.tex must input it immediately after
+% \maketitle. Patching template-internal \@maketitle tokens is deliberately banned.
 \newcommand{\IdeaTwoPaperPatchTitleTeaser}[2]{%
-  \patchcmd{\@maketitle}{#1}{#1#2}{}{%
-    \PackageError{idea2paper-draft}%
-      {Could not install the title--teaser--author hook}%
-      {Update the first argument of \string\IdeaTwoPaperPatchTitleTeaser\space to the exact title token sequence in the active venue template.}%
-  }%
+  \PackageError{idea2paper-draft}%
+    {Obsolete title--teaser hook}%
+    {Remove \string\IdeaTwoPaperPatchTitleTeaser\space and place \string\input{sections/teaser} immediately after \string\maketitle\space and before the abstract.}%
 }
 
-% A title-block teaser cannot be a LaTeX float because it is rendered inside
-% \@maketitle. Keep includegraphics literal in the environment body so project
+% The teaser remains source-anchored and non-floating between \maketitle and the
+% abstract. Keep includegraphics literal in the environment body so project
 % validation can still bind the raster to the imagegen manifest.
 \newenvironment{IdeaTwoPaperTitleTeaser}[2]{%
   \def\IdeaTwoPaperTeaserCaption{#1}%

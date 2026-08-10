@@ -16,6 +16,11 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - Paper acceptance/open-source fields contain evidence or explicit `unknown` values.
 - Directly relevant accepted top-venue work and novelty-threatening work are in `must_cite`.
 - Every factual Related Work claim traces to a verified record.
+- At least 30 included records, 10 core records, five coverage families, eight recent
+  records, eight accepted/published records with evidence, and three novelty-risk
+  closest works are present; excluded/off-topic padding does not count.
+- Every core record has a reading-matrix extraction, at least 25 audited corpus papers
+  are cited in the manuscript, and at least 20 are cited in Related Work.
 
 ## Idea gate
 
@@ -45,6 +50,10 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - Terminology, arrows, values, label associations, and scientific content match the paper.
 - Palette is low-saturation with readable contrast; final-size text is legible; no watermark exists.
 - Real qualitative evidence was not altered by imagegen.
+- Every `\QualPlaceholder` occurs inside a figure that contains a registered
+  `type=qualitative` ImageGen raster linked by the same result ID. A conceptual
+  placeholder declares its evidence status, visibly says it must be replaced with raw
+  outputs, contains no simulated measurements, and passes the qualitative QA gates.
 - Every teaser/overview has a claim-first brief and reference synthesis, records
   at least six composition directions spanning at least three archetypes and
   three targeted imagegen refinements, and passes independent Faithfulness,
@@ -69,9 +78,10 @@ Apply each gate to the current artifact versions. A passed report becomes stale 
 - Every `must_cite` paper is covered appropriately.
 - Terminology, notation, claims, contributions, figures, tables, captions, Abstract, and Conclusion agree.
 - Appendix movements are cited from the body and comply with venue rules.
-- If a teaser is present, its rendered order is Title -> Teaser -> Authors ->
-  Abstract through the audited title hook; it is not a float and the official
-  venue template asset is unmodified.
+- If a teaser is present, its rendered order is Title -> Authors -> Teaser ->
+  Abstract through the audited `\maketitle -> \input{sections/teaser} ->
+  \begin{abstract}` source order; it is not a float, no template-internal title
+  hook is active, and the official venue template asset is unmodified.
 - Double-blind metadata, acknowledgments, repository links, and self-citations comply with venue policy.
 - LaTeX compiles without unresolved citations or references.
 - `qa/layout_report.json` records a passing build, the correct body/reference counting rule, and body pages within the permitted budget.
@@ -114,6 +124,8 @@ Require:
 - all venue, literature, idea, design, title, figure, and manuscript gates pass;
 - compiled body is within official limit plus one page;
 - all unresolved items belong only to `PREDICTED_RESULT`, `QUALITATIVE_PLACEHOLDER`, `METHOD_ALTERNATIVE`, or `TEMPLATE_UPDATE`;
+- every unresolved `QUALITATIVE_PLACEHOLDER` is a rendered ImageGen asset with a
+  complete evidence chain, not a promise to generate a figure later;
 - `scripts/todo_lint.py --mode sketch` reports no untracked red text or TODO;
 - `scripts/validate_project.py --mode sketch` passes;
 - the final report enumerates every remaining item and affected claim.

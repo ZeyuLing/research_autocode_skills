@@ -68,6 +68,7 @@ Three-glance hierarchy: <first glance>; <second glance>; <third glance>
 Composition archetypes evaluated: <integer; at least 3>
 Color palette: low-saturation palette with accessible contrast
 Text (verbatim): "<only required terms from terminology.csv>"
+Evidence status: <conceptual-placeholder|measured-outputs; required for qualitative figures>
 Constraints: emphasize <claim/module IDs>; preserve evidence; readable at final size; no watermark
 Avoid: decorative detail, dense prose, unused whitespace, high-saturation clashes, invented modules
 ```
@@ -102,6 +103,22 @@ multi-change edit, or unbound input must restate and satisfy the full contract.
 For real qualitative results, label each input image role and require: “change only layout and framing; preserve every model output pixel/content and label association.” Compare generated layouts against the original inputs. Reject any version that alters, beautifies, invents, removes, or swaps observations.
 
 Before measured results exist, do not bake predicted numeric labels into a raster chart. Use an unmistakable no-number imagegen placeholder, and place every predicted value in the caption or adjacent LaTeX table through `\PredResult{<ID>}{...}` with a matching nearby TODO. Regenerate the complete chart through imagegen after measured values arrive.
+
+Every planned qualitative result must already have a generated raster before
+`SKETCH_COMPLETE`. A red paragraph that says a figure will be generated later is not
+a figure. Set `type=qualitative`, bind `result_ids` to the exact
+`\QualPlaceholder` ID, declare `Evidence status: conceptual-placeholder`, and require
+the in-image disclosure `CONCEPTUAL PLACEHOLDER - REPLACE WITH RAW OUTPUTS`. The
+placeholder may show schematic silhouettes, intended case columns, baseline/method
+rows, contact/trajectory diagnostics, and failure-marker legends, but must contain no
+fabricated screenshots, scores, or apparent model outputs. Its caption must state that
+it is a layout specification rather than experimental evidence.
+
+For conceptual qualitative placeholders, the QA note must include `Evidence status:
+conceptual-placeholder` plus `Placeholder disclosure: pass`, `No measured-result
+simulation: pass`, and `Planned comparison fidelity: pass`. For measured qualitative
+figures, it must instead state `Evidence status: measured-outputs`, `Input evidence
+preservation: pass`, and `Baseline-output association: pass`.
 
 ## Artifact and QA contract
 

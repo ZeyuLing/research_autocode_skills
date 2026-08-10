@@ -85,7 +85,7 @@ Do not use untracked `\textcolor{red}{...}` for draft facts.
 
 ## Qualitative results
 
-Define what the qualitative comparison must reveal, how cases are selected, which baselines appear, and which hard/failure cases are required. Before outputs exist, generate only an unmistakable imagegen placeholder and bind it to `\QualPlaceholder{<ID>}{...}` plus a TODO. After results exist, preserve the actual evidence when imagegen arranges the layout.
+Define what the qualitative comparison must reveal, how cases are selected, which baselines appear, and which hard/failure cases are required. Before outputs exist, generate an unmistakable ImageGen raster that visualizes the intended panel grammar, case types, comparison rows, and diagnostic overlays without impersonating measured outputs. It must display `CONCEPTUAL PLACEHOLDER - REPLACE WITH RAW OUTPUTS`, be registered as `type=qualitative` with the same result ID, and appear in the same LaTeX figure environment as `\QualPlaceholder{<ID>}{...}` plus a TODO. A prose-only placeholder is a blocking defect. After results exist, preserve the actual evidence when ImageGen arranges the layout.
 
 ## Result injection
 
