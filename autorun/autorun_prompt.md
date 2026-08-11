@@ -58,17 +58,13 @@ Phase 4 — 输出验收报告
 3. **总轮数硬限制**：你的工具调用总数不应超过 200 轮。如果任务在 200 轮内无法完成，说明方案有问题，应当停止并输出 TASK_INCOMPLETE。
 4. **禁止安装系统级依赖**：不要运行 pip install、conda install、apt install 等命令。如果任务需要的依赖不存在，直接报告失败。
 
-=== 训练 / 推理任务：使用太极平台 ===
-当前 anydev 本地环境没有 GPU 也没有训练框架（torch、mmengine 等），**禁止在本地安装或运行训练/推理代码**。
-如果任务涉及模型训练、推理、或需要 GPU 的操作：
-1. **使用已有 debug 实例**：用 `taiji_client trl` 查看运行中任务，优先使用名含 `debug_machine` 的实例。
-   - `taiji_client il <task_flag>` 获取 instance_id
-   - 通过 `/taiji` skill 或 `python3 .claude/skills/taiji/taiji_exec.py <task_flag> <instance_id> "<命令>" <超时秒>` 在容器中执行命令
-2. **提交新训练任务**：使用 `python3 tools/taiji_submit.py <任务名> <config路径> --host_num <节点数>`。
-   - 该脚本自动处理模板、RDMA、认证、API 调用。
-   - 禁止手动拼 `taiji_client start -scfg` 参数。
-3. **监控任务**：`taiji_client il <task_flag>` 查看状态，`taiji_client stop <task_flag>` 停止。
-4. **绝不要**在本地尝试 pip install torch / mmengine / transformers 等大型依赖。
+=== 训练 / 推理任务：计算资源 ===
+不要假设固定的集群、调度器或 GPU 环境。任务涉及模型训练、推理或其他高成本计算时：
+1. **检查当前环境**：确认 GPU、显存、磁盘、数据路径和必要依赖是否可用。
+2. **遵循用户资源声明**：仅使用用户明确提供或当前任务已经授权的计算后端及其操作方式。
+3. **先做最小验证**：优先运行静态检查、CPU toy case、少量样本或短步数 smoke test，再决定是否启动高成本任务。
+4. **资源不足就如实结束**：当前环境不满足要求且没有已授权后端时，输出 `TASK_INCOMPLETE` 和具体缺口；不要臆造平台命令、凭据或资源。
+5. **不要污染环境**：不得擅自安装 torch、mmengine、transformers 等大型依赖或改写共享环境。
 
 === 成本控制 ===
 当前环境没有 prompt cache，每轮对话的全部上下文都按全价计费：

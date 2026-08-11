@@ -723,28 +723,6 @@
                 data.effort=effortEl?effortEl.value:'medium';
                 // Client-side idempotency key → lets the server dedup repeat POSTs in a short window
                 data.client_nonce=(crypto&&crypto.randomUUID?crypto.randomUUID():(Date.now()+'-'+Math.random().toString(36).slice(2)));
-                // Warn if no taiji token configured
-                if(!_hasTaijiToken){
-                    const proceed=await new Promise(resolve=>{
-                        const modal=document.createElement('div');
-                        modal.innerHTML=`<div class="modal fade show" style="display:block;background:rgba(0,0,0,.5);z-index:9999;" tabindex="-1">
-                            <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
-                                <div class="modal-header bg-warning"><h5 class="modal-title"><i class="bi bi-exclamation-triangle me-2"></i>太极 Token 未配置</h5></div>
-                                <div class="modal-body">
-                                    <p>当前未配置太极平台 Token，任务将<strong>仅在 anydev 本地环境</strong>执行。</p>
-                                    <p class="text-muted small mb-0">如需使用太极 GPU 集群（训练、推理等），请先在右上角配置面板中设置太极 Token。</p>
-                                </div>
-                                <div class="modal-footer">
-                                    <button class="btn btn-secondary" id="_taiji_cancel">取消，去配置 Token</button>
-                                    <button class="btn btn-primary" id="_taiji_proceed">继续，仅用本地环境</button>
-                                </div>
-                            </div></div></div>`;
-                        document.body.appendChild(modal);
-                        modal.querySelector('#_taiji_cancel').onclick=()=>{document.body.removeChild(modal);resolve(false);};
-                        modal.querySelector('#_taiji_proceed').onclick=()=>{document.body.removeChild(modal);resolve(true);};
-                    });
-                    if(!proceed)return;
-                }
                 const r=await(await fetch('/api/tasks',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)})).json();
                 if(r.ok){
                     const labels=['🤖 AI 自动验证'];
@@ -1106,19 +1084,12 @@
                 }
                 html += '</div>';
 
-                // ── Taiji Token section ──
-                html += `<div class="mb-2"><div class="text-muted mb-1" style="font-size:.72rem;text-transform:uppercase;letter-spacing:.05em;">太极平台</div>`;
-                html += `<div id="taiji-token-section">加载中…</div></div>`;
-
                 // ── Storage info ──
                 html += `<div class="text-muted" style="font-size:.68rem;border-top:1px solid #f0f0f0;padding-top:6px;margin-top:4px;">
                   <i class="bi bi-hdd me-1"></i>配置目录：<span style="font-family:monospace;">${escapeHtml(d.settings_dir)}</span>
                 </div>`;
 
                 panel.innerHTML = html;
-
-                // Load taiji token status
-                loadTaijiTokenUI();
 
                 // Keep the create-task model dropdown in sync with the live config
                 try{
@@ -1171,66 +1142,6 @@
                 else showToast(r.error||'操作失败','error');
             }catch(e){ showToast('操作失败','error'); }
         }
-
-        // ── Taiji Token management ──
-        let _hasTaijiToken = false;
-        async function loadTaijiTokenUI(){
-            try{
-                const d = await(await fetch('/api/taiji-token')).json();
-                _hasTaijiToken = d.has_token;
-                const sec = document.getElementById('taiji-token-section');
-                if(!sec) return;
-                if(d.has_token){
-                    sec.innerHTML = `<div class="d-flex align-items-center justify-content-between mb-1">
-                        <span style="font-size:.78rem;">Token</span>
-                        <span class="badge bg-success" style="font-size:.7rem;"><i class="bi bi-check-circle me-1"></i>已配置</span>
-                    </div>
-                    <div class="d-flex gap-1 align-items-center">
-                        <code style="font-size:.75rem;flex:1;background:#f8f9fa;padding:3px 6px;border-radius:4px;">${escapeHtml(d.masked)}</code>
-                        <button class="btn btn-sm btn-outline-secondary" onclick="showTaijiTokenEdit()" title="修改"><i class="bi bi-pencil"></i></button>
-                    </div>
-                    <div id="taiji-token-edit" style="display:none;" class="mt-2">
-                        <div class="d-flex gap-1">
-                            <input type="text" id="taiji-token-input" class="form-control form-control-sm" style="font-family:monospace;font-size:.78rem;" placeholder="输入新 Token">
-                            <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="saveTaijiToken()">保存</button>
-                            <button class="btn btn-sm btn-outline-secondary flex-shrink-0" onclick="document.getElementById('taiji-token-edit').style.display='none'">✕</button>
-                        </div>
-                    </div>`;
-                }else{
-                    sec.innerHTML = `<div class="d-flex align-items-center justify-content-between mb-1">
-                        <span style="font-size:.78rem;">Token</span>
-                        <span class="badge bg-warning text-dark" style="font-size:.7rem;"><i class="bi bi-exclamation-triangle me-1"></i>未配置</span>
-                    </div>
-                    <div class="d-flex gap-1 mt-1">
-                        <input type="text" id="taiji-token-input" class="form-control form-control-sm" style="font-family:monospace;font-size:.78rem;" placeholder="输入太极 Token">
-                        <button class="btn btn-sm btn-outline-primary flex-shrink-0" onclick="saveTaijiToken()">保存</button>
-                    </div>
-                    <div class="text-muted mt-1" style="font-size:.7rem;">未配置 Token 时，任务将仅在 anydev 本地执行</div>`;
-                }
-            }catch(e){
-                const sec = document.getElementById('taiji-token-section');
-                if(sec) sec.innerHTML = '<div class="text-muted small">加载失败</div>';
-            }
-        }
-
-        function showTaijiTokenEdit(){
-            const el = document.getElementById('taiji-token-edit');
-            if(el) el.style.display = '';
-        }
-
-        async function saveTaijiToken(){
-            const inp = document.getElementById('taiji-token-input');
-            const val = inp?.value?.trim();
-            if(!val){showToast('请输入 Token','error');return;}
-            try{
-                const r = await(await fetch('/api/taiji-token',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:val})})).json();
-                if(r.ok){showToast('太极 Token 已保存');_hasTaijiToken=true;loadTaijiTokenUI();}
-                else showToast(r.error||'保存失败','error');
-            }catch(e){showToast('保存失败','error');}
-        }
-
-        // Also check taiji token on page load for warning dialog
-        (async()=>{try{const d=await(await fetch('/api/taiji-token')).json();_hasTaijiToken=d.has_token;}catch(e){}})();
 
         // Load config when dropdown is opened
         document.getElementById('cfg-nav-btn')?.addEventListener('show.bs.dropdown',loadClaudeConfig);

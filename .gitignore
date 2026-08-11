@@ -10,7 +10,6 @@ __pycache__/
 *.pyo
 
 # Internal / private
-TaijiSkills/
 /.dashboard/
 /_upstreams/
 /*.json
@@ -18,10 +17,6 @@ TaijiSkills/
 /.claude/skills/*
 !/.claude/skills/paper-read/
 !/.claude/skills/paper-read/**
-taiji/.token
-taiji/task_history.jsonl
-taiji/_*.json
-taiji/last_config.json
 autorun/tasks.db
 
 # Build artifacts

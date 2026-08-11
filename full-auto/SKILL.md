@@ -48,7 +48,7 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Agent, 
 1. 按计划逐步实施修改
 2. 每个子步骤完成后，运行相关测试确认不破坏已有功能
 3. 对于代码修改，确保语法正确（如 Python `ast.parse`、`node --check`）
-4. 对于涉及训练/推理的任务，使用太极平台（见下方"太极平台"章节）
+4. 对于涉及训练/推理的任务，先核对当前环境和用户明确提供的计算资源（见下方“计算资源”章节）
 
 ### Phase 3 — 自我验收（Task Reviewer）
 
@@ -97,16 +97,15 @@ allowed-tools: Bash, Read, Write, Edit, Glob, Grep, WebFetch, WebSearch, Agent, 
 
 ---
 
-## 训练 / 推理任务：使用太极平台
+## 训练 / 推理任务：计算资源
 
-当前 anydev 本地环境**没有 GPU**，禁止在本地运行训练/推理代码。
+不要假设固定的集群、调度器或 GPU 环境。执行训练与推理前：
 
-1. **使用已有 debug 实例**：`taiji_client trl` 查看运行中任务，优先使用 `debug_machine` 实例
-   - `taiji_client il <task_flag>` 获取 instance_id
-   - `python3 .claude/skills/taiji/taiji_exec.py <task_flag> <instance_id> "<命令>" <超时秒>` 执行远程命令
-2. **提交新训练任务**：`python3 tools/taiji_submit.py <任务名> <config路径> --host_num <N>`
-3. **监控**：`taiji_client il <task_flag>` 查状态，`taiji_client stop <task_flag>` 停止
-4. **绝不**在本地 pip install torch / mmengine / transformers
+1. **检查当前环境**：确认 GPU、显存、磁盘、数据路径和必要依赖是否可用。
+2. **遵循用户资源声明**：仅使用用户明确提供或当前任务已经授权的计算后端及其操作方式。
+3. **先做最小验证**：优先运行静态检查、CPU toy case、少量样本或短步数 smoke test，再决定是否启动高成本任务。
+4. **资源不足就如实结束**：当前环境不满足要求且没有已授权后端时，输出 `TASK_INCOMPLETE` 和具体缺口；不要臆造平台命令、凭据或资源。
+5. **不要为一次验证污染环境**：不得擅自安装大型系统级依赖或改写共享环境。
 
 ---
 
@@ -137,6 +136,6 @@ TASK_INCOMPLETE: <简要原因>
 | 1 | 跳过 Phase 3 自我验收 | 必须执行 git diff + 逐项检查 |
 | 2 | 验收发现问题但不修复 | 严重问题必须修复后再次验收 |
 | 3 | 死循环尝试 | 同类错误 3 次后 TASK_INCOMPLETE |
-| 4 | 本地装 torch/训练 | 用太极平台 |
+| 4 | 未检查资源就启动训练 | 先核对环境，使用当前资源或用户明确授权的后端 |
 | 5 | 停下来问用户 | 自主决策继续执行 |
 | 6 | 不输出验收报告就结束 | Phase 4 报告必须输出 |

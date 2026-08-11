@@ -34,7 +34,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 TASK_MANAGER = SCRIPT_DIR / "task_manager.py"
 META_DIR = SCRIPT_DIR.parent / ".dashboard"
 PROJECTS_FILE = META_DIR / "projects.json"
-TAIJI_TOKEN_FILE = META_DIR / "taiji_token"
 
 app = Flask(__name__, template_folder=str(SCRIPT_DIR / "templates"))
 
@@ -56,24 +55,6 @@ _STATS_CACHE_TTL = 15.0         # seconds — longer than frontend poll interval
 _CREATE_DEDUP: dict = {}
 _CREATE_DEDUP_TTL = 5.0         # seconds — a second POST inside this window is the SAME intent
 _CREATE_DEDUP_LOCK = threading.Lock()
-
-
-def get_taiji_token():
-    """Read taiji token from persistent file."""
-    try:
-        if TAIJI_TOKEN_FILE.exists():
-            return TAIJI_TOKEN_FILE.read_text().strip()
-    except Exception:
-        pass
-    return ""
-
-
-def set_taiji_token(token: str):
-    """Write taiji token to persistent file."""
-    META_DIR.mkdir(parents=True, exist_ok=True)
-    TAIJI_TOKEN_FILE.write_text(token.strip())
-    # Also set env for current process so child processes inherit it
-    os.environ["TOKEN"] = token.strip()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -1243,11 +1224,6 @@ class TaskExecutor:
         env["DISABLE_COST_WARNINGS"] = "1"
         env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 
-        # Inject Taiji token so /taiji skill can use it
-        taiji_token = get_taiji_token()
-        if taiji_token:
-            env["TOKEN"] = taiji_token
-
         # Model selection: claude-code-internal reads model from the global
         # settings.json "model" field. We write the task-level model AFTER
         # the user-level default so it takes priority.
@@ -2227,7 +2203,7 @@ class TaskExecutor:
                             else:
                                 atype = att.get("type", "")
                                 if atype == "invoked_skills":
-                                    # Custom skill invocation (e.g. /taiji, /full-auto)
+                                    # Custom skill invocation (e.g. /full-auto)
                                     skills_list = att.get("skills", [])
                                     names = [s.get("name", "?") for s in skills_list if isinstance(s, dict)]
                                     if names:
@@ -2890,7 +2866,7 @@ def scan_skills(skills_dir):
     """Scan skills directory with four-level fallback:
     1. <skill_dir>/SKILL.md                      (standard)
     2. <skill_dir>/skills/*/SKILL.md             (bundled sub-skills, e.g. pua)
-    3. <skill_dir>/.claude/skills/*/SKILL.md     (repo-style packages, e.g. Skill-Research-Figure, TaijiSkills)
+    3. <skill_dir>/.claude/skills/*/SKILL.md     (repo-style packages, e.g. Skill-Research-Figure)
     4. <skill_dir>/CLAUDE.md                     (legacy fallback)
     """
     skills = []
@@ -4178,29 +4154,6 @@ def api_update_claude_config():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-@app.route("/api/taiji-token", methods=["GET"])
-def api_get_taiji_token():
-    token = get_taiji_token()
-    # Mask for display: show first 4 and last 4 chars
-    masked = ""
-    if token:
-        if len(token) > 10:
-            masked = token[:4] + "***" + token[-4:]
-        else:
-            masked = "***"
-    return jsonify({"ok": True, "has_token": bool(token), "masked": masked})
-
-
-@app.route("/api/taiji-token", methods=["PUT"])
-def api_set_taiji_token():
-    data = request.get_json(force=True)
-    token = data.get("token", "").strip()
-    if not token:
-        return jsonify({"ok": False, "error": "Token is required"}), 400
-    set_taiji_token(token)
-    return jsonify({"ok": True})
-
-
 # ═══════════════════════════════════════════════════════════════════════════
 # Main
 # ═══════════════════════════════════════════════════════════════════════════
@@ -4247,14 +4200,6 @@ if __name__ == "__main__":
     print(f"   Registered projects ({len(projects)}):")
     for p in projects:
         print(f"     [{p['slug']}] {p['path']}")
-
-    # Load Taiji token into env on startup
-    _taiji_tok = get_taiji_token()
-    if _taiji_tok:
-        os.environ["TOKEN"] = _taiji_tok
-        print(f"   Taiji token: loaded ({_taiji_tok[:4]}***)")
-    else:
-        print("   Taiji token: not set")
 
     # Recover tasks whose processes survived a server restart
     print("   Recovering tasks...")
