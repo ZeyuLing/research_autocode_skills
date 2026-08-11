@@ -1,10 +1,10 @@
 # Source Map
 
-This skill was built from cloned upstream repositories under:
+This skill can reuse cloned upstream repositories from the directory configured by:
 
-`/apdcephfs/AILab_DHA/apdcephfs_cq11/share_1467498/home/zeyuling/cc_skills/_upstreams/literature`
+`$AI_LITERATURE_UPSTREAMS`
 
-When installed globally, use that absolute path unless `AI_LITERATURE_UPSTREAMS` points elsewhere. If working from the source checkout, `../_upstreams/literature` relative to the skill folder is also valid.
+Set `AI_LITERATURE_UPSTREAMS` to an authorized local checkout. When working from the source tree, `../_upstreams/literature` relative to the skill folder is also valid. Do not commit a user-, lab-, or storage-specific absolute path.
 
 ## Source Families
 

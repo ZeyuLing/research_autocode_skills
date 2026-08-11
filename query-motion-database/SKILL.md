@@ -9,7 +9,9 @@ allowed-tools: Bash
 
 通过远程只读 API 查询 HYMotion 动作数据管线的处理进度。
 
-**API 地址**: `http://9.134.230.186:9091`
+**API 地址**: `$HYMOTION_STATUS_API`
+
+运行前从受控环境设置 `HYMOTION_STATUS_API`。该变量应包含 API 根路径，但不要以 `/` 结尾；不要在公开仓库中写入内部 IP、主机名或认证信息。
 
 ## 使用方式
 
@@ -25,7 +27,7 @@ allowed-tools: Bash
 ### health — 健康检查
 
 ```bash
-curl -s http://9.134.230.186:9091/api/health | python3 -m json.tool
+curl -s "$HYMOTION_STATUS_API/health" | python3 -m json.tool
 ```
 
 期望返回 `{"status": "ok", "readonly": true, ...}`。
@@ -33,7 +35,7 @@ curl -s http://9.134.230.186:9091/api/health | python3 -m json.tool
 ### overview — 数据概览
 
 ```bash
-curl -s http://9.134.230.186:9091/api/stats/overview | python3 -m json.tool
+curl -s "$HYMOTION_STATUS_API/stats/overview" | python3 -m json.tool
 ```
 
 支持过滤参数：`?source=xxx&sub_source=yyy`
@@ -47,7 +49,7 @@ curl -s http://9.134.230.186:9091/api/stats/overview | python3 -m json.tool
 ### funnel — 管线漏斗
 
 ```bash
-curl -s http://9.134.230.186:9091/api/stats/funnel | python3 -m json.tool
+curl -s "$HYMOTION_STATUS_API/stats/funnel" | python3 -m json.tool
 ```
 
 支持过滤参数：`?source=xxx&sub_source=yyy`
@@ -57,7 +59,7 @@ curl -s http://9.134.230.186:9091/api/stats/funnel | python3 -m json.tool
 ### progress — 阶段进度
 
 ```bash
-curl -s "http://9.134.230.186:9091/api/stats/progress?stage=<stage>" | python3 -m json.tool
+curl -s "$HYMOTION_STATUS_API/stats/progress?stage=<stage>" | python3 -m json.tool
 ```
 
 `stage` 可选值：`read`, `fit`, `repair`, `split`, `render`, `annotate`。
@@ -67,7 +69,7 @@ curl -s "http://9.134.230.186:9091/api/stats/progress?stage=<stage>" | python3 -
 ### queue — 队列进度
 
 ```bash
-curl -s "http://9.134.230.186:9091/api/queue/progress?stage=<stage>" | python3 -m json.tool
+curl -s "$HYMOTION_STATUS_API/queue/progress?stage=<stage>" | python3 -m json.tool
 ```
 
 支持过滤：`&batch_id=xxx`。
@@ -80,18 +82,18 @@ curl -s "http://9.134.230.186:9091/api/queue/progress?stage=<stage>" | python3 -
 ```
 📊 HYMotion 管线状态
 ━━━━━━━━━━━━━━━━━━
-总文件数: 370,934 | 总时长: 596.93 小时
+总文件数: <total_files> | 总时长: <total_hours> 小时
 
 阶段进度:
-  read:     323,572 完成 (87.2%)
-  fit:      284,470 完成
-  split:    211,206 完成 → 244,025 个片段
-  render:   236,440 完成
-  annotate:  12,275 完成
+  read:     <completed> 完成 (<percent>%)
+  fit:      <completed> 完成
+  split:    <completed> 完成 → <segments> 个片段
+  render:   <completed> 完成
+  annotate: <completed> 完成
 ```
 
 ## 注意事项
 
 - 这是只读 API，不会修改任何数据。
-- 数据有 60 秒缓存，不是实时值。
+- 数据可能有短时缓存，不是实时值；以 API 元数据返回的缓存窗口为准。
 - 如果连接失败，说明远程服务不可用，提示用户联系服务端管理员。

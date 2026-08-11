@@ -1,240 +1,337 @@
-# Research AutoCode Toolkit
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/research-autocode-toolkit-logo-dark.png">
+    <source media="(prefers-color-scheme: light)" srcset="docs/assets/research-autocode-toolkit-logo.png">
+    <img src="docs/assets/research-autocode-toolkit-logo.png" alt="Research AutoCode Toolkit logo" width="170">
+  </picture>
+</p>
 
-> 面向 AI 辅助科研全流程的可组合工具库：从问题发现、文献调研和 idea 打磨，到实验工程、论文写作、图表排版、对抗评审与 rebuttal。
+<h1 align="center">Research AutoCode Toolkit</h1>
 
-Research AutoCode Toolkit is a composable research workbench for Codex, Claude Code, Cursor, and related coding agents.
+<p align="center">
+  <strong>Composable, evidence-aware workflows for agent-assisted research.</strong>
+</p>
 
-## 这是什么
+<p align="center">
+  From literature discovery and idea refinement to experiment planning, manuscript development,<br>
+  scientific figures, adversarial review, and rebuttal.
+</p>
 
-科研不是一串彼此独立的 prompt。一个可靠的研究流程需要持续维护问题定义、证据来源、创新性判断、实验路径、论文叙事、视觉表达和评审反馈之间的一致性。
+<p align="center">
+  <a href="README.md"><strong>English</strong></a>
+  ·
+  <a href="README.zh-CN.md">简体中文</a>
+</p>
 
-这个仓库因此不把每个目录视为同级的 “skill 产品”，而是按科研任务组织三类能力：
+<p align="center">
+  <a href="https://github.com/ZeyuLing/research_autocode_skills/stargazers"><img src="https://img.shields.io/github/stars/ZeyuLing/research_autocode_skills?style=flat-square&amp;color=4f46e5" alt="GitHub stars"></a>
+  <a href="https://github.com/ZeyuLing/research_autocode_skills/commits/main"><img src="https://img.shields.io/github/last-commit/ZeyuLing/research_autocode_skills?style=flat-square&amp;color=0f766e" alt="Last commit"></a>
+  <a href="README.zh-CN.md"><img src="https://img.shields.io/badge/docs-English%20%7C%20%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-d97706?style=flat-square" alt="Documentation languages: English and Simplified Chinese"></a>
+</p>
 
-1. **端到端工作流**：负责跨阶段编排、状态管理、质量门禁和最终交付。
-2. **可组合研究工具**：解决文献检索、单篇精读、写作、作图、排版、审稿或调试等明确问题。
-3. **实验室与项目适配器**：连接特定数据库、数据管线或存储服务；它们不是通用依赖。
+<p align="center">
+  <a href="#why-this-toolkit">Why</a> ·
+  <a href="#research-lifecycle">Lifecycle</a> ·
+  <a href="#start-with-an-outcome">Choose a workflow</a> ·
+  <a href="#quick-start">Quick start</a> ·
+  <a href="#tool-map">Tool map</a> ·
+  <a href="#contributing">Contributing</a>
+</p>
 
-你可以只使用一个工具，也可以把它们组合成从 research idea 到 submission-ready manuscript 的完整流程。
+---
 
-## 科研工作流
+## Why this toolkit
+
+Research is not a sequence of isolated prompts. A dependable workflow must keep the research question, source evidence, novelty argument, experimental plan, manuscript narrative, visual communication, and reviewer feedback aligned as the project evolves.
+
+Research AutoCode Toolkit organizes reusable `SKILL.md` workflows around **research outcomes**, not around a flat list of agent commands. Components can be used independently or composed into larger pipelines.
+
+| Layer | Responsibility | Examples |
+|---|---|---|
+| **Orchestrated workflows** | Coordinate multiple research stages, preserve state, and enforce quality gates | [idea2paper](idea2paper/), [academic-pipeline](academic-research-skills/academic-pipeline/), [autorun](autorun/) |
+| **Focused research tools** | Solve a bounded task such as literature search, paper editing, figure creation, layout repair, or debugging | [ai-literature-survey](ai-literature-survey/), [paperjury](paperjury/), [latex-float-layout](latex-float-layout/), [autodebug](autodebug/) |
+| **Project adapters** | Connect a specific database, data pipeline, or storage service | [mysql-motiondata](mysql-motiondata/), [query-motion-database](query-motion-database/), [sync-ceph-data](sync-ceph-data/) |
+
+Four contracts run through the toolkit:
+
+- **Evidence** — important claims should trace back to papers, experiments, code, or data.
+- **Alignment** — claims, methods, experiments, figures, and prose should support one another.
+- **Validation** — deliverables should be checked through tests, independent review, compilation, or rendered inspection.
+- **Provenance** — measured facts, forecasts, unverified options, and external sources must remain distinguishable.
+
+> [!NOTE]
+> This repository is a component-based research tooling collection, not a monolithic package. Runtime compatibility, dependencies, provenance, validation coverage, and licensing vary by component.
+
+## Research lifecycle
 
 ```mermaid
 flowchart LR
-    A["发现问题<br/>论文追踪 · 文献检索 · 单篇精读"] --> B["形成研究<br/>定位空白 · 打磨 idea · 设计方法"]
-    B --> C["验证研究<br/>实验规划 · 代码调试 · 数据与任务自动化"]
-    C --> D["表达研究<br/>论文写作 · Figure · Table · LaTeX 排版"]
-    D --> E["审视研究<br/>对抗评审 · 修改 · Rebuttal"]
-    E -. "新证据与新问题" .-> A
+    A["Discover<br/>papers · evidence · open questions"] --> B["Frame<br/>positioning · novelty · method"]
+    B --> C["Validate<br/>experiments · code · data"]
+    C --> D["Communicate<br/>manuscript · figures · layout"]
+    D --> E["Stress-test<br/>review · revision · rebuttal"]
+    E -. "new evidence and questions" .-> A
 ```
 
-贯穿整个流程的不是“生成更多文字”，而是四项共同约束：
+The toolkit supports the loop rather than treating publication as the end of a linear pipeline.
 
-- **Evidence**：重要判断能够追溯到论文、实验、代码或数据。
-- **Alignment**：claim、method、experiment、figure 和正文叙事互相对应。
-- **Validation**：关键产物有可执行检查、独立评审或渲染后的视觉验收。
-- **Provenance**：预测数据、未验证方案和外部来源均有明确标记，不与实测事实混淆。
+## Start with an outcome
 
-## 从任务开始，而不是从目录开始
-
-| 你现在要做什么 | 推荐入口 | 适合的结果 |
+| Research outcome | Start here | Typical deliverable |
 |---|---|---|
-| 把一个粗略 idea 推进到完整论文初稿 | [idea2paper](idea2paper/) | 会议与模板、文献库、方法、实验设计、论文各章节、图表和待实测 TODO |
-| 做系统、可审计的研究到写作全流程 | [academic-research-skills](academic-research-skills/) | 深度调研、论文写作、完整性检查、两轮评审与修订 |
-| 查全某个 AI 方向的 prior art / Related Work | [ai-literature-survey](ai-literature-survey/) | 来源审计后的论文语料、覆盖分析、引用图谱和 Related Work |
-| 持续追踪某个方向的新论文 | [track-ai-papers](track-ai-papers/) | 定期筛选、排序、精读和研究雷达摘要 |
-| 深入理解一篇论文 | [nature-paper-card](nature-paper-card/) 或 [paper-read](.claude/skills/paper-read/) | 证据链 Paper Card，或结构化七问精读笔记 |
-| 修改或对抗性审查一篇 CS 论文 | [paperjury](paperjury/) | 直接 LaTeX 修改、争议点裁决、可追踪的多轮审稿与修订 |
-| 改善论文的图表浮动和分页 | [latex-float-layout](latex-float-layout/) | 经过 PDF 几何检查的 figure/table 重排 |
-| 准备正式 rebuttal | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | reviewer 意见组织、思维导图和逐条回复 |
-| 迭代定位研究代码问题 | [autodebug](autodebug/) | 假设驱动的调试循环、可复用观测与跨轮次记忆 |
-| 批量执行研究工程 TODO | [autorun](autorun/) | 带依赖调度、SQLite 状态和 reviewer 验收的任务执行 |
-| 制作论文图、可编辑图或研究展示 | [gpt-image](gpt-image/)、[Skill-Research-Figure](Skill-Research-Figure/)、[drawio-figure-replicator](drawio-figure-replicator/) | ImageGen 图像、TikZ/Blender 图、可编辑 draw.io 复刻 |
+| Turn an early idea into an experiment-ready manuscript scaffold | [idea2paper](idea2paper/) | Venue-aware LaTeX project, literature corpus, refined method, experiment matrix, figures, and explicit verification TODOs |
+| Build an auditable research-to-writing workflow | [academic-research-skills](academic-research-skills/) | Research synthesis, manuscript, integrity checks, multi-perspective review, and revision |
+| Map prior art or repair Related Work | [ai-literature-survey](ai-literature-survey/) | High-recall, source-audited literature corpus and coverage report |
+| Track important papers in a research area | [track-ai-papers](track-ai-papers/) | Screened and ranked research-radar digest |
+| Deep-read one paper | [nature-paper-card](nature-paper-card/) or [paper-read](.claude/skills/paper-read/) | Evidence-linked Paper Card or structured seven-question reading note |
+| Stress-test and revise a CS paper | [paperjury](paperjury/) | Reviewer-style issues, adjudication, and controlled LaTeX edits |
+| Repair figure/table placement in LaTeX | [latex-float-layout](latex-float-layout/) | Compile-and-inspect float redistribution and pagination fixes |
+| Prepare an author response | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | Review map, response strategy, and rebuttal draft |
+| Diagnose research code iteratively | [autodebug](autodebug/) | Hypothesis-driven debugging loop with persistent observations |
+| Execute a research TODO queue | [autorun](autorun/) | Dependency-aware execution, task state, and reviewer-style acceptance checks |
 
-## 推荐组合
+## Quick start
 
-### 1. 从 idea 到 experiment-ready paper
-
-以 [idea2paper](idea2paper/) 作为主编排器。它负责：
-
-- 根据研究方向和仍开放的摘要截止日期选择合适顶会，并获取官方或回退模板；
-- 调用 [ai-literature-survey](ai-literature-survey/) 建立来源审计的 related-work corpus；
-- 通过 novelty、feasibility 和 professor adjudication 反复打磨 idea；
-- 冻结标题、贡献、Method、实验矩阵和正文叙事；
-- 使用 Codex 系统 `imagegen` 生成并审计所有论文图；
-- 调用 [paperjury](paperjury/) 做至少两轮对抗性评审；
-- 检查 LaTeX、页数、TODO、图表分布、引用和 PDF 几何。
-
-这个工作流的目标是：除实际实验数据与必须实测的实现结论外，其余内容达到可继续投稿迭代的状态。预测结果必须与替换 TODO 绑定，不能伪装成实测数据。
-
-### 2. 从证据调研到正式论文
-
-使用 [academic-research-skills](academic-research-skills/) 中的组合：
-
-```text
-deep-research
-  -> academic-paper
-  -> integrity check
-  -> academic-paper-reviewer
-  -> revise / re-review
-  -> final integrity check
-```
-
-适合需要系统综述、跨领域研究、事实核查、方法学设计或多格式论文输出的任务。若重点是 AI/CV/NLP/ML/机器人领域的高召回文献检索，可把 [ai-literature-survey](ai-literature-survey/) 作为前置证据层。
-
-### 3. 论文加固与投稿前检查
-
-已有 LaTeX 稿件时，建议按以下顺序：
-
-1. [research-paper-writing](research-paper-writing/) 检查章节结构、段落信息流和 claim–evidence 对齐；
-2. [paperjury](paperjury/) 进行直接修改或多视角对抗评审；
-3. [latex-float-layout](latex-float-layout/) 处理图表堆积、单栏空白、附录尾部拥塞和错误分页；
-4. [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) 在收到 reviewer comments 后组织正式回复。
-
-### 4. 实验工程与长期任务
-
-- [autodebug](autodebug/)：适合“为什么不工作”的开放式调试，强调假设、观测、控制变量和跨轮记忆。
-- [autorun](autorun/)：适合已经写入 `TODO_LIST.md` 的批量任务，提供依赖调度、并行执行、SQLite 状态和逐项验收。
-- [full-auto](full-auto/)：适合边界明确、可以无人值守完成的单个任务。
-- [generate-docs](generate-docs/)：为研究代码生成分层 `CLAUDE.md`，帮助 agent 建立稳定的代码结构认知。
-
-训练和推理不绑定任何固定平台。工具应先检查当前机器资源；只有当用户明确提供并授权计算后端时，才使用对应环境。
-
-## 工具地图
-
-### 文献、证据与研究发现
-
-| 组件 | 作用 | 类型 |
-|---|---|---|
-| [track-ai-papers](track-ai-papers/) | 按研究方向持续发现、筛选、排序和推送近期高质量 AI 论文 | 持续工作流 |
-| [ai-literature-survey](ai-literature-survey/) | 面向 AI/CV/NLP/ML/机器人等方向的高召回、来源审计文献检索 | 核心研究工具 |
-| [paper-read](.claude/skills/paper-read/) | 按任务、挑战、模块、实验、局限和 future work 七问精读单篇论文 | 轻量研究工具 |
-| [nature-paper-card](nature-paper-card/) | 生成带稳定证据指针、模块因果链和结论边界的 16 节 Paper Card | 深度研究工具 |
-| [deep-research](academic-research-skills/deep-research/) | 多 agent 深度调研、系统综述、meta-analysis、事实核查和方法学设计 | 通用研究工作流 |
-
-### Idea、论文写作与质量控制
-
-| 组件 | 作用 | 类型 |
-|---|---|---|
-| [idea2paper](idea2paper/) | 从粗略 idea 到完整、experiment-ready 的 LaTeX paper sketch | 端到端编排器 |
-| [academic-pipeline](academic-research-skills/academic-pipeline/) | research → write → integrity → review → revise → finalize | 端到端编排器 |
-| [academic-paper](academic-research-skills/academic-paper/) | 多模式学术写作、修订、摘要、综述、格式转换和引用检查 | 通用写作工作流 |
-| [academic-paper-reviewer](academic-research-skills/academic-paper-reviewer/) | EIC、领域 reviewer 与 Devil's Advocate 多视角审稿 | 通用评审工具 |
-| [research-paper-writing](research-paper-writing/) | ML/CV/NLP 论文的章节结构、段落流与 reviewer-facing 写作指导 | 写作工具 |
-| [Research-Paper-Writing-Skills](Research-Paper-Writing-Skills/) | `research-paper-writing` 的跨平台独立分发包装 | 兼容性包装 |
-| [paperjury](paperjury/) | CS 顶会论文的直接编辑、对抗评审和自动加固 | 写作与评审系统 |
-| [latex-float-layout](latex-float-layout/) | 基于编译 PDF 的 LaTeX 图表分布、空白和分页修复 | 排版质量工具 |
-| [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | reviewer 意见分类、draw.io 总览和正式 rebuttal | 投稿后工具 |
-
-### 视觉表达与研究展示
-
-| 组件 | 作用 | 类型 |
-|---|---|---|
-| [gpt-image](gpt-image/) | 为系统 `imagegen` 检索参考风格并构造高质量生成/编辑提示 | ImageGen 提示层 |
-| [Skill-Research-Figure](Skill-Research-Figure/) | 生成 TikZ pipeline、Blender 3D 渲染、骨架与 mesh figure | 论文作图工具 |
-| [drawio-figure-replicator](drawio-figure-replicator/) | 将参考图、白板图或架构图复刻为可编辑 draw.io | 可编辑图工具 |
-| [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) | 将截图、扫描 PPT/PDF 重建为对象级可编辑 PowerPoint | 演示文稿工具 |
-| [frontend-design](frontend-design/) | 构建研究主页、demo、dashboard、poster 或交互式展示界面 | 研究传播工具 |
-
-在 `idea2paper` 工作流中，论文 Figure 必须遵循其 `imagegen`-only 合同；不要用其他作图工具静默替代。独立作图任务则按目标格式选择 ImageGen、TikZ/Blender 或 draw.io。
-
-### 研究工程与 agent 自动化
-
-| 组件 | 作用 | 类型 |
-|---|---|---|
-| [autodebug](autodebug/) | 假设驱动的 ReAct 调试、观测建设和三文件记忆 | 调试工作流 |
-| [autorun](autorun/) | TODO 队列、依赖分析、并行执行、Dashboard 和 reviewer 验收 | 任务编排系统 |
-| [full-auto](full-auto/) | 理解、规划、执行、自检和修复的一次性无人值守模式 | 执行工作流 |
-| [generate-docs](generate-docs/) | 基于增量分析生成分层项目文档 | 代码理解工具 |
-| [pua](pua/) | 面向长期复杂任务的高主动性、失败恢复和多语言行为约束 | Agent 行为扩展 |
-
-### 数据与实验室适配器
-
-这些组件服务于特定项目或内部基础设施，不应被视为通用科研工作流的必选依赖。使用前必须检查路径、数据库、服务权限和数据边界。
-
-| 组件 | 作用 | 适用范围 |
-|---|---|---|
-| [db-analyze](db-analyze/) | 分析指定 SQLite 数据库的表、列与空间占用 | HYMotion 数据库布局 |
-| [mysql-motiondata](mysql-motiondata/) | 查询和操作 `hymotion_data` MySQL 数据库 | HYMotion |
-| [query-motion-database](query-motion-database/) | 查看动作数据管线的漏斗、队列与完成进度 | HYMotion |
-| [sync-ceph-data](sync-ceph-data/) | 通过指定 OpenAPI 在 CEPH 路径间同步数据 | 智研存储环境 |
-
-[nature-shared](nature-shared/) 提供 `nature-paper-card` 等工具复用的来源准备和证据处理代码，属于内部共享模块，不是独立入口。
-
-## 安装与使用
-
-### 1. 获取仓库
+### 1. Clone the collection
 
 ```bash
 git clone https://github.com/ZeyuLing/research_autocode_skills.git
 cd research_autocode_skills
 ```
 
-### 2. 选择需要的工作流
+### 2. Choose a component
 
-这个仓库不是一个需要整体安装的单体 Python 包。优先根据上面的任务入口选择组件，并阅读对应目录中的 `SKILL.md` 或 `README.md`：
+Start from the outcome table above, then read the component's complete `SKILL.md` or README. Do not copy only `SKILL.md` when the component also contains scripts, references, assets, templates, or tests.
 
-- Codex 用户通常将所需组件放入 `$CODEX_HOME/skills`；
-- Claude Code 项目通常使用 `.claude/skills`；
-- Cursor、Gemini、OpenCode 等平台请遵循组件自己的兼容说明；
-- `academic-research-skills`、`Skill-Research-Figure`、`Skill-Research-Rebuttal` 等是带多个资源或子工具的 bundle，应按各自 README 安装，不要只复制其中一个文件。
+### 3. Install it for your agent
 
-### 3. 安装组件依赖
+Installation is component-scoped. Typical locations are:
 
-依赖按组件声明，不提供一个覆盖全部目录的全局环境：
+| Runtime | Typical destination | Important caveat |
+|---|---|---|
+| Codex | `$CODEX_HOME/skills/<component>` | Runtime-provided system skills such as `imagegen` must be available separately |
+| Claude Code | `.claude/skills/<component>` | Some bundled repositories already contain a `.claude/skills` layout |
+| Cursor, Gemini, OpenCode, others | Follow the component README | Support is not uniform across this collection |
 
-- LaTeX/PDF 工具用于论文编译、排版和渲染检查；
-- Python 依赖写在组件的 `requirements.txt` 或说明文档中；
-- Blender 仅用于需要 3D 渲染的 figure；
-- `gpt-image` 和 `idea2paper` 的图像生成依赖 Codex 系统 `imagegen`；
-- 部分编排器依赖其他工具，例如 `idea2paper` 需要 `ai-literature-survey`、`paperjury` 和系统 `imagegen`。
+Example for one standalone component:
 
-缺少强依赖时，工作流应明确停止并报告缺口，不应静默换成质量更低或语义不同的替代方案。
+```bash
+# Codex example (set CODEX_HOME first)
+mkdir -p "$CODEX_HOME/skills"
+cp -R ai-literature-survey "$CODEX_HOME/skills/ai-literature-survey"
 
-### 4. 用研究目标触发
-
-多数工具既支持名称触发，也支持自然语言。例如：
-
-```text
-用 idea2paper 把这个 motion generation idea 写成实验就绪的论文初稿
-调研显式动作规划与 text-to-motion 的最新相关工作
-精读这篇论文，给我模块—问题—证据的因果链
-对这篇 CVPR LaTeX 做两轮对抗性审稿并直接修改
-修复附录图表扎堆和单栏大面积留白
+# Claude Code project example
+mkdir -p .claude/skills
+cp -R autodebug .claude/skills/autodebug
 ```
 
-## 设计原则
+PowerShell example for Codex:
 
-- **以科研问题为入口**：用户选择的是任务和交付物，不需要先理解所有组件。
-- **编排器与原子工具分离**：端到端流程负责状态和质量门禁，单点工具保持边界清晰、可独立复用。
-- **事实、推断和 TODO 分离**：特别是论文中的预测实验数据和未验证实现，不得伪装为已经测得的结论。
-- **质量以产物验证为准**：论文需要编译后的 PDF 检查，图需要最终尺寸审阅，代码需要测试或最小复现，文献需要来源审计。
-- **允许项目适配，不污染通用层**：硬编码路径、数据库或内部服务只能存在于明确标记的适配器中。
-- **组合必须显式**：跨工具依赖、输入输出、替代策略和失败条件都应该写清楚。
+```powershell
+if ([string]::IsNullOrWhiteSpace($env:CODEX_HOME)) { throw 'Set CODEX_HOME first.' }
+$skillRoot = Join-Path $env:CODEX_HOME 'skills'
+New-Item -ItemType Directory -Force -Path $skillRoot | Out-Null
+Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literature-survey')
+```
 
-## 仓库边界
+Bundles such as [academic-research-skills](academic-research-skills/), [Skill-Research-Figure](Skill-Research-Figure/), and [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) have their own installation instructions. Follow those instructions instead of flattening their directory structure.
 
-- 当前重点是 AI、ML、CV、NLP、机器人、multimodal 和相关计算机科学研究。
-- 不是所有组件都支持所有 agent 平台；以组件元数据和 README 为准。
-- 不是所有目录都具有相同的通用性或成熟度；项目适配器与核心科研工具明确分层。
-- 仓库不提供统一的云资源、数据库或凭据。任何外部写入、任务提交或数据操作都受用户授权和目标系统权限约束。
-- 各子项目可能保留其原始许可与来源信息；使用或再分发前请检查对应目录。
+### 4. Install only the component's dependencies
 
-## 安全
+There is intentionally no root-level `pip install` or `npm install` command. Examples of component-scoped requirements include:
 
-- 不要把 API token、SSH 密码、数据库口令或私有数据路径提交到仓库。
-- 安装项目适配器前，先审查其中的环境变量、服务地址、默认路径和写操作。
-- 删除包含凭据的当前文件不会自动清除 Git 历史；如果敏感信息曾被提交，应轮换凭据，并在明确评估影响后单独清理历史。
-- 对外部平台的提交、删除、停止任务和覆盖数据等操作，必须遵循用户授权与最小影响原则。
+- [idea2paper](idea2paper/) — Python 3.10+, `pdfplumber`, LaTeX/PDF tooling, `ai-literature-survey`, `paperjury`, and Codex's system `imagegen`;
+- [paperjury](paperjury/) — its own Node.js/toolkit requirements;
+- [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) — its own Python CLI environment;
+- [Skill-Research-Figure](Skill-Research-Figure/) — LaTeX/TikZ or Blender only for the selected rendering path.
 
-## 贡献新的科研工具
+When a hard dependency is unavailable, a workflow should report the missing requirement instead of silently replacing it with a semantically different tool.
 
-新增组件时，请先回答以下问题，而不是只新增一个 `SKILL.md`：
+### 5. Ask for the research outcome
 
-1. 它解决科研流程中的哪个问题，输入和可验证输出是什么？
-2. 它是端到端编排器、通用工具，还是项目适配器？
-3. 它与现有工具如何组合，是否存在重复能力或硬依赖？
-4. 哪些结论需要来源、实验、渲染或测试验证？
-5. 失败时应该停止、降级还是请求用户决策？
-6. 是否包含环境绑定、隐私数据、外部写操作或凭据风险？
+```text
+Use idea2paper to turn this motion-generation idea into an experiment-ready manuscript scaffold.
+Survey explicit motion planning and text-to-motion prior art, with source and code availability.
+Deep-read this paper and map each module to the challenge and evidence it addresses.
+Run a pre-submission adversarial review of this CVPR LaTeX project and apply safe edits.
+Repair appendix float clustering and large single-column blank regions.
+```
 
-同时更新本 README 的任务入口或工具地图，提供最小可运行示例，并确保仓库中不包含密钥和用户私有数据。
+## Featured workflows
+
+| Workflow | Composition | What it is designed to produce |
+|---|---|---|
+| **Idea → manuscript scaffold** | `idea2paper` → `ai-literature-survey` → agent deliberation → `imagegen` → `paperjury` → PDF/layout checks | A submission-oriented draft with an explicit evidence corpus, method rationale, experiment plan, figures, and verification TODOs |
+| **Evidence → academic manuscript** | `deep-research` → `academic-paper` → integrity checks → `academic-paper-reviewer` → revision | A structured research synthesis and manuscript with repeated review passes |
+| **Pre-submission hardening** | `research-paper-writing` → `paperjury` → `latex-float-layout` | Clearer argumentation, adversarial issue discovery, controlled edits, and render-verified layout repair |
+| **Research engineering** | `generate-docs` / `autorun` → `autodebug` → acceptance checks | Better project context, dependency-aware execution, and evidence-driven debugging |
+
+Predicted experimental values are not measured results. Workflows that use forecasts must bind them to visible replacement TODOs; authors remain responsible for running experiments and verifying every claim before submission.
+
+## Tool map
+
+<details open>
+<summary><strong>Literature, evidence, and research discovery</strong></summary>
+
+| Component | Purpose |
+|---|---|
+| [track-ai-papers](track-ai-papers/) | Discover, screen, rank, and deliver recent papers for a research area |
+| [ai-literature-survey](ai-literature-survey/) | High-recall, source-audited literature discovery for AI and adjacent fields |
+| [paper-read](.claude/skills/paper-read/) | Seven-question deep reading of one paper |
+| [nature-paper-card](nature-paper-card/) | Evidence-grounded 16-section Paper Card with module logic and conclusion boundaries |
+| [deep-research](academic-research-skills/deep-research/) | Multi-agent research, systematic review, fact-checking, and methodology design |
+
+</details>
+
+<details>
+<summary><strong>Idea development, writing, and review</strong></summary>
+
+| Component | Purpose |
+|---|---|
+| [idea2paper](idea2paper/) | Orchestrate a rough idea into an experiment-ready LaTeX manuscript scaffold |
+| [academic-pipeline](academic-research-skills/academic-pipeline/) | Coordinate research, writing, integrity checks, review, revision, and finalization |
+| [academic-paper](academic-research-skills/academic-paper/) | Draft, revise, summarize, review citations, and convert academic documents |
+| [academic-paper-reviewer](academic-research-skills/academic-paper-reviewer/) | Simulate multi-perspective editorial and peer-review lenses |
+| [research-paper-writing](research-paper-writing/) | Improve section structure, paragraph flow, and claim–evidence alignment |
+| [Research-Paper-Writing-Skills](Research-Paper-Writing-Skills/) | Cross-platform distribution wrapper for `research-paper-writing` |
+| [paperjury](paperjury/) | Directly edit or adversarially stress-test CS-conference LaTeX papers |
+| [latex-float-layout](latex-float-layout/) | Rebalance LaTeX figures, tables, whitespace, and pagination |
+| [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | Organize reviewer feedback and develop an author response |
+
+</details>
+
+<details>
+<summary><strong>Figures and research communication</strong></summary>
+
+| Component | Purpose |
+|---|---|
+| [gpt-image](gpt-image/) | Reference and prompt layer for Codex's system `imagegen` |
+| [Skill-Research-Figure](Skill-Research-Figure/) | Produce TikZ pipelines and Blender-based 3D research figures |
+| [drawio-figure-replicator](drawio-figure-replicator/) | Recreate reference diagrams as editable draw.io assets |
+| [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) | Rebuild slide images or scanned decks as object-level editable PowerPoint |
+| [frontend-design](frontend-design/) | Build research pages, demos, dashboards, posters, and interactive presentations |
+
+Inside an `idea2paper` run, its `imagegen`-only figure contract takes precedence. Independent figure tasks can choose ImageGen, TikZ/Blender, or draw.io according to the required artifact.
+
+</details>
+
+<details>
+<summary><strong>Research engineering and agent automation</strong></summary>
+
+| Component | Purpose |
+|---|---|
+| [autodebug](autodebug/) | Hypothesis-driven ReAct debugging with persistent research notes |
+| [autorun](autorun/) | Schedule and execute TODO queues with SQLite state and acceptance review |
+| [full-auto](full-auto/) | Run a bounded task through planning, execution, self-review, and repair |
+| [generate-docs](generate-docs/) | Generate incremental, layered project documentation |
+| [pua](pua/) | Add high-agency behavior, failure recovery, and multilingual pressure modes |
+
+Training and inference are not bound to a fixed cluster. These tools should inspect the current environment and use an external compute backend only when the user has explicitly provided and authorized it.
+
+</details>
+
+<details>
+<summary><strong>Project-specific data adapters</strong></summary>
+
+| Component | Scope |
+|---|---|
+| [db-analyze](db-analyze/) | Analyze table, column, and storage usage for a specific SQLite layout |
+| [mysql-motiondata](mysql-motiondata/) | Operate the HYMotion `hymotion_data` MySQL database |
+| [query-motion-database](query-motion-database/) | Inspect HYMotion pipeline funnels, queues, and completion state |
+| [sync-ceph-data](sync-ceph-data/) | Synchronize CEPH paths through a designated storage API |
+
+These adapters are environment-specific. Review service endpoints, paths, credentials, permissions, and write behavior before use.
+
+</details>
+
+[nature-shared](nature-shared/) contains source-preparation and evidence-processing code shared by `nature-paper-card` and related tools. It is an internal support module, not a standalone entry point.
+
+## How the toolkit composes
+
+```text
+Orchestrator
+  ├─ focused research tools
+  ├─ evidence and artifact stores
+  ├─ validation / review gates
+  └─ optional project adapters
+```
+
+Composition rules:
+
+1. **Dependencies are explicit.** An orchestrator must name the tools it requires.
+2. **Adapters are opt-in.** Project-specific infrastructure is never a silent default.
+3. **Fallbacks preserve semantics.** Missing dependencies are reported when substitution would change the research contract.
+4. **Artifacts remain inspectable.** Sources, prompts, TODOs, reviews, figures, and validation records should stay with the project.
+5. **External writes remain authorized.** Publishing, task submission, database writes, and data movement require the user's scope and target.
+
+## Examples
+
+| Area | Repository examples |
+|---|---|
+| End-to-end academic workflows | [academic-research-skills/examples](academic-research-skills/examples/) |
+| Editable diagram reconstruction | [drawio-figure-replicator/examples](drawio-figure-replicator/examples/) |
+| Adversarial paper review | [paperjury/samples/dogfood](paperjury/samples/dogfood/) |
+| TikZ and Blender research figures | [Skill-Research-Figure/examples](Skill-Research-Figure/examples/) |
+| Rebuttal organization | [Skill-Research-Rebuttal/example](Skill-Research-Rebuttal/example/) |
+
+Examples belong to their respective components and may require component-specific runtimes or assets.
+
+## Requirements and compatibility
+
+- There is no single repository-wide runtime or dependency lock.
+- Component metadata and README files are the source of truth for supported agents, tools, and operating assumptions.
+- Some components are Codex-first, some are Claude Code-first, and some are portable prompt/workflow packages.
+- Python, Node.js, LaTeX, Poppler, Blender, ImageGen, databases, or external services are required only by the components that declare them.
+- A bundle's nested files, templates, scripts, and references are part of its runtime contract.
+
+Before adopting a component, check:
+
+- its `SKILL.md` front matter and allowed tools;
+- its README, requirements, package metadata, and environment variables;
+- whether it performs external reads or writes;
+- whether paths or services are specific to one lab or project;
+- its license and upstream provenance.
+
+## Quality and responsible use
+
+- **Literature discovery is high-recall, not guaranteed exhaustive.** Verify important citations against primary sources.
+- **Generated prose is a draft, not authorial sign-off.** Authors own the argument, attribution, and final submission.
+- **Predicted results are targets, not measurements.** Keep visible TODOs until raw experimental results replace them.
+- **Adversarial review is a stress test, not a substitute for peer review.**
+- **Rendered artifacts need rendered inspection.** Compile papers, inspect PDFs, and review figures at final display size.
+- **Research claims should remain falsifiable.** Do not use workflow completion as evidence that a scientific claim is true.
+
+## Security and private infrastructure
+
+- Never add API tokens, SSH passwords, database credentials, or private data paths to public commits.
+- Lab adapters are configured through environment variables and may access private endpoints, paths, or credentials at runtime. Keep actual values out of commits and logs.
+- Any credential-like value that appeared in an earlier revision must be treated as compromised: rotate it, audit downstream access, and assess whether Git history requires a coordinated rewrite.
+- Inspect environment variables, endpoints, defaults, permissions, and write operations before installing an adapter.
+- Use least privilege for databases, storage APIs, compute backends, and publishing services.
+- Treat task submission, deletion, cancellation, publication, and data overwrite as external state changes that require clear authorization.
+
+## Contributing
+
+Contributions should improve a research outcome, not merely add another prompt file. A new component should document:
+
+1. the research problem it solves and its verifiable output;
+2. whether it is an orchestrator, focused tool, support module, or project adapter;
+3. inputs, outputs, dependencies, side effects, and failure behavior;
+4. evidence, tests, compilation, rendering, or review used for validation;
+5. supported runtimes and known environment assumptions;
+6. provenance, license, and any third-party assets;
+7. a minimal example and an update to this README's task map when relevant.
+
+Before opening a change, remove secrets and private data, keep unrelated files out of the commit, and run the component's available checks.
+
+## Provenance and licenses
+
+This repository contains original, adapted, bundled, and vendored components. **Licensing is component-scoped.** A component's own license and provenance notice take precedence over this README.
+
+Examples of declared component licenses include MIT, Apache-2.0, and CC BY-NC 4.0; several components do not currently include an explicit license file. Components without an explicit license should not be assumed to grant reuse or redistribution rights.
+
+Review the relevant component directory before use, modification, commercial deployment, or redistribution. Upstream references are recorded in component README files, package metadata, license files, and notices such as [nature-paper-card/UPSTREAM.md](nature-paper-card/UPSTREAM.md).
+
+## Feedback
+
+Public issue creation is currently restricted. External contributors can propose concrete, scoped fixes through [pull requests](https://github.com/ZeyuLing/research_autocode_skills/pulls) from a fork; general support is not currently offered. Do not disclose credentials, private endpoints, or sensitive research data in a public pull request.

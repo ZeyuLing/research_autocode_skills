@@ -30,12 +30,40 @@ allowed-tools: Bash, Read
 
 ## 数据库路径
 
-项目使用两个 SQLite 数据库：
+项目使用两个 SQLite 数据库。路径必须由当前环境配置；不要把实验室绝对路径写入公开仓库：
+
+- `HYMOTION_PIPELINE_DB`：主管线数据库文件
+- `HYMOTION_ANNOTATIONS_DB`：标注数据库文件
+
+执行前根据本次模式只检查需要的变量和目标文件：
+
+```bash
+case "${ARGUMENTS:-all}" in
+  pipeline)
+    : "${HYMOTION_PIPELINE_DB:?Set HYMOTION_PIPELINE_DB}"
+    test -f "$HYMOTION_PIPELINE_DB"
+    ;;
+  annotation)
+    : "${HYMOTION_ANNOTATIONS_DB:?Set HYMOTION_ANNOTATIONS_DB}"
+    test -f "$HYMOTION_ANNOTATIONS_DB"
+    ;;
+  all|"")
+    : "${HYMOTION_PIPELINE_DB:?Set HYMOTION_PIPELINE_DB}"
+    : "${HYMOTION_ANNOTATIONS_DB:?Set HYMOTION_ANNOTATIONS_DB}"
+    test -f "$HYMOTION_PIPELINE_DB"
+    test -f "$HYMOTION_ANNOTATIONS_DB"
+    ;;
+  *)
+    echo "Expected all, pipeline, or annotation." >&2
+    exit 2
+    ;;
+esac
+```
 
 | 数据库 | 路径 | 说明 |
 |--------|------|------|
-| 主管线 DB | `/apdcephfs_cq11/share_1467498/home/chingshuai/HYMotion/output/pipeline.db` | Retarget 管线数据 |
-| 标注 DB | `/apdcephfs_cq11/share_1467498/home/chingshuai/HYMotion/data/annotations/annotations.db` | 旋转/Pose 标注数据 |
+| 主管线 DB | `$HYMOTION_PIPELINE_DB` | Retarget 管线数据 |
+| 标注 DB | `$HYMOTION_ANNOTATIONS_DB` | 旋转/Pose 标注数据 |
 
 ---
 
