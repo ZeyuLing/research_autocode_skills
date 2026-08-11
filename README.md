@@ -8,7 +8,6 @@ A curated collection of Claude Code / Codex / Cursor skills for AI-assisted rese
 |-------|-------------|-----------|
 | [autodebug](#autodebug) | Hypothesis-driven iterative auto-debugging | Claude Code |
 | [pua](#pua) | High-agency enforcement — forces the AI to exhaust all options before giving up | Claude Code, Codex, Cursor, Kiro, and more |
-| [remote-exec](#remote-exec) | GPU server management & distributed task execution | Claude Code |
 | [idea2paper](#idea2paper) | End-to-end idea-to-experiment-ready LaTeX paper workflow | Codex |
 | [nature-paper-card](#nature-paper-card) | Source-grounded, module-by-module deep reading of AI and scientific papers | Claude Code, Codex, Cursor |
 | [research-paper-writing](#research-paper-writing) | Academic paper writing & self-review guidance | Claude Code, Codex, Cursor, OpenCode |
@@ -45,20 +44,6 @@ Pushes the AI coding agent to exhaust every possible solution before admitting d
 - Multi-language support: Chinese (default), English (PIP Edition), Japanese
 
 **Platforms**: Claude Code, Codex CLI, Cursor, Kiro, OpenClaw, Google Antigravity, OpenCode
-
----
-
-## remote-exec
-
-**GPU server management & task tracking for shared-storage clusters.**
-
-- 8 pre-configured GPU servers (A100, V100, A800 variants) with apdcephfs shared storage
-- Live GPU status, occupancy & process classification (TRAINING / other / idle)
-- Smart command routing: debug → local, large-scale → remote
-- Task registration & lifecycle tracking
-- Predefined shortcuts: `debug10`, `debug100`, `nvidia_smi`, `gpu_stat`, `kill_python`, etc.
-
-**Commands**: `status [target]`, `run [@target] <cmd>`, `kill [@target|all]`, `refresh`
 
 ---
 
