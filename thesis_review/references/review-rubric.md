@@ -61,10 +61,12 @@ Evaluate practical problem definition, engineering or professional value, requir
 
 ## Gate E: data and evaluation protocol
 
+- Evidence conflicts are assessed only after classifying source authority. Final papers, supplements, formal table/figure sources, and author-designated final artifacts outrank TODO lists, experiment plans, debug notes, scratch outputs, and abandoned drafts.
 - Dataset origin, composition, licenses, private-data constraints, and construction contribution are described at a defensible granularity.
 - Official dataset splits are stated correctly; custom splits are reproducible.
 - Training data exclude protected public test partitions where claimed.
 - Duplicate or near-duplicate leakage is investigated when the dataset construction or task makes it a credible risk. Do not require a generic overlap audit without a plausible pathway.
+- Do not demand member hashes or an immutable manifest merely because a dataset is aggregated. Require them only when a concrete inconsistency, plausible leakage path, or thesis claim makes member-level identity necessary to decide the finding.
 - Training, validation, checkpoint selection, and test evaluation roles are unambiguous when the wording could imply test-guided selection.
 - Preprocessing, coordinate systems, skeleton mappings, frame rates, missing-data handling, and conversions are documented.
 - Baselines use comparable data, representations, metrics, and evaluation implementations, or differences are disclosed.

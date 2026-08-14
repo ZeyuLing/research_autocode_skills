@@ -63,6 +63,20 @@ For LaTeX, compile the final artifact and inspect the rendered PDF. Source-only 
 
 Do not silently replace the frozen thesis during the panel review. If the thesis changes, close the round and start a new versioned round.
 
+#### Establish evidence authority before comparing artifacts
+
+When companion materials disagree, record their role and authority before treating the disagreement as a finding. Unless the author identifies a different final source or a formal correction exists, use this order for reported methods and results:
+
+1. the final published or submitted paper, its supplementary material, and the formal figure/table sources used to build that version;
+2. an official erratum, author-designated revision, or released artifact explicitly tied to that paper version;
+3. thesis-specific experiment records explicitly designated as final;
+4. versioned code, configuration, logs, and evaluation outputs;
+5. development notes, TODO lists, experiment plans, debug reports, scratch analyses, and abandoned drafts.
+
+Items in the fifth class describe work in progress. They must not overturn a formal paper result, create a checkpoint inconsistency, or become the sole basis for an `S0`/`S1` finding unless the paper, a formal correction, or the author explicitly promotes them to the final source of truth. If lower-authority artifacts disagree with the final paper, first determine whether they are obsolete, diagnostic, or from a different protocol. Preserve unresolved cases as questions rather than alleging selection bias, leakage, or result conflict without affirmative evidence.
+
+The user's explicit declaration of the intended source of truth controls among supplied research artifacts unless a formal correction or direct integrity evidence contradicts it. Similarly, do not require raw member hashes, immutable manifests, or generic near-duplicate audits as universal thesis evidence. A final paper's data and split disclosure is sufficient for a writing review unless there is a concrete leakage pathway, an internal contradiction, or a central reproducibility claim that specifically depends on member-level identity.
+
 ### 3. Run independent reviewers
 
 Use the panel defined in `references/reviewer-panels.md`:
@@ -119,6 +133,7 @@ Flag a break only when it is real and locatable. In particular, verify:
 - ablations that correspond to claimed causal contributions;
 - uncertainty, multiple seeds, significance, and user-study design when required by the strength of the claim, not as universal rituals;
 - exact agreement among prose, tables, figures, captions, appendices, and cited source papers;
+- source authority before conflict claims: final paper and supplement take precedence over obsolete TODO, planning, debug, and scratch files unless formally superseded;
 - hyperparameters, software/hardware, preprocessing, and commands needed for reasonable reproduction;
 - negative results, boundary conditions, or claim limits where omission would mislead;
 - whether each chapter contributes to one thesis-level story rather than preserving the branding and framing of separate papers.
