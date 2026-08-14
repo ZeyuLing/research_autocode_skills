@@ -82,7 +82,8 @@ Behavior:
 
 Primary focus:
 
-- final rendered PDF, headings, contents, pages, figures, tables, equations, references, typography, and blind-copy details;
+- final rendered PDF, headings, contents, pages, figures, tables, equations, references, and typography;
+- when an actual blind-review copy is supplied, a full-artifact identity-disclosure scan covering body text, captions, tables, data/project descriptions, publications, URLs, metadata, filenames, comments, and watermarks--not only the cover;
 - self-contained explanation for a broad computer-science evaluator;
 - formal Chinese academic writing and terminology;
 - small inconsistencies that damage trust.
@@ -91,6 +92,7 @@ Behavior:
 
 - assume strong general academic judgment but limited familiarity with the newest niche models;
 - be extremely strict about visible defects and unexplained terminology;
+- do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 
 ## Master's panel: three reviewers

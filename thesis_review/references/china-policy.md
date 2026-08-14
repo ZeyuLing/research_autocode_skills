@@ -92,7 +92,10 @@ When a blind-review copy is required, verify the exact institutional instruction
 - acknowledgments;
 - CV, publication list, project identifiers, grant wording, and self-citations that directly reveal identity;
 - PDF metadata, filenames, embedded comments, tracked changes, repository links, and figure watermarks;
-- institutional identifiers that the school explicitly requires removed.
+- school, department, laboratory, company, employer, partner organization, and institutional identifiers that the school explicitly requires removed;
+- proprietary project or dataset descriptions, work-experience wording, affiliations in publication records, and combinations of otherwise indirect clues that can identify the candidate.
+
+Audit the complete submitted blind-review artifact, including body text, captions, tables, acknowledgments, CV/publications, data descriptions, footnotes, URLs, PDF metadata, filenames, comments, and figure watermarks. An ordinary author copy may legitimately display the author's name, student number, supervisor, and institution; do not classify those fields as thesis defects merely because a source-level `BlindReview` switch would not hide them. If the institution creates or transforms the blind copy at submission, inspect that generated copy instead of inferring anonymity from the author-copy template.
 
 Do not automatically delete every self-citation. Preserve scientific traceability while following the institution's prescribed anonymization method.
 

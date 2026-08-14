@@ -19,7 +19,7 @@ Evaluate practical problem definition, engineering or professional value, requir
 ## Gate A: policy, identity, and integrity
 
 - Correct degree type, template, title-page information, declarations, and required components.
-- Blind copy satisfies the current institution's anonymization instructions.
+- The actual submitted blind-review copy, when in scope, satisfies the current institution's anonymization instructions and has been scanned throughout for direct or cumulative identity disclosure, including school, department, laboratory, company, employer, partner organization, publication affiliations, project/data descriptions, URLs, metadata, filenames, comments, and figure watermarks. Visible identity fields in an ordinary author copy are not anonymity defects.
 - No fabricated, internally contradictory, or untraceable values.
 - No unattributed copying, misleading reuse, duplicate publication concealment, or improper authorship claims.
 - Ethical approval, consent, privacy, licenses, and safety statements are present when applicable.

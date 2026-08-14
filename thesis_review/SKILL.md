@@ -137,6 +137,8 @@ Review every rendered page at a legible scale. Check:
 - bibliography completeness, citation-to-entry consistency, current institutional style, and suspicious unsupported clusters;
 - terminology, abbreviations, units, punctuation, Chinese/English consistency, and template compliance.
 
+Treat the ordinary author copy and the submitted blind-review copy as different artifacts. Do not report author, supervisor, institution, or student-number fields that correctly appear in an ordinary author copy as anonymity defects. When a blind-review copy is in scope, render or obtain that actual copy and scan the entire artifact--not only the cover--for identity disclosures in body text, captions, tables, acknowledgments, CV/publications, data and project descriptions, footnotes, URLs, PDF metadata, filenames, comments, and figure watermarks. Apply the institution's exact anonymization rules; in their absence, flag school, department, laboratory, company, employer, partner organization, and other wording that can directly or cumulatively identify the candidate.
+
 The conservative format reviewer must be able to understand the thesis without relying on frontier-specific tacit knowledge. If a term or contribution is clear only to the original paper's specialist audience, treat that as a self-contained exposition problem.
 
 ### 7. Adjudicate only after all reports are frozen
