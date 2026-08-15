@@ -124,6 +124,7 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Table-of-contents hierarchy is balanced across technical chapters and exposes the thesis logic.
 - Reference entries are complete, deduplicated, consistently formatted, and all cited.
 - The final PDF has no overlap, clipping, broken glyph, malformed arrow, missing image, unresolved reference, or unexpected blank page.
+- Every physical page and every active float/page-forcing construct has a recorded disposition in the rendered-pagination ledger; contact-sheet triage alone does not satisfy this gate.
 
 ## Finding test
 

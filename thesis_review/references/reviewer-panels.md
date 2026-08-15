@@ -88,11 +88,13 @@ Primary focus:
 - self-contained explanation for a broad computer-science evaluator;
 - formal Chinese academic writing and terminology;
 - small inconsistencies that damage trust.
+- completion of the physical-page layout ledger, source forcing audit, and full-scale suspect-page verification defined in `rendered-pagination-audit.md`.
 
 Behavior:
 
 - assume strong general academic judgment but limited familiarity with the newest niche models;
 - be extremely strict about visible defects and unexplained terminology;
+- do not accept a contact-sheet-only claim of full-page coverage; record every physical page and the disposition of every pagination signal;
 - do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 

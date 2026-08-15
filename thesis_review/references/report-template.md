@@ -6,6 +6,7 @@ Store a review round in a dedicated directory:
 thesis-review-round-YYYYMMDD/
   00-manifest.md
   01-policy-basis.md
+  02-page-layout-ledger.md
   R1-technical-experiments.md
   R2-field-contribution.md
   R3-thesis-logic.md
@@ -155,3 +156,10 @@ An empty `N` table is a valid and often preferable result.
 ## Final recommendation
 ...
 ```
+
+For an iterative review--revision loop, the final recommendation must also state:
+
+- whether every physical page was re-entered in the page ledger after the last edit;
+- whether all forcing constructs were remapped to the final PDF and neighbor pages rechecked;
+- whether every reviewer returned an empty actionable `S0`--`S3` Findings section;
+- whether any `S4` suggestion or review limitation remains.

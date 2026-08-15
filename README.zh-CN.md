@@ -91,7 +91,7 @@ flowchart LR
 | 持续追踪某个方向的重要论文 | [track-ai-papers](track-ai-papers/) | 经过筛选和排序的研究雷达摘要 |
 | 深入理解一篇论文 | [nature-paper-card](nature-paper-card/) 或 [paper-read](.claude/skills/paper-read/) | 证据链接的 Paper Card 或结构化七问精读笔记 |
 | 对 CS 论文做投稿前压力测试和修改 | [paperjury](paperjury/) | reviewer 视角问题、裁决记录和受控 LaTeX 修改 |
-| 对中国计算机学科硕博学位论文进行盲审预检 | [thesis_review](thesis_review/) | 3/5 位独立审稿意见、主席裁决、全文身份泄露检查与可执行修改台账 |
+| 对中国计算机学科硕博学位论文进行盲审预检 | [thesis_review](thesis_review/) | 3/5 位独立审稿意见、主席裁决、全文身份泄露与逐物理页分页检查、可执行修改台账 |
 | 修复 LaTeX 图表分布与分页 | [latex-float-layout](latex-float-layout/) | 基于编译和检查的 float 重排与分页修复 |
 | 准备 author response | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | 审稿意见图谱、回复策略和 rebuttal 草稿 |
 | 迭代诊断科研代码问题 | [autodebug](autodebug/) | 假设驱动的调试闭环和持久化观测 |
@@ -206,7 +206,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | [research-paper-writing](research-paper-writing/) | 改善章节结构、段落流和论断—证据对齐 |
 | [Research-Paper-Writing-Skills](Research-Paper-Writing-Skills/) | `research-paper-writing` 的跨平台独立分发包装 |
 | [paperjury](paperjury/) | 直接修改或对抗性压力测试 CS 会议 LaTeX 论文 |
-| [thesis_review](thesis_review/) | 按学校规则模拟中国计算机学科学位论文的 3/5 人独立审查与复审，并检查盲审成品全文的身份泄露 |
+| [thesis_review](thesis_review/) | 按学校规则模拟中国计算机学科学位论文的 3/5 人独立审查与复审，并生成逐物理页及强制浮动命令审计台账 |
 | [latex-float-layout](latex-float-layout/) | 重平衡 LaTeX 图表、空白和分页 |
 | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | 组织审稿意见并形成 author response |
 

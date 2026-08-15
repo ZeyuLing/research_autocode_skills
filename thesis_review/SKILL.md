@@ -19,6 +19,7 @@ Read these files completely before starting a review:
 - `references/review-rubric.md` for the common and CS/AI checks.
 - `references/reviewer-panels.md` for panel composition, isolation, and reviewer-specific mandates.
 - `references/report-template.md` for report files and required fields.
+- `references/rendered-pagination-audit.md` for the mandatory physical-page ledger, forced-float audit, and post-edit visual regression gate.
 
 Use only the sections relevant to the degree type and thesis form. Mark inapplicable criteria as `N/A` with a reason; never turn every checklist item into a mandatory experiment.
 
@@ -54,6 +55,7 @@ All reviewers must assess the same thesis version. Create a manifest containing:
 - file path, Git commit if available, PDF checksum, compilation time, and page count;
 - chapter and section inventory;
 - figure, table, equation, algorithm, appendix, and bibliography inventories;
+- a physical-page layout ledger covering every rendered page, including suspect-page triage and reviewer disposition;
 - thesis-level scientific questions and claimed contributions;
 - chapter-to-question, method-to-experiment, and claim-to-evidence mappings;
 - applicable institutional rules and standards;
@@ -165,6 +167,18 @@ Review every rendered page at a legible scale. Check:
 - bibliography completeness, citation-to-entry consistency, current institutional style, and suspicious unsupported clusters;
 - terminology, abbreviations, units, punctuation, Chinese/English consistency, and template compliance.
 
+Apply the full protocol in `references/rendered-pagination-audit.md`. Its requirements are gates, not suggestions:
+
+- render every physical page at a legible resolution and record it in `02-page-layout-ledger.md`;
+- use whole-document contact sheets only for triage, never as proof that an individual page is correct;
+- inspect every page individually or in a small legible group, then inspect every automatically or manually flagged page at full-page scale;
+- when source is supplied, map every `[H]`, `\FloatBarrier`, `\clearpage`, `\newpage`, `\pagebreak`, and equivalent source-level forcing construct to the final PDF and inspect at least the preceding, containing, and following pages; for a PDF-only review, mark the source-forcing cause `not verifiable--source not supplied` without suppressing a visible PDF finding;
+- flag nearly blank pages, float-only pages, pages dominated by one figure or table, adjacent float stacks, anomalous bottom whitespace, clipped content, split captions, and a large float that prevents later prose from filling the current page;
+- treat occupancy thresholds as triage signals, not automatic findings; close or retain each signal by visual evidence;
+- for cropped or continued figures, verify the seam against the uncropped source so that no text, person, plot element, or semantic unit is lost or duplicated.
+
+R5 owns this gate, but every reviewer must report any visible page defect encountered. A statement such as “all pages viewed” is insufficient without the completed page ledger and suspect-page dispositions.
+
 Treat the ordinary author copy and the submitted blind-review copy as different artifacts. Do not report author, supervisor, institution, or student-number fields that correctly appear in an ordinary author copy as anonymity defects. When a blind-review copy is in scope, render or obtain that actual copy and scan the entire artifact--not only the cover--for identity disclosures in body text, captions, tables, acknowledgments, CV/publications, data and project descriptions, footnotes, URLs, PDF metadata, filenames, comments, and figure watermarks. Apply the institution's exact anonymization rules; in their absence, flag school, department, laboratory, company, employer, partner organization, and other wording that can directly or cumulatively identify the candidate.
 
 The conservative format reviewer must be able to understand the thesis without relying on frontier-specific tacit knowledge. If a term or contribution is clear only to the original paper's specialist audience, treat that as a self-contained exposition problem.
@@ -195,6 +209,9 @@ Only enter this mode when the user asks for modification.
 - Preserve user data and unrelated changes.
 - Recompile after LaTeX edits and inspect affected pages plus neighboring pages.
 - Re-run numerical, cross-reference, citation, and float checks after each structural batch.
+- After any float, caption, heading, table, figure-size, barrier, or page-break edit, rebuild to a stable PDF, compare page count and affected label locations, inspect at least two neighboring physical pages on both sides, and rerun the whole-document page-layout ledger. A local improvement that creates a remote regression is not a fix.
+- Do not use `[H]`, a barrier, a forced page break, or indiscriminate shrinking as the default pagination repair. First identify whether the failure is caused by float backlog, remaining-page height, source aspect ratio, caption length, or ordering. Preserve formal source figures and their semantic content.
+- When a tall multi-panel figure must continue across pages, split only at a semantic boundary, retain one figure number with an explicit continuation, and compare both rendered parts against the original at legible scale. Never accept a split that crosses embedded text or visual content.
 - Do not weaken accurate contributions merely to make the thesis sound cautious.
 - Do not add fabricated experiments, data, citations, or institutional claims.
 
@@ -210,11 +227,14 @@ For a revised thesis, freeze a new evidence packet and run a new panel round. Re
 
 The chair must report new defects introduced by revision. A high closure rate does not justify passing an unresolved `S0` or decisive `S1` issue.
 
+When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, all prior findings are resolved or not reproducible, and the stable build introduces no regression. `S4` suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
+
 ## Completion standard
 
 A review is complete only when it includes:
 
 - the frozen manifest and policy basis;
+- the completed physical-page layout ledger and suspect-page dispositions;
 - all independent reviewer reports required for the degree level;
 - a chair synthesis with agreements and disagreements;
 - a precise, prioritized revision ledger;
