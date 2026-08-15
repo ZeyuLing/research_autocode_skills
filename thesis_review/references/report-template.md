@@ -30,7 +30,8 @@ For a master's thesis, use R1 technical/experimental, R2 contribution/logic, and
 - Git commit/checksum:
 - Compiled PDF path, timestamp, and pages:
 - Governing template/rules:
-- Companion papers/repos/logs in scope:
+- Reviewer-visible artifacts and public sources:
+- Author-side papers/repos/logs (not visible to R1--R5 before verdict):
 - Items explicitly out of scope:
 
 ## Thesis structure
@@ -106,6 +107,9 @@ Questions are not counted as defects until evidence supports them.
 
 ## Policy and blind-copy status
 ...
+
+## Author-side provenance audit
+List private paper/repository/log checks separately. Do not attribute these findings to the blind panel or use them to retroactively lower an independent grade.
 
 ## Review limitations
 ...

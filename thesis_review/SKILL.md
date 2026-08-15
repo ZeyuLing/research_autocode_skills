@@ -7,7 +7,7 @@ description: Review Chinese computer-science and AI master's or doctoral degree 
 
 ## Purpose
 
-Evaluate a degree thesis as a coherent long-form research contribution, not as a stack of conference-paper reviews. Use a frozen evidence packet, independent reviewer passes, and a separate chair adjudication. Report only evidence-backed findings with exact locations and feasible remedies.
+Evaluate a degree thesis as a coherent long-form research contribution, not as a stack of conference-paper reviews. Use a frozen evidence packet, independent reviewer passes, and a separate chair adjudication. Keep the simulated blind-review evidence separate from author-side provenance and revision evidence. Report only evidence-backed findings with exact locations and feasible remedies.
 
 This skill is read-only unless the user explicitly asks to revise the thesis. A request to review or diagnose does not authorize edits, fabricated data, new experiments, or changes to external systems.
 
@@ -57,15 +57,28 @@ All reviewers must assess the same thesis version. Create a manifest containing:
 - thesis-level scientific questions and claimed contributions;
 - chapter-to-question, method-to-experiment, and claim-to-evidence mappings;
 - applicable institutional rules and standards;
-- available companion evidence explicitly placed in scope by the user, such as papers, repositories, experiment logs, or data documentation.
+- a reviewer-visible evidence lane and, when supplied, a separate author-side evidence lane for papers, repositories, experiment logs, or data documentation.
 
 For LaTeX, compile the final artifact and inspect the rendered PDF. Source-only review cannot verify float placement, font size, overlap, blank pages, image resolution, or final cross-references. For DOCX or PDF, use the appropriate document/PDF inspection workflow and preserve page numbers.
 
 Do not silently replace the frozen thesis during the panel review. If the thesis changes, close the round and start a new versioned round.
 
+#### Separate blind-review and author-side evidence lanes
+
+Every round must classify evidence before any reviewer starts:
+
+1. **Reviewer-visible lane:** the submitted thesis artifact, its rendered pages, governing rules, and sources that an ordinary reviewer can obtain from the thesis or its public citations. LaTeX source may be used to locate visible defects or verify compilation, but not to import undisclosed experimental facts.
+2. **Author-side lane:** sibling paper repositories, unpublished paper drafts, supplements not cited or supplied with the submission, internal code/configs/logs, TODOs, experiment records, private data documentation, and author declarations supplied for revision or provenance audit.
+
+R1--R5 verdicts, ABCD grades, and findings in a blind-review simulation must use only the reviewer-visible lane. They must not read the author-side lane before freezing their reports. A discrepancy that exists only between the thesis and a sibling paper repository is not a blind-review finding.
+
+After all independent reports are frozen, the chair may open the author-side lane to verify a reviewer concern, reject a false positive, recover an existing value, or plan a direct edit. Label every such result **author-side provenance audit**, not “discovered by the blind reviewer.” Author-side evidence may close or downgrade a finding but must not retroactively manufacture a harsher independent grade.
+
+If the user explicitly requests a source-assisted integrity audit in which reviewers inspect private companion materials, run it as a separately labeled audit. Do not present its outputs or scores as simulated blind-review opinions.
+
 #### Establish evidence authority before comparing artifacts
 
-When companion materials disagree, record their role and authority before treating the disagreement as a finding. Unless the author identifies a different final source or a formal correction exists, use this order for reported methods and results:
+The following authority order applies to the author-side provenance audit and direct revision, not to what a blind reviewer is presumed to see. When companion materials disagree, record their role and authority before treating the disagreement as an author-side issue. Unless the author identifies a different final source or a formal correction exists, use this order for reported methods and results:
 
 1. the final published or submitted paper, its supplementary material, and the formal figure/table sources used to build that version;
 2. an official erratum, author-designated revision, or released artifact explicitly tied to that paper version;
@@ -84,7 +97,7 @@ Use the panel defined in `references/reviewer-panels.md`:
 - doctorate: R1--R5;
 - master's: R1--R3.
 
-When subagents are available, launch reviewers as isolated tasks. They may receive the common manifest, thesis, rules, and rubric, but must not receive or read another reviewer's report before submitting their own. With limited concurrency, run reviewers in batches while preserving that isolation.
+When subagents are available, launch reviewers as isolated tasks. They may receive the reviewer-visible manifest, thesis, rules, and rubric, but must not receive the author-side evidence lane or read another reviewer's report before submitting their own. With limited concurrency, run reviewers in batches while preserving that isolation.
 
 When isolated agents are unavailable, perform separate passes with separate notes and disclose that independence was simulated rather than process-isolated. Never draft a consensus first and then ask reviewers to agree with it.
 
@@ -132,7 +145,7 @@ Flag a break only when it is real and locatable. In particular, verify:
 - baseline comparability, implementation source, training budget, representation conversion, and metric protocol;
 - ablations that correspond to claimed causal contributions;
 - uncertainty, multiple seeds, significance, and user-study design when required by the strength of the claim, not as universal rituals;
-- exact agreement among prose, tables, figures, captions, appendices, and cited source papers;
+- exact internal agreement among prose, tables, figures, captions, and appendices; compare against companion source papers only in the separately labeled author-side provenance audit;
 - source authority before conflict claims: final paper and supplement take precedence over obsolete TODO, planning, debug, and scratch files unless formally superseded;
 - hyperparameters, software/hardware, preprocessing, and commands needed for reasonable reproduction;
 - negative results, boundary conditions, or claim limits where omission would mislead;
@@ -158,16 +171,17 @@ The conservative format reviewer must be able to understand the thesis without r
 
 ### 7. Adjudicate only after all reports are frozen
 
-The chair reads all independent reports and the evidence packet, then:
+The chair first reads all independent reports and the reviewer-visible evidence packet. Only after preserving the independent verdicts may the chair read the author-side lane, then:
 
 1. deduplicates findings without erasing reviewer disagreement;
 2. verifies each `S0`/`S1` finding against the thesis and governing source;
 3. rejects checklist-driven false positives and unsupported concerns;
-4. preserves a single-reviewer severe finding when its evidence is decisive;
+4. preserves a single-reviewer severe finding when its reviewer-visible evidence is decisive;
 5. records unresolved technical or policy disputes instead of averaging them away;
 6. produces the combined risk decision and revision roadmap;
 7. separates `W/E` remedies from the genuinely new `N` experiments or user-provided evidence;
-8. lists strengths and contributions that survived all reviewer lenses.
+8. lists strengths and contributions that survived all reviewer lenses;
+9. records private-paper, repository, log, or author-declaration checks in a separate author-side provenance section and never attributes them to the blind panel.
 
 Do not average reviewer scores unless the institution supplies a mandatory scoring form. If scores are required, preserve each score and the rule-based conclusion rather than substituting an ungrounded mean.
 
@@ -177,6 +191,7 @@ Only enter this mode when the user asks for modification.
 
 - Convert adjudicated findings into a versioned revision ledger.
 - Apply the smallest change that resolves the evidence-backed issue.
+- Use the author-side lane to recover existing values and align the thesis with the author's final papers, while keeping those repairs distinct from what the simulated blind panel independently observed.
 - Preserve user data and unrelated changes.
 - Recompile after LaTeX edits and inspect affected pages plus neighboring pages.
 - Re-run numerical, cross-reference, citation, and float checks after each structural batch.
@@ -205,6 +220,7 @@ A review is complete only when it includes:
 - a precise, prioritized revision ledger;
 - a separate list of genuinely new experiments or missing user evidence;
 - a statement of review limitations;
+- an explicit statement of which artifacts were reviewer-visible and which were used only for author-side provenance or revision;
 - for direct edits, compilation/render verification and a re-review result.
 
 Do not claim that “all problems are solved” unless the re-review found no unresolved `S0`/`S1`, no material `S2` that contradicts a central claim, and no policy blocker.

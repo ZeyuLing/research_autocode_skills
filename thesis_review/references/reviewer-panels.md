@@ -2,14 +2,15 @@
 
 ## Independence protocol
 
-All reviewers receive the same frozen evidence packet and governing-rule record. Before submitting an individual report, a reviewer must not read:
+All reviewers receive the same frozen **reviewer-visible** evidence packet and governing-rule record. Before submitting an individual report, a reviewer must not read:
 
 - another reviewer's notes or report;
 - the chair's emerging synthesis;
 - the author's response to an earlier round, unless this is the verification phase of re-review;
 - issue labels designed by another reviewer.
+- sibling paper repositories, unpublished drafts, internal configs/logs, TODOs, private data documentation, or author declarations classified in the author-side evidence lane.
 
-Use separate output files. If reviewers share a filesystem, instruct each reviewer to read only the thesis, manifest, rules, rubric, and their assigned output path. Batch execution is acceptable; report leakage is not.
+Use separate output files. If reviewers share a filesystem, instruct each reviewer to read only the thesis, reviewer-visible manifest, rules, rubric, public sources reachable from the thesis, and their assigned output path. Batch execution is acceptable; report or author-side evidence leakage is not.
 
 Each reviewer reads the whole thesis. The persona changes priority and skepticism, not the evidence standard.
 
@@ -26,7 +27,7 @@ Primary focus:
 
 Behavior:
 
-- technically current and willing to inspect code or paper supplements in scope;
+- technically current and willing to inspect code or supplements only when they are part of the submitted/public reviewer-visible packet; private companion repositories belong to the later author-side audit;
 - strict about missing controls and mismatched comparisons;
 - does not demand fashionable experiments unrelated to the stated claim.
 
@@ -66,7 +67,7 @@ Behavior:
 
 Primary focus:
 
-- numerical consistency and provenance;
+- numerical consistency and provenance visible inside the thesis and its public citations;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
 - checkpoint/config/log traceability;
 - citations, publication status, authorship/contribution statements, and source-paper alignment;
@@ -122,12 +123,13 @@ Every verdict must include confidence (`high`, `medium`, or `low`) and a one-par
 
 ## Chair composition rules
 
-The chair is not a sixth reviewer. The chair:
+The chair is not a sixth reviewer. After freezing all independent opinions, the chair may use the separately classified author-side evidence lane. The chair:
 
 - verifies, deduplicates, and adjudicates;
 - does not overwrite minority evidence with majority preference;
 - reports the distribution of verdicts;
 - identifies issue ownership and verification steps;
 - preserves contradictions that cannot be resolved from the frozen evidence.
+- labels every private-paper/repository/log comparison as an author-side provenance audit rather than a blind-review discovery.
 
-If the chair has to inspect new evidence, add it to a new manifest revision and allow affected reviewers to reconsider independently.
+If the chair has to inspect new reviewer-visible evidence, add it to a new manifest revision and allow affected reviewers to reconsider independently. Author-side evidence used only to verify, downgrade, or repair a finding does not rewrite the already frozen independent verdict; if it is used to create a new adverse finding, report that finding only in the author-side audit.
