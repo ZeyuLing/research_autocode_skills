@@ -45,7 +45,7 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Literature organization supports the thesis questions rather than mirroring paper-by-paper citation lists.
 - Comparisons are accurate about objectives, representations, assumptions, supervision, data, and evaluation protocols.
 - Claimed gaps are substantive; differences such as continuous versus discrete representation are not treated as self-evident necessity.
-- Every active citation occurrence is audited, including repeated uses of the same source and every source inside a citation cluster; citations directly support the exact attached proposition, with no citation laundering, ambiguous attachment, or irrelevant padding.
+- Every active citation occurrence is audited by the doctoral R4 (or master's R3), including repeated uses of the same source and every source inside a citation cluster; citations directly support the exact attached proposition, with no citation laundering, ambiguous attachment, or irrelevant padding.
 - Bibliographic existence and keyword relevance are insufficient by themselves: verify claim--source entailment from the primary source or label the occurrence inaccessible/unverified.
 - Important negative, contradictory, or competing evidence is not omitted.
 
@@ -123,10 +123,10 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Tables use appropriate font size, column widths, alignment, line breaks, notes, and multipage mechanisms.
 - Equations, symbols, algorithms, and units are consistently numbered and referenced.
 - Table-of-contents hierarchy is balanced across technical chapters and exposes the thesis logic.
-- Reference entries are complete, deduplicated, consistently formatted, and all cited; every bibliography entry has separate authoritative verification of its title, complete ordered authorship, year, venue/type and publication/acceptance status, page range or article number, and persistent identifier where applicable, together with retraction/correction status as of the frozen review date.
+- Reference entries are complete, deduplicated, consistently formatted, and all cited; the doctoral R5 (or master's R3) gives every bibliography entry separate authoritative verification of its title, complete ordered authorship, year, venue/type and publication/acceptance status, page range or article number, and persistent identifier where applicable, together with existence and retraction/correction status as of the frozen review date.
 - No factual field mismatch is silently normalized: typography mandated by the citation style may vary, but changed title content, missing/reordered authors, wrong year, false venue or acceptance claim, and wrong pages/article number must each receive an explicit finding or unresolved disposition.
 - A DOI resolving to another work, an official proceedings/accepted-paper record contradicting the entry, or a title--author--year combination shown not to exist triggers a fabricated-citation integrity investigation; do not call a merely inaccessible source fabricated without affirmative evidence.
-- The full citation ledger reconciles active citation occurrences, citation--source pairs, unique cited keys, and bibliography entries, with no unchecked or silently omitted row.
+- The bibliography ledger and citation-claim ledger jointly reconcile bibliography entries, unique cited keys, active citation occurrences, and citation--source pairs, with no unchecked or silently omitted row.
 - The final PDF has no overlap, clipping, broken glyph, malformed arrow, missing image, unresolved reference, or unexpected blank page.
 - Every physical page and every active float/page-forcing construct has a recorded disposition in the rendered-pagination ledger; contact-sheet triage alone does not satisfy this gate.
 

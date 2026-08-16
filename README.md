@@ -85,7 +85,7 @@ The toolkit supports the loop rather than treating publication as the end of a l
 | Track important papers in a research area | [track-ai-papers](track-ai-papers/) | Screened and ranked research-radar digest |
 | Deep-read one paper | [nature-paper-card](nature-paper-card/) or [paper-read](.claude/skills/paper-read/) | Evidence-linked Paper Card or structured seven-question reading note |
 | Stress-test and revise a CS paper | [paperjury](paperjury/) | Reviewer-style issues, adjudication, and controlled LaTeX edits |
-| Blind-review a Chinese CS master's or doctoral thesis | [thesis_review](thesis_review/) | Three- or five-reviewer independent reports, chair adjudication, full-document anonymity, exhaustive claim--citation and physical-page pagination audits, and a revision ledger |
+| Blind-review a Chinese CS master's or doctoral thesis | [thesis_review](thesis_review/) | Three- or five-reviewer independent reports, chair adjudication, full-document anonymity, split bibliography-integrity and claim--citation audits, physical-page pagination audits, and a revision ledger |
 | Repair figure/table placement in LaTeX | [latex-float-layout](latex-float-layout/) | Compile-and-inspect float redistribution and pagination fixes |
 | Prepare an author response | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | Review map, response strategy, and rebuttal draft |
 | Diagnose research code iteratively | [autodebug](autodebug/) | Hypothesis-driven debugging loop with persistent observations |
@@ -196,7 +196,7 @@ Predicted experimental values are not measured results. Workflows that use forec
 | [research-paper-writing](research-paper-writing/) | Improve section structure, paragraph flow, and claim–evidence alignment |
 | [Research-Paper-Writing-Skills](Research-Paper-Writing-Skills/) | Cross-platform distribution wrapper for `research-paper-writing` |
 | [paperjury](paperjury/) | Directly edit or adversarially stress-test CS-conference LaTeX papers |
-| [thesis_review](thesis_review/) | Run institution-aware, independent 3/5-reviewer simulations with full-document blind-copy checks plus mandatory full-citation and physical-page/forced-float ledgers |
+| [thesis_review](thesis_review/) | Run institution-aware, independent 3/5-reviewer simulations with full-document blind-copy checks plus separate bibliography-integrity, citation-claim, and physical-page/forced-float ledgers |
 | [latex-float-layout](latex-float-layout/) | Rebalance LaTeX figures, tables, whitespace, and pagination |
 | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | Organize reviewer feedback and develop an author response |
 

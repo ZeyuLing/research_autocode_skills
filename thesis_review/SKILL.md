@@ -115,7 +115,7 @@ Each reviewer must:
 - state what was checked and what could not be verified;
 - issue an individual verdict before seeing other reports.
 
-R4 owns the complete citation audit for a doctoral thesis; R3 owns it for a master's thesis. Ownership is not optional and does not mean that other reviewers may ignore citation problems they encounter. The owning reviewer must follow `references/citation-audit.md`, write `03-citation-audit-ledger.md`, and reach 100 percent disposition of both bibliography entries and citation--source pairs before returning a citation-complete verdict. The ledger must contain a bibliography master row for every entry with separate title, ordered-author, year, venue/publication-status, page-or-article-number, and persistent-identifier verdicts. A resolved citation key, plausible title, metadata API match, or sample of important references is not a substitute for field-by-field bibliographic verification and verification of what each citation occurrence supports.
+For a doctoral thesis, citation auditing is split between two isolated owners. R5 owns the exhaustive bibliography-integrity audit and must write `03-bibliography-audit-ledger.md`: every bibliography entry, including uncited entries, receives separate authoritative verdicts for title, complete ordered authorship, year, venue/type and publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status. R4 owns the citation-claim audit and must write `04-citation-claim-audit-ledger.md`: every active in-text citation occurrence and every source in a citation cluster is checked against the exact proposition it is asked to support. For a master's thesis, R3 owns both ledgers. Ownership is not optional and does not mean that other reviewers may ignore citation problems they encounter. R4 and R5 must not collaborate in a shared ledger or read each other's results before freezing their independent verdicts; the chair reconciles the two frozen ledgers afterward. A resolved citation key, plausible title, metadata API match, keyword match, or sample of important references is not a substitute for either audit.
 
 ### 4. Classify every finding
 
@@ -183,7 +183,7 @@ Apply the full protocol in `references/rendered-pagination-audit.md`. Its requir
 
 R5 owns this gate, but every reviewer must report any visible page defect encountered. A statement such as “all pages viewed” is insufficient without the completed page ledger and suspect-page dispositions.
 
-Apply the full protocol in `references/citation-audit.md` as a second independent gate. R4 for a doctorate, or R3 for a master's thesis, must inventory every bibliography entry and every active in-text citation occurrence; verify title, complete ordered authorship, year, venue and publication/acceptance status, pages or article number, and persistent identifier against authoritative records; verify every occurrence--source pair against the cited public source when accessible; and record every mismatch, inaccessible field, or ambiguous source explicitly. Static BibTeX closure or an aggregate metadata match does not pass this gate. A substantiated fabricated or nonexistent citation is an `S0` integrity blocker.
+Apply the full protocol in `references/citation-audit.md` as two independent gates. For a doctorate, R5 must complete the field-by-field bibliography and existence audit, while R4 must complete the occurrence-by-occurrence claim--source audit; for a master's thesis, R3 completes both. Every mismatch, inaccessible field, ambiguous source, and unsupported occurrence must be recorded explicitly. Static BibTeX closure, an aggregate metadata match, or a spot check does not pass either gate. A substantiated fabricated or nonexistent citation is an `S0` integrity blocker.
 
 Treat the ordinary author copy and the submitted blind-review copy as different artifacts. Do not report author, supervisor, institution, or student-number fields that correctly appear in an ordinary author copy as anonymity defects. When a blind-review copy is in scope, render or obtain that actual copy and scan the entire artifact--not only the cover--for identity disclosures in body text, captions, tables, acknowledgments, CV/publications, data and project descriptions, footnotes, URLs, PDF metadata, filenames, comments, and figure watermarks. Apply the institution's exact anonymization rules; in their absence, flag school, department, laboratory, company, employer, partner organization, and other wording that can directly or cumulatively identify the candidate.
 
@@ -215,7 +215,7 @@ Only enter this mode when the user asks for modification.
 - Preserve user data and unrelated changes.
 - Recompile after LaTeX edits and inspect affected pages plus neighboring pages.
 - Re-run numerical, cross-reference, citation, and float checks after each structural batch.
-- After any citation, claim, related-work, bibliography, publication-status, dataset-source, or attribution edit, regenerate the full citation ledger and recheck every changed occurrence plus all repeated uses of the affected source.
+- After any citation, claim, related-work, bibliography, publication-status, dataset-source, or attribution edit, regenerate the affected bibliography and citation-claim ledgers and recheck every changed entry or occurrence plus all repeated uses of the affected source.
 - After any float, caption, heading, table, figure-size, barrier, or page-break edit, rebuild to a stable PDF, compare page count and affected label locations, inspect at least two neighboring physical pages on both sides, and rerun the whole-document page-layout ledger. A local improvement that creates a remote regression is not a fix.
 - Do not use `[H]`, a barrier, a forced page break, or indiscriminate shrinking as the default pagination repair. First identify whether the failure is caused by float backlog, remaining-page height, source aspect ratio, caption length, or ordering. Preserve formal source figures and their semantic content.
 - When a tall multi-panel figure must continue across pages, split only at a semantic boundary, retain one figure number with an explicit continuation, and compare both rendered parts against the original at legible scale. Never accept a split that crosses embedded text or visual content.
@@ -234,7 +234,7 @@ For a revised thesis, freeze a new evidence packet and run a new panel round. Re
 
 The chair must report new defects introduced by revision. A high closure rate does not justify passing an unresolved `S0` or decisive `S1` issue.
 
-When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, the citation ledger has 100 percent coverage and no unresolved actionable mismatch, all prior findings are resolved or not reproducible, and the stable build introduces no regression. `S4` suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
+When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, both the bibliography and citation-claim ledgers have 100 percent coverage and no unresolved actionable mismatch, all prior findings are resolved or not reproducible, and the stable build introduces no regression. `S4` suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
 
 ## Completion standard
 
@@ -242,7 +242,7 @@ A review is complete only when it includes:
 
 - the frozen manifest and policy basis;
 - the completed physical-page layout ledger and suspect-page dispositions;
-- the completed full-text citation ledger, with occurrence/source counts and no silent unchecked rows;
+- the completed bibliography-integrity and citation-claim ledgers, with entry/occurrence/source counts and no silent unchecked rows;
 - all independent reviewer reports required for the degree level;
 - a chair synthesis with agreements and disagreements;
 - a precise, prioritized revision ledger;

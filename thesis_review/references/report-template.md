@@ -7,7 +7,8 @@ thesis-review-round-YYYYMMDD/
   00-manifest.md
   01-policy-basis.md
   02-page-layout-ledger.md
-  03-citation-audit-ledger.md
+  03-bibliography-audit-ledger.md
+  04-citation-claim-audit-ledger.md
   R1-technical-experiments.md
   R2-field-contribution.md
   R3-thesis-logic.md
@@ -21,7 +22,7 @@ thesis-review-round-YYYYMMDD/
 
 For a master's thesis, use R1 technical/experimental, R2 contribution/logic, and R3 evidence/standards.
 
-`03-citation-audit-ledger.md` is mandatory. It is owned by R4 for a doctorate and R3 for a master's thesis; follow `citation-audit.md`.
+Both citation ledgers are mandatory. For a doctorate, R5 owns `03-bibliography-audit-ledger.md` and R4 owns `04-citation-claim-audit-ledger.md`; for a master's thesis, R3 owns both. Follow `citation-audit.md`. The two doctoral owners freeze their ledgers independently before the chair reconciles them.
 
 ## Manifest
 
@@ -84,13 +85,10 @@ For a master's thesis, use R1 technical/experimental, R2 contribution/logic, and
 ...
 ```
 
-The citation-owning reviewer must additionally report:
+The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally report:
 
 ```markdown
-## Full citation audit
-- Active citation occurrences:
-- Citation--source pairs:
-- Unique cited keys:
+## Full bibliography-integrity audit
 - Bibliography entries:
 - Bibliography master rows / unchecked rows:
 - Title fields verified / mismatched / unverifiable:
@@ -100,11 +98,21 @@ The citation-owning reviewer must additionally report:
 - Page-range or article-number fields verified / mismatched / legitimate N/A / unverifiable:
 - DOI/arXiv/URL fields verified / mismatched / legitimate N/A / unverifiable:
 - Suspected fabricated/nonexistent entries and adjudication status:
+- Metadata/status verified entries:
+```
+
+The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionally report:
+
+```markdown
+## Full citation-claim audit
+- Active citation occurrences:
+- Citation--source pairs:
+- Unique cited keys:
 - Semantically verified pairs:
 - Partial-support pairs:
+- Context-only pairs:
 - Mismatch pairs:
 - Inaccessible/unverifiable pairs:
-- Metadata/status verified entries:
 - Ledger rows and unchecked rows:
 ```
 
@@ -188,6 +196,6 @@ For an iterative review--revision loop, the final recommendation must also state
 
 - whether every physical page was re-entered in the page ledger after the last edit;
 - whether all forcing constructs were remapped to the final PDF and neighbor pages rechecked;
-- whether all citation--source pairs were re-entered in the citation ledger and every changed or repeated source use was reverified;
+- whether every bibliography entry was re-entered in the bibliography ledger, all citation--source pairs were re-entered in the citation-claim ledger, and every changed or repeated source use was reverified;
 - whether every reviewer returned an empty actionable `S0`--`S3` Findings section;
 - whether any `S4` suggestion or review limitation remains.

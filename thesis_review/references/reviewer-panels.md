@@ -63,12 +63,12 @@ Behavior:
 - expects method design to appear below motivation, not inside it;
 - does not force artificial unification of representations or tasks.
 
-### R4 — Evidence, full-citation, reproducibility, and integrity reviewer
+### R4 — Evidence, citation-claim, reproducibility, and integrity reviewer
 
 Primary focus:
 
 - numerical consistency and provenance visible inside the thesis and its public citations;
-- exhaustive citation review: every bibliography entry field-by-field, every active in-text citation occurrence, every source in a citation cluster, the exact proposition attached to it, and the existence and publication status of every cited work;
+- exhaustive citation-claim review: every active in-text citation occurrence, every source in a citation cluster, and the exact proposition attached to it;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
 - checkpoint/config/log traceability;
 - citations, publication status, authorship/contribution statements, and source-paper alignment;
@@ -78,9 +78,8 @@ Behavior:
 
 - verifies before alleging misconduct or leakage;
 - does not substitute BibTeX key closure, citation-count statistics, keyword matching, or spot checks for claim--source verification;
-- verifies title, complete ordered author list, year, venue/status, page range or article number, and DOI/arXiv/URL against authoritative records rather than trusting imported BibTeX;
-- treats a substantiated fabricated/nonexistent citation as an `S0` integrity blocker, while distinguishing it from an inaccessible source or a local metadata typo;
-- produces `03-citation-audit-ledger.md` with 100 percent disposition of bibliography entries and citation--source pairs and explicitly records every field mismatch, inaccessible source, and only partially supporting source;
+- verifies each claim--source pair from the cited primary source or official full record rather than inferring support from title, abstract keywords, venue, or citation count;
+- produces `04-citation-claim-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records every inaccessible, partially supporting, context-only, or mismatched source use;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - labels inference and uncertainty explicitly.
 
@@ -89,6 +88,7 @@ Behavior:
 Primary focus:
 
 - final rendered PDF, headings, contents, pages, figures, tables, equations, references, and typography;
+- exhaustive bibliography-integrity review of every entry, including uncited entries: title, complete ordered authorship, year, venue/type, publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status;
 - when an actual blind-review copy is supplied, a full-artifact identity-disclosure scan covering body text, captions, tables, data/project descriptions, publications, URLs, metadata, filenames, comments, and watermarks--not only the cover;
 - self-contained explanation for a broad computer-science evaluator;
 - formal Chinese academic writing and terminology;
@@ -100,6 +100,8 @@ Behavior:
 - assume strong general academic judgment but limited familiarity with the newest niche models;
 - be extremely strict about visible defects and unexplained terminology;
 - do not accept a contact-sheet-only claim of full-page coverage; record every physical page and the disposition of every pagination signal;
+- do not trust imported BibTeX, search snippets, generated citation sites, or aggregate metadata matches; open authoritative records and give every required field a separate verdict;
+- produce `03-bibliography-audit-ledger.md` with exactly one row per bibliography entry and no pending field; treat a substantiated fabricated/nonexistent citation as an `S0` integrity blocker while distinguishing it from an inaccessible source or a local metadata typo;
 - do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 
@@ -115,7 +117,7 @@ Combine doctoral R2 and R3: importance, correctness of positioning, coherent sto
 
 ### R3 — Evidence and standards examiner
 
-Combine doctoral R4 and R5: provenance, integrity, reproducibility, writing, rendered format, full citation-occurrence auditing, and policy compliance. R3 must produce the same `03-citation-audit-ledger.md` required from doctoral R4.
+Combine doctoral R4 and R5: provenance, integrity, reproducibility, writing, rendered format, exhaustive bibliography-integrity auditing, full citation-occurrence auditing, and policy compliance. R3 must independently produce both `03-bibliography-audit-ledger.md` and `04-citation-claim-audit-ledger.md`.
 
 ## Reviewer verdicts
 

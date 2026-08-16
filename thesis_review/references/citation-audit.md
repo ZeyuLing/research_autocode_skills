@@ -1,6 +1,6 @@
 # Full-text citation and bibliography audit
 
-Use this protocol in every initial review and independent re-review. R4 owns it for a doctoral thesis; R3 owns it for a master's thesis. The objective is to verify every use of external evidence, not merely whether citation keys compile.
+Use this protocol in every initial review and independent re-review. For a doctoral thesis, R5 owns the bibliography-integrity half and R4 owns the citation-claim half; for a master's thesis, R3 owns both. The objective is to verify both the identity of every listed source and every use of external evidence, not merely whether citation keys compile.
 
 ## 1. Scope and evidence boundary
 
@@ -10,9 +10,14 @@ Treat one occurrence with multiple cited keys as multiple **citation--source pai
 
 In an isolated blind-review round, use only the thesis, its bibliography, and public sources reachable from the citations. Do not use private companion papers, internal repositories, logs, or author declarations before the reviewer verdict is frozen. Later author-side checks must be labeled provenance audit.
 
-## 2. Build the two-part inventory
+## 2. Build two independently owned inventories
 
-Create `03-citation-audit-ledger.md` and record:
+Create two files:
+
+- `03-bibliography-audit-ledger.md`, owned by doctoral R5 or master's R3;
+- `04-citation-claim-audit-ledger.md`, owned by doctoral R4 or master's R3.
+
+Record in the relevant ledger:
 
 - frozen PDF checksum, source commit, review date, and active source roots;
 - number of active citation commands/occurrences;
@@ -20,14 +25,14 @@ Create `03-citation-audit-ledger.md` and record:
 - number of unique cited keys and bibliography entries, including uncited entries;
 - missing keys, duplicate keys, uncited entries, unresolved citations, and bibliography parse limitations.
 
-First create a **bibliography master table** with exactly one row per BibTeX/bibliography entry, including uncited entries:
+In `03-bibliography-audit-ledger.md`, create a **bibliography master table** with exactly one row per BibTeX/bibliography entry, including uncited entries:
 
 | Bib key | Cited? | Type | Title verdict | Ordered authors verdict | Year verdict | Venue and publication/acceptance-status verdict | Pages/article-number verdict | DOI/arXiv/URL verdict | Authoritative record(s) opened | Existence/integrity verdict | Finding/disposition |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
 Each field verdict must be `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse all metadata into one check mark. Record both the thesis value and the verified canonical value whenever they differ. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
 
-Then create a **citation-occurrence table** with one row per citation--source pair:
+In `04-citation-claim-audit-ledger.md`, create a **citation-occurrence table** with one row per citation--source pair:
 
 | Occurrence ID | PDF/source location | Exact attached proposition | Cite key | Public source/identifier | Source opened | Support | Metadata/status | Severity/finding | Disposition/evidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -116,19 +121,28 @@ Apply the ordinary five-question finding test and minimum sufficient remedy.
 
 Prefer repairing the sentence, moving the citation, splitting a compound claim, adding the correct primary source, or correcting metadata. Do not demand new experiments merely because a citation is weak.
 
+### Reviewer independence
+
+For a doctoral panel, R4 and R5 receive the same frozen thesis and may receive a mechanically generated citation/Bib-key inventory, but they must not edit a shared ledger, exchange provisional findings, or read each other's ledger/report before freezing their own verdicts. R5 decides source identity and field accuracy; R4 decides whether each source supports the attached proposition. If either reviewer encounters a problem outside that primary assignment, the reviewer records it normally. The chair reconciles duplicate or dependent findings only after both reports are frozen.
+
 ## 6. Completion and re-review gate
 
-The citation audit passes only when:
+The bibliography-integrity gate passes only when:
 
 - the bibliography master table has exactly one row per bibliography entry, including uncited entries;
 - every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict and an authoritative evidence endpoint;
-- ledger occurrence counts reconcile with the active source/PDF inventory;
-- every citation--source pair has a non-empty support status and disposition;
 - every unique cited entry has field-level metadata, existence, and publication-status dispositions;
 - every factual bibliography mismatch is linked to a finding or unresolved question; none is silently corrected or waived as formatting;
 - every suspected fabricated/nonexistent entry has a documented integrity adjudication;
+- no row remains `pending`, `unchecked`, or silently omitted;
+- the bibliography-owning reviewer reports counts and limitations in the independent report.
+
+The citation-claim gate passes only when:
+
+- ledger occurrence counts reconcile with the active source/PDF inventory;
+- every citation--source pair has a non-empty support status and disposition;
 - every missing, partial, context-only, mismatch, or unverifiable row is linked to a finding, an explicit question, or a reasoned non-finding;
 - no row remains `pending`, `unchecked`, or silently omitted;
-- the citation-owning reviewer reports counts and limitations in the independent report.
+- the citation-claim-owning reviewer reports counts and limitations in the independent report.
 
-After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, regenerate the complete ledger. Recheck every changed occurrence and every other occurrence that reuses the affected source. A previous 100 percent ledger does not carry over to a new frozen PDF or commit.
+After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, regenerate the affected ledger or both ledgers. Recheck every changed entry or occurrence and every other occurrence that reuses the affected source. Previous 100 percent ledgers do not carry over to a new frozen PDF or commit.
