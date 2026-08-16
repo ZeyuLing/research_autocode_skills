@@ -63,11 +63,12 @@ Behavior:
 - expects method design to appear below motivation, not inside it;
 - does not force artificial unification of representations or tasks.
 
-### R4 — Evidence, reproducibility, and integrity reviewer
+### R4 — Evidence, full-citation, reproducibility, and integrity reviewer
 
 Primary focus:
 
 - numerical consistency and provenance visible inside the thesis and its public citations;
+- exhaustive citation review: every active in-text citation occurrence, every source in a citation cluster, the exact proposition attached to it, and the completeness and status of every cited bibliography entry;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
 - checkpoint/config/log traceability;
 - citations, publication status, authorship/contribution statements, and source-paper alignment;
@@ -76,6 +77,8 @@ Primary focus:
 Behavior:
 
 - verifies before alleging misconduct or leakage;
+- does not substitute BibTeX key closure, citation-count statistics, keyword matching, or spot checks for claim--source verification;
+- produces `03-citation-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records inaccessible or only partially supporting sources;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - labels inference and uncertainty explicitly.
 
@@ -110,7 +113,7 @@ Combine doctoral R2 and R3: importance, correctness of positioning, coherent sto
 
 ### R3 — Evidence and standards examiner
 
-Combine doctoral R4 and R5: provenance, integrity, reproducibility, writing, rendered format, citations, and policy compliance.
+Combine doctoral R4 and R5: provenance, integrity, reproducibility, writing, rendered format, full citation-occurrence auditing, and policy compliance. R3 must produce the same `03-citation-audit-ledger.md` required from doctoral R4.
 
 ## Reviewer verdicts
 

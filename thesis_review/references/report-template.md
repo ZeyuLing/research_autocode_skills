@@ -7,6 +7,7 @@ thesis-review-round-YYYYMMDD/
   00-manifest.md
   01-policy-basis.md
   02-page-layout-ledger.md
+  03-citation-audit-ledger.md
   R1-technical-experiments.md
   R2-field-contribution.md
   R3-thesis-logic.md
@@ -19,6 +20,8 @@ thesis-review-round-YYYYMMDD/
 ```
 
 For a master's thesis, use R1 technical/experimental, R2 contribution/logic, and R3 evidence/standards.
+
+`03-citation-audit-ledger.md` is mandatory. It is owned by R4 for a doctorate and R3 for a master's thesis; follow `citation-audit.md`.
 
 ## Manifest
 
@@ -79,6 +82,22 @@ For a master's thesis, use R1 technical/experimental, R2 contribution/logic, and
 
 ## Coverage and limitations
 ...
+```
+
+The citation-owning reviewer must additionally report:
+
+```markdown
+## Full citation audit
+- Active citation occurrences:
+- Citation--source pairs:
+- Unique cited keys:
+- Bibliography entries:
+- Semantically verified pairs:
+- Partial-support pairs:
+- Mismatch pairs:
+- Inaccessible/unverifiable pairs:
+- Metadata/status verified entries:
+- Ledger rows and unchecked rows:
 ```
 
 Questions are not counted as defects until evidence supports them.
@@ -161,5 +180,6 @@ For an iterative review--revision loop, the final recommendation must also state
 
 - whether every physical page was re-entered in the page ledger after the last edit;
 - whether all forcing constructs were remapped to the final PDF and neighbor pages rechecked;
+- whether all citation--source pairs were re-entered in the citation ledger and every changed or repeated source use was reverified;
 - whether every reviewer returned an empty actionable `S0`--`S3` Findings section;
 - whether any `S4` suggestion or review limitation remains.
