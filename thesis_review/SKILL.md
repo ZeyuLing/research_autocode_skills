@@ -203,6 +203,8 @@ The chair first reads all independent reports and the reviewer-visible evidence 
 8. lists strengths and contributions that survived all reviewer lenses;
 9. records private-paper, repository, log, or author-declaration checks in a separate author-side provenance section and never attributes them to the blind panel.
 
+Before issuing the combined decision, the chair must join the frozen bibliography and citation-claim ledgers by bibliography key and run a cross-ledger consistency gate. A cited key whose title, ordered authors, persistent identifier, existence, or publication identity is `mismatch` in the bibliography ledger cannot remain `direct`, `partial`, or `context-only` in the citation-claim ledger without a separately identified correct source. Likewise, a citation-claim row whose opened source metadata does not identify the cited work is invalid even if its disposition is non-empty. Record every conflict, reclassify the affected pair conservatively, and require a corrected frozen-round audit before a `ready` decision. Row counts and `pending=0` do not override a substantive cross-ledger contradiction.
+
 Do not average reviewer scores unless the institution supplies a mandatory scoring form. If scores are required, preserve each score and the rule-based conclusion rather than substituting an ungrounded mean.
 
 ### 8. Direct-edit mode

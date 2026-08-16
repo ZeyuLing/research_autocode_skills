@@ -125,6 +125,18 @@ Prefer repairing the sentence, moving the citation, splitting a compound claim, 
 
 For a doctoral panel, R4 and R5 receive the same frozen thesis and may receive a mechanically generated citation/Bib-key inventory, but they must not edit a shared ledger, exchange provisional findings, or read each other's ledger/report before freezing their own verdicts. R5 decides source identity and field accuracy; R4 decides whether each source supports the attached proposition. If either reviewer encounters a problem outside that primary assignment, the reviewer records it normally. The chair reconciles duplicate or dependent findings only after both reports are frozen.
 
+### Mandatory chair cross-ledger consistency gate
+
+After both independent ledgers are frozen, join them by bibliography key and check every cited key before synthesis:
+
+1. the source identity recorded by R4 must agree with R5's authoritative title, ordered authors, persistent identifier, and existence verdict;
+2. if R5 marks the cited work's identifier, title/author combination, or existence as `mismatch`, every R4 occurrence using that record is invalid until the intended source is identified; it cannot remain `direct`, `partial`, or `context-only` merely because the row has a non-empty disposition;
+3. if R4's own metadata note names a work different from the thesis bibliography or attached proposition, classify the pair as `mismatch` (or `unverifiable` only when identity truly cannot be resolved), regardless of R4's provisional support label;
+4. if R4 and R5 used different versions or records, state which one governs and why; do not silently merge their metadata;
+5. reconcile the set of cited keys and the occurrence count, and list every cross-ledger conflict in the chair report.
+
+Any substantive conflict fails the combined citation gate. Preserve both independent reports, but do not issue a panel-level `ready` decision until the thesis is corrected and the affected bibliography entries, every occurrence reusing them, and both ledgers are re-audited in a new frozen round. Mechanical completeness (`pending=0`, expected row count, or a live URL) never overrides this identity check.
+
 ## 6. Completion and re-review gate
 
 The bibliography-integrity gate passes only when:
@@ -144,5 +156,7 @@ The citation-claim gate passes only when:
 - every missing, partial, context-only, mismatch, or unverifiable row is linked to a finding, an explicit question, or a reasoned non-finding;
 - no row remains `pending`, `unchecked`, or silently omitted;
 - the citation-claim-owning reviewer reports counts and limitations in the independent report.
+
+The combined citation gate passes only when the chair's key-wise cross-ledger join has no unresolved identity/support contradiction. Record the joined-key count and conflict count in the chair synthesis or re-review report.
 
 After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, regenerate the affected ledger or both ledgers. Recheck every changed entry or occurrence and every other occurrence that reuses the affected source. Previous 100 percent ledgers do not carry over to a new frozen PDF or commit.
