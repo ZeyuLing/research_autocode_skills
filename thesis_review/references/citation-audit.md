@@ -10,17 +10,24 @@ Treat one occurrence with multiple cited keys as multiple **citation--source pai
 
 In an isolated blind-review round, use only the thesis, its bibliography, and public sources reachable from the citations. Do not use private companion papers, internal repositories, logs, or author declarations before the reviewer verdict is frozen. Later author-side checks must be labeled provenance audit.
 
-## 2. Build the inventory
+## 2. Build the two-part inventory
 
 Create `03-citation-audit-ledger.md` and record:
 
 - frozen PDF checksum, source commit, review date, and active source roots;
 - number of active citation commands/occurrences;
 - number of citation--source pairs after expanding clusters;
-- number of unique cited keys and bibliography entries;
+- number of unique cited keys and bibliography entries, including uncited entries;
 - missing keys, duplicate keys, uncited entries, unresolved citations, and bibliography parse limitations.
 
-Use one row per citation--source pair:
+First create a **bibliography master table** with exactly one row per BibTeX/bibliography entry, including uncited entries:
+
+| Bib key | Cited? | Type | Title verdict | Ordered authors verdict | Year verdict | Venue and publication/acceptance-status verdict | Pages/article-number verdict | DOI/arXiv/URL verdict | Authoritative record(s) opened | Existence/integrity verdict | Finding/disposition |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+
+Each field verdict must be `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse all metadata into one check mark. Record both the thesis value and the verified canonical value whenever they differ. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
+
+Then create a **citation-occurrence table** with one row per citation--source pair:
 
 | Occurrence ID | PDF/source location | Exact attached proposition | Cite key | Public source/identifier | Source opened | Support | Metadata/status | Severity/finding | Disposition/evidence |
 |---|---|---|---|---|---|---|---|---|---|
@@ -33,13 +40,44 @@ Before semantic verification, check the complete active corpus:
 
 1. every cited key resolves to exactly one bibliography entry;
 2. there are no duplicate-key collisions or unresolved citation markers;
-3. titles, authors, year, venue or document type, pages where applicable, DOI/arXiv/URL, and access date where required are present and normalized under the governing style;
-4. preprint, accepted, in-press, and published status are not conflated;
-5. retractions, withdrawals, expressions of concern, errata, and superseding versions are recorded when material;
-6. datasets, software, standards, laws, websites, and repositories cite the appropriate primary artifact rather than an unrelated secondary paper;
-7. self-citations and publications listed in the CV use accurate authorship and status.
+3. every title matches the authoritative title in content, including subtitle when part of the official record;
+4. every author is present in the official order; do not store `et al.` as the BibTeX author list or silently omit consortium/corporate authors;
+5. the year follows the governing style's event/proceedings/issue rule and does not confuse online-first, preprint-upload, acceptance, conference, or issue year;
+6. venue and status are verified separately: `published`, `accepted/in press`, `preprint`, `submitted/under review`, `withdrawn/retracted/corrected`, or `unverifiable`; an arXiv posting, project page, code repository, author CV, or search snippet does not by itself prove conference/journal acceptance;
+7. journal volume/issue and page range or article number, and proceedings page range where assigned, match the official record; use `legitimate N/A` for arXiv-only and genuinely pageless records rather than inventing pages;
+8. DOI, arXiv identifier/version, URL, ISBN or other persistent identifier resolves to the same title and authors rather than merely returning a live page;
+9. access dates required for mutable web resources are present and defensible;
+10. retractions, withdrawals, expressions of concern, errata, and superseding versions are recorded when material;
+11. datasets, software, standards, laws, websites, and repositories cite the appropriate primary artifact rather than an unrelated secondary paper;
+12. self-citations and publications listed in the CV use accurate authorship and status.
 
 Static closure is necessary but not sufficient. A clean BibTeX build does not establish that a source supports the sentence citing it.
+
+### Authoritative-source order for bibliography fields
+
+Use the strongest available record and record the exact endpoint opened:
+
+1. publisher/DOI landing page, official journal issue, or official conference proceedings paper page/PDF;
+2. official conference accepted-paper list or program for an accepted but not yet published paper;
+3. official preprint record such as arXiv for preprint identity and version only;
+4. Crossref and DBLP as structured corroboration, not as substitutes when a first-party record is available;
+5. institutional repository or author page only as secondary evidence.
+
+Search-result snippets, generated citation sites, Semantic Scholar/OpenAlex-style aggregators, code README files, and another paper's bibliography are discovery aids, not final authority. If no first-party record is accessible, require two independent corroborating records where feasible and mark the field `unverifiable` rather than guessing.
+
+For `accepted/in press`, require an official accepted-paper list, publisher forthcoming record, DOI/proceedings record, or an acceptance document supplied in the separately labeled author-side lane. Do not upgrade `submitted`, `under review`, or `arXiv preprint` to accepted/published from author assertion alone in the blind-review lane.
+
+### Fabricated or nonexistent citation escalation
+
+Open an integrity investigation when any of the following occurs:
+
+- the DOI or persistent identifier resolves to a different title or author set;
+- the claimed proceedings volume/page range belongs to another paper;
+- the official journal issue, proceedings, or accepted-paper list affirmatively contradicts the claimed venue/status;
+- the entry combines a title, author list, venue, year, or pages from different works;
+- exact-title, author-title, identifier, and official venue searches all fail and an authoritative record indicates the claimed work does not exist.
+
+Do not label a paywalled, obscure, future, private, or temporarily inaccessible work fabricated solely because it was not found quickly. Record search routes and negative evidence. A substantiated fabricated/nonexistent citation is `S0` and blocks a `ready` verdict until resolved; an unresolved existence concern remains an explicit high-priority question or finding according to the available affirmative evidence.
 
 ## 4. Verify every citation occurrence semantically
 
@@ -82,9 +120,13 @@ Prefer repairing the sentence, moving the citation, splitting a compound claim, 
 
 The citation audit passes only when:
 
+- the bibliography master table has exactly one row per bibliography entry, including uncited entries;
+- every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict and an authoritative evidence endpoint;
 - ledger occurrence counts reconcile with the active source/PDF inventory;
 - every citation--source pair has a non-empty support status and disposition;
-- every unique cited entry has a metadata/publication-status disposition;
+- every unique cited entry has field-level metadata, existence, and publication-status dispositions;
+- every factual bibliography mismatch is linked to a finding or unresolved question; none is silently corrected or waived as formatting;
+- every suspected fabricated/nonexistent entry has a documented integrity adjudication;
 - every missing, partial, context-only, mismatch, or unverifiable row is linked to a finding, an explicit question, or a reasoned non-finding;
 - no row remains `pending`, `unchecked`, or silently omitted;
 - the citation-owning reviewer reports counts and limitations in the independent report.

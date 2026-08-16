@@ -92,6 +92,14 @@ The citation-owning reviewer must additionally report:
 - Citation--source pairs:
 - Unique cited keys:
 - Bibliography entries:
+- Bibliography master rows / unchecked rows:
+- Title fields verified / mismatched / unverifiable:
+- Ordered-author fields verified / mismatched / unverifiable:
+- Year fields verified / mismatched / unverifiable:
+- Venue and publication-status fields verified / mismatched / unverifiable:
+- Page-range or article-number fields verified / mismatched / legitimate N/A / unverifiable:
+- DOI/arXiv/URL fields verified / mismatched / legitimate N/A / unverifiable:
+- Suspected fabricated/nonexistent entries and adjudication status:
 - Semantically verified pairs:
 - Partial-support pairs:
 - Mismatch pairs:

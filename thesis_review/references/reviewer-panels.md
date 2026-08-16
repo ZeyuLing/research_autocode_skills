@@ -68,7 +68,7 @@ Behavior:
 Primary focus:
 
 - numerical consistency and provenance visible inside the thesis and its public citations;
-- exhaustive citation review: every active in-text citation occurrence, every source in a citation cluster, the exact proposition attached to it, and the completeness and status of every cited bibliography entry;
+- exhaustive citation review: every bibliography entry field-by-field, every active in-text citation occurrence, every source in a citation cluster, the exact proposition attached to it, and the existence and publication status of every cited work;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
 - checkpoint/config/log traceability;
 - citations, publication status, authorship/contribution statements, and source-paper alignment;
@@ -78,7 +78,9 @@ Behavior:
 
 - verifies before alleging misconduct or leakage;
 - does not substitute BibTeX key closure, citation-count statistics, keyword matching, or spot checks for claim--source verification;
-- produces `03-citation-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records inaccessible or only partially supporting sources;
+- verifies title, complete ordered author list, year, venue/status, page range or article number, and DOI/arXiv/URL against authoritative records rather than trusting imported BibTeX;
+- treats a substantiated fabricated/nonexistent citation as an `S0` integrity blocker, while distinguishing it from an inaccessible source or a local metadata typo;
+- produces `03-citation-audit-ledger.md` with 100 percent disposition of bibliography entries and citation--source pairs and explicitly records every field mismatch, inaccessible source, and only partially supporting source;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - labels inference and uncertainty explicitly.
 
