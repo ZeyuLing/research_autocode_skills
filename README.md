@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  From literature discovery and idea refinement to experiment planning, manuscript development,<br>
+  From literature discovery and idea refinement to experiment design and execution, manuscript development,<br>
   scientific figures, adversarial review, and rebuttal.
 </p>
 
@@ -48,7 +48,7 @@ Research AutoCode Toolkit organizes reusable `SKILL.md` workflows around **resea
 
 | Layer | Responsibility | Examples |
 |---|---|---|
-| **Orchestrated workflows** | Coordinate multiple research stages, preserve state, and enforce quality gates | [idea2paper](idea2paper/), [academic-pipeline](academic-research-skills/academic-pipeline/), [autorun](autorun/) |
+| **Orchestrated workflows** | Coordinate multiple research stages, preserve state, and enforce quality gates | [idea2paper](idea2paper/), [idea2experiment](idea2experiment/), [academic-pipeline](academic-research-skills/academic-pipeline/) |
 | **Focused research tools** | Solve a bounded task such as literature search, paper editing, figure creation, layout repair, or debugging | [ai-literature-survey](ai-literature-survey/), [paperjury](paperjury/), [latex-float-layout](latex-float-layout/), [autodebug](autodebug/) |
 | **Project adapters** | Connect a specific database, data pipeline, or storage service | [mysql-motiondata](mysql-motiondata/), [query-motion-database](query-motion-database/), [sync-ceph-data](sync-ceph-data/) |
 
@@ -80,6 +80,7 @@ The toolkit supports the loop rather than treating publication as the end of a l
 | Research outcome | Start here | Typical deliverable |
 |---|---|---|
 | Turn an early idea into an experiment-ready manuscript scaffold | [idea2paper](idea2paper/) | Venue-aware LaTeX project, literature corpus, refined method, experiment matrix, figures, and explicit verification TODOs |
+| Turn an idea, repository, data, and compute budget into audited experiments | [idea2experiment](idea2experiment/) | Gated experiment DAG, scale/data/module/parameter studies, immutable runs, failure diagnoses, and claim-linked evidence |
 | Build an auditable research-to-writing workflow | [academic-research-skills](academic-research-skills/) | Research synthesis, manuscript, integrity checks, multi-perspective review, and revision |
 | Map prior art or repair Related Work | [ai-literature-survey](ai-literature-survey/) | High-recall, source-audited literature corpus and coverage report |
 | Track important papers in a research area | [track-ai-papers](track-ai-papers/) | Screened and ranked research-radar digest |
@@ -142,6 +143,7 @@ Bundles such as [academic-research-skills](academic-research-skills/), [Skill-Re
 There is intentionally no root-level `pip install` or `npm install` command. Examples of component-scoped requirements include:
 
 - [idea2paper](idea2paper/) — Python 3.10+, `pdfplumber`, LaTeX/PDF tooling, `ai-literature-survey`, `paperjury`, and Codex's system `imagegen`;
+- [idea2experiment](idea2experiment/) — Python 3.10+ for the orchestration core, plus the training framework, data access, accelerator runtime, and scheduler required by the selected project adapter;
 - [paperjury](paperjury/) — its own Node.js/toolkit requirements;
 - [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) — its own Python CLI environment;
 - [Skill-Research-Figure](Skill-Research-Figure/) — LaTeX/TikZ or Blender only for the selected rendering path.
@@ -152,6 +154,7 @@ When a hard dependency is unavailable, a workflow should report the missing requ
 
 ```text
 Use idea2paper to turn this motion-generation idea into an experiment-ready manuscript scaffold.
+Use idea2experiment to audit this repository, pass deterministic and tiny-overfit gates, then run model-scale, data-scale, module, and parameter studies with failure-driven replanning.
 Survey explicit motion planning and text-to-motion prior art, with source and code availability.
 Deep-read this paper and map each module to the challenge and evidence it addresses.
 Run a pre-submission adversarial review of this CVPR LaTeX project and apply safe edits.
@@ -163,11 +166,12 @@ Repair appendix float clustering and large single-column blank regions.
 | Workflow | Composition | What it is designed to produce |
 |---|---|---|
 | **Idea → manuscript scaffold** | `idea2paper` → `ai-literature-survey` → agent deliberation → `imagegen` → `paperjury` → PDF/layout checks | A submission-oriented draft with an explicit evidence corpus, method rationale, experiment plan, figures, and verification TODOs |
+| **Idea → audited experiments** | `idea2experiment` → repository/data audit → sanity and tiny-overfit gates → baseline reproduction → scale/data/module/parameter studies → independent audit | Immutable runs and claim-linked measured evidence, including preserved failures and explicit scientific replanning |
 | **Evidence → academic manuscript** | `deep-research` → `academic-paper` → integrity checks → `academic-paper-reviewer` → revision | A structured research synthesis and manuscript with repeated review passes |
 | **Pre-submission hardening** | `research-paper-writing` → `paperjury` → `latex-float-layout` | Clearer argumentation, adversarial issue discovery, controlled edits, and render-verified layout repair |
 | **Research engineering** | `generate-docs` / `autorun` → `autodebug` → acceptance checks | Better project context, dependency-aware execution, and evidence-driven debugging |
 
-Predicted experimental values are not measured results. Workflows that use forecasts must bind them to visible replacement TODOs; authors remain responsible for running experiments and verifying every claim before submission.
+Predicted experimental values are not measured results. Workflows that use forecasts must bind them to visible replacement TODOs. `idea2experiment` is the execution-side bridge: only completed, protocol-bound, audited runs may replace those targets with measured evidence.
 
 ## Tool map
 
@@ -181,6 +185,16 @@ Predicted experimental values are not measured results. Workflows that use forec
 | [paper-read](.claude/skills/paper-read/) | Seven-question deep reading of one paper |
 | [nature-paper-card](nature-paper-card/) | Evidence-grounded 16-section Paper Card with module logic and conclusion boundaries |
 | [deep-research](academic-research-skills/deep-research/) | Multi-agent research, systematic review, fact-checking, and methodology design |
+
+</details>
+
+<details>
+<summary><strong>Experiment design, execution, and debugging</strong></summary>
+
+| Component | Purpose |
+|---|---|
+| [idea2experiment](idea2experiment/) | Convert an idea, code, data, and compute into a gated DAG covering sanity checks, baseline reproduction, model/data scaling, modules, parameters, confirmatory runs, and audit |
+| [autodebug](autodebug/) | Diagnose unexpected experimental behavior through a persistent, hypothesis-driven ReAct loop |
 
 </details>
 
@@ -222,7 +236,6 @@ Inside an `idea2paper` run, its `imagegen`-only figure contract takes precedence
 
 | Component | Purpose |
 |---|---|
-| [autodebug](autodebug/) | Hypothesis-driven ReAct debugging with persistent research notes |
 | [autorun](autorun/) | Schedule and execute TODO queues with SQLite state and acceptance review |
 | [full-auto](full-auto/) | Run a bounded task through planning, execution, self-review, and repair |
 | [generate-docs](generate-docs/) | Generate incremental, layered project documentation |

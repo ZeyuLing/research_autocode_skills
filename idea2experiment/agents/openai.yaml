@@ -1,0 +1,4 @@
+interface:
+  display_name: "Idea to Experiment"
+  short_description: "Turn a research idea into audited experiments"
+  default_prompt: "Use $idea2experiment to turn my idea, code, data, and compute into a complete audited experiment program."

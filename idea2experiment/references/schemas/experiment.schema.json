@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-autocode.local/idea2experiment/experiment.schema.json",
+  "title": "Idea2Experiment Experiment Node",
+  "type": "object",
+  "required": [
+    "id",
+    "family",
+    "hypothesis",
+    "parents",
+    "status",
+    "fidelity",
+    "config",
+    "expected_outputs",
+    "promotion_gate"
+  ],
+  "properties": {
+    "id": {"type": "string", "pattern": "^[A-Z][A-Z0-9_]*$"},
+    "family": {
+      "enum": [
+        "deterministic_sanity",
+        "tiny_overfit",
+        "negative_control",
+        "baseline_reproduction",
+        "pilot",
+        "model_scaling",
+        "data_scaling",
+        "data_mixture",
+        "module_study",
+        "parameter_search",
+        "parameter_sensitivity",
+        "confirmatory",
+        "robustness",
+        "efficiency",
+        "qualitative",
+        "human_evaluation",
+        "diagnostic",
+        "independent_audit",
+        "claim_sync"
+      ]
+    },
+    "hypothesis": {"type": "string", "minLength": 1},
+    "anti_claim": {"type": "string"},
+    "claim_ids": {"type": "array", "items": {"type": "string"}},
+    "parents": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+    "status": {
+      "enum": [
+        "PLANNED",
+        "PREFLIGHT",
+        "SMOKE",
+        "QUEUED",
+        "RUNNING",
+        "EVALUATING",
+        "AUDITING",
+        "DONE",
+        "FAILED_ENGINEERING",
+        "FAILED_SCIENTIFIC",
+        "INVALID_PROTOCOL",
+        "BLOCKED",
+        "CANCELLED"
+      ]
+    },
+    "fidelity": {
+      "enum": ["static", "deterministic", "tiny_overfit", "small_subset", "short_schedule", "full_single_seed", "full_multi_seed", "cross_setting", "clean_reproduction"]
+    },
+    "seed": {"type": ["integer", "null"]},
+    "subset_seed": {"type": ["integer", "null"]},
+    "config": {"type": "object"},
+    "resources": {"type": "object"},
+    "expected_outputs": {"type": "array", "items": {"type": "string"}},
+    "promotion_gate": {"type": "array", "items": {"type": "string"}},
+    "protocol_hash": {"type": ["string", "null"]},
+    "diagnostic_for": {"type": ["string", "null"]}
+  },
+  "additionalProperties": true
+}

@@ -1,0 +1,162 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-autocode.local/idea2experiment/study.schema.json",
+  "title": "Idea2Experiment Study",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "study_id",
+    "idea_version",
+    "code_repo",
+    "claims",
+    "baselines",
+    "model_scaling",
+    "data_scaling",
+    "modules",
+    "module_study",
+    "hyperparameters",
+    "parameter_study",
+    "statistics",
+    "adapter"
+  ],
+  "properties": {
+    "schema_version": {"const": 1},
+    "study_id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+    "idea_version": {"type": "integer", "minimum": 0},
+    "code_repo": {"type": ["string", "null"]},
+    "data_inputs": {"type": "array", "items": {"type": "string"}},
+    "claims": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "text", "type", "required_families"],
+        "properties": {
+          "id": {"type": "string"},
+          "text": {"type": "string", "minLength": 1},
+          "type": {
+            "enum": ["performance", "mechanism", "scaling", "data", "efficiency", "robustness", "qualitative", "negative"]
+          },
+          "anti_claim": {"type": "string"},
+          "required_families": {"type": "array", "items": {"type": "string"}},
+          "primary_metric": {"type": ["string", "null"]},
+          "minimum_effect": {"type": ["number", "null"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "baselines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "primary"],
+        "properties": {
+          "id": {"type": "string"},
+          "primary": {"type": "boolean"},
+          "source": {"type": "string"},
+          "expected_range": {"type": ["array", "null"], "items": {"type": "number"}, "minItems": 2, "maxItems": 2}
+        },
+        "additionalProperties": true
+      }
+    },
+    "model_scaling": {"$ref": "#/$defs/family"},
+    "data_scaling": {"$ref": "#/$defs/family"},
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "core"],
+        "properties": {
+          "id": {"type": "string"},
+          "core": {"type": "boolean"},
+          "mechanism": {"type": "string"},
+          "previous_work_alternative": {"type": ["string", "null"]}
+        },
+        "additionalProperties": true
+      }
+    },
+    "module_study": {"$ref": "#/$defs/disposition"},
+    "module_interactions": {
+      "type": "array",
+      "items": {"type": "array", "items": {"type": "string"}, "minItems": 2, "maxItems": 2}
+    },
+    "hyperparameters": {
+      "type": "object",
+      "required": ["scientific", "nuisance"],
+      "properties": {
+        "scientific": {"type": "array", "items": {"$ref": "#/$defs/parameter"}},
+        "nuisance": {"type": "array", "items": {"$ref": "#/$defs/parameter"}}
+      },
+      "additionalProperties": true
+    },
+    "parameter_study": {"$ref": "#/$defs/disposition"},
+    "statistics": {
+      "type": "object",
+      "required": ["primary_metric", "direction", "seed_policy", "final_test_policy"],
+      "properties": {
+        "primary_metric": {"type": ["string", "null"]},
+        "direction": {"enum": ["maximize", "minimize", "unresolved"]},
+        "seed_policy": {"type": "object"},
+        "final_test_policy": {"enum": ["frozen", "unresolved"]}
+      },
+      "additionalProperties": true
+    },
+    "adapter": {"type": ["string", "null"]},
+    "additional_families": {
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {"enum": ["robustness", "efficiency", "qualitative", "human_evaluation"]},
+          {
+            "type": "object",
+            "required": ["family"],
+            "properties": {
+              "family": {"enum": ["robustness", "efficiency", "qualitative", "human_evaluation"]},
+              "id": {"type": "string"},
+              "status": {"enum": ["required", "blocked", "not_applicable"]},
+              "hypothesis": {"type": "string"},
+              "claim_ids": {"type": "array", "items": {"type": "string"}},
+              "fidelity": {"type": "string"},
+              "config": {"type": "object"},
+              "expected_outputs": {"type": "array", "items": {"type": "string"}}
+            },
+            "additionalProperties": true
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "disposition": {
+      "type": "object",
+      "required": ["status", "reason"],
+      "properties": {
+        "status": {"enum": ["required", "not_applicable", "blocked", "unresolved"]},
+        "reason": {"type": "string"}
+      },
+      "additionalProperties": true
+    },
+    "family": {
+      "type": "object",
+      "required": ["status", "reason", "protocols", "rungs"],
+      "properties": {
+        "status": {"enum": ["required", "not_applicable", "blocked", "unresolved"]},
+        "reason": {"type": "string"},
+        "axes": {"type": "array", "items": {"type": "string"}},
+        "protocols": {"type": "array", "items": {"type": "string"}},
+        "rungs": {"type": "array", "items": {"type": "object"}}
+      },
+      "additionalProperties": true
+    },
+    "parameter": {
+      "type": "object",
+      "required": ["name", "values"],
+      "properties": {
+        "name": {"type": "string"},
+        "values": {"type": "array", "minItems": 1},
+        "scale": {"enum": ["linear", "log", "categorical"]}
+      },
+      "additionalProperties": true
+    }
+  },
+  "additionalProperties": true
+}

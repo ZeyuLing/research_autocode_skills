@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://research-autocode.local/idea2experiment/adapter.schema.json",
+  "title": "Idea2Experiment Adapter",
+  "type": "object",
+  "required": ["version", "name", "working_directory", "commands", "required_outputs"],
+  "properties": {
+    "version": {"const": 1},
+    "name": {"type": "string", "minLength": 1},
+    "working_directory": {"type": "string"},
+    "environment": {
+      "type": "object",
+      "additionalProperties": {"type": "string"}
+    },
+    "environment_from_host": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "record_environment_keys": {
+      "type": "array",
+      "items": {"type": "string"},
+      "uniqueItems": true
+    },
+    "commands": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "array",
+        "items": {"type": "string"},
+        "minItems": 1
+      }
+    },
+    "required_outputs": {"type": "array", "items": {"type": "string"}},
+    "protected_paths": {"type": "array", "items": {"type": "string"}},
+    "timeout_seconds": {"type": "integer", "minimum": 0}
+  },
+  "additionalProperties": true
+}

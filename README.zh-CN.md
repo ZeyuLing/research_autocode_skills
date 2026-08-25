@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  覆盖文献发现、idea 打磨、实验规划、论文写作、科研作图、<br>
+  覆盖文献发现、idea 打磨、实验设计与执行、论文写作、科研作图、<br>
   对抗性评审与 rebuttal。
 </p>
 
@@ -50,7 +50,7 @@ Research AutoCode Toolkit 围绕**科研结果**组织可复用的 `SKILL.md` �
 
 | 层次 | 职责 | 示例 |
 |---|---|---|
-| **端到端编排工作流** | 协调多个科研阶段、保存状态并执行质量门禁 | [idea2paper](idea2paper/)、[academic-pipeline](academic-research-skills/academic-pipeline/)、[autorun](autorun/) |
+| **端到端编排工作流** | 协调多个科研阶段、保存状态并执行质量门禁 | [idea2paper](idea2paper/)、[idea2experiment](idea2experiment/)、[academic-pipeline](academic-research-skills/academic-pipeline/) |
 | **单点科研工具** | 解决文献检索、论文修改、科研作图、排版修复或调试等边界明确的问题 | [ai-literature-survey](ai-literature-survey/)、[paperjury](paperjury/)、[latex-float-layout](latex-float-layout/)、[autodebug](autodebug/) |
 | **项目适配器** | 连接特定数据库、数据管线或存储服务 | [mysql-motiondata](mysql-motiondata/)、[query-motion-database](query-motion-database/)、[sync-ceph-data](sync-ceph-data/) |
 
@@ -86,6 +86,7 @@ flowchart LR
 | 你希望得到什么 | 推荐入口 | 典型交付物 |
 |---|---|---|
 | 把早期 idea 推进为实验就绪的论文骨架 | [idea2paper](idea2paper/) | 会议模板、LaTeX 项目、文献语料、细化方法、实验矩阵、图表和显式验证 TODO |
+| 把 idea、代码仓库、数据和算力预算推进为可审计实验 | [idea2experiment](idea2experiment/) | 带门禁的实验 DAG、模型/数据 scale、模块/参数研究、不可变 run、失败诊断和论断证据 |
 | 建立可审计的“研究到写作”流程 | [academic-research-skills](academic-research-skills/) | 研究综合、论文、完整性检查、多视角评审和修订 |
 | 梳理 prior art 或修复 Related Work | [ai-literature-survey](ai-literature-survey/) | 高召回、来源可审计的文献语料与覆盖报告 |
 | 持续追踪某个方向的重要论文 | [track-ai-papers](track-ai-papers/) | 经过筛选和排序的研究雷达摘要 |
@@ -150,6 +151,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 仓库有意不提供根级 `pip install` 或 `npm install` 命令。组件级依赖示例：
 
 - [idea2paper](idea2paper/)——Python 3.10+、`pdfplumber`、LaTeX/PDF 工具、`ai-literature-survey`、`paperjury` 和 Codex 系统 `imagegen`；
+- [idea2experiment](idea2experiment/)——编排核心需要 Python 3.10+；训练框架、数据访问、加速器运行时和调度器则由具体项目适配器决定；
 - [paperjury](paperjury/)——使用自己的 Node.js/工具链依赖；
 - [image-to-editable-ppt-skill](image-to-editable-ppt-skill/)——使用自己的 Python CLI 环境；
 - [Skill-Research-Figure](Skill-Research-Figure/)——仅在选择对应路径时需要 LaTeX/TikZ 或 Blender。
@@ -160,6 +162,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 
 ```text
 用 idea2paper 把这个 motion generation idea 写成实验就绪的论文骨架。
+用 idea2experiment 审计这个代码仓库，先通过确定性与极小数据过拟合门禁，再执行模型 scale、数据 scale、模块和参数实验，并根据失败证据重新规划。
 调研显式动作规划与 text-to-motion 的相关工作，并记录来源和代码开放状态。
 精读这篇论文，梳理每个模块解决的 challenge 及其证据。
 对这个 CVPR LaTeX 项目做投稿前对抗性评审，并应用安全修改。
@@ -171,11 +174,12 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | 工作流 | 组合方式 | 设计目标 |
 |---|---|---|
 | **Idea → 论文骨架** | `idea2paper` → `ai-literature-survey` → Agent 讨论 → `imagegen` → `paperjury` → PDF/排版检查 | 生成带证据语料、方法论证、实验规划、图表和验证 TODO 的投稿导向草稿 |
+| **Idea → 可审计实验** | `idea2experiment` → 代码/数据审计 → sanity 与极小数据过拟合门禁 → baseline 复现 → 模型/数据 scale、模块/参数研究 → 独立审计 | 生成不可变、论断关联的实测证据，同时保留失败并显式记录科研重规划 |
 | **证据 → 学术论文** | `deep-research` → `academic-paper` → 完整性检查 → `academic-paper-reviewer` → 修订 | 形成结构化研究综合与经过多轮评审的论文 |
 | **投稿前加固** | `research-paper-writing` → `paperjury` → `latex-float-layout` | 加强论证、发现对抗性问题、实施受控修改并做渲染验证的排版修复 |
 | **科研工程** | `generate-docs` / `autorun` → `autodebug` → 验收检查 | 建立项目上下文、依赖感知执行和证据驱动调试 |
 
-预测实验数字不是实测结果。使用预测值的工作流必须将其绑定到显式替换 TODO；作者仍需亲自完成实验并在投稿前核验每一项论断。
+预测实验数字不是实测结果。使用预测值的工作流必须将其绑定到显式替换 TODO。`idea2experiment` 是执行侧桥梁：只有完成运行、绑定冻结协议且通过审计的结果，才能把这些目标替换为实测证据。
 
 <a id="tool-map"></a>
 
@@ -191,6 +195,16 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | [paper-read](.claude/skills/paper-read/) | 单篇论文七问精读 |
 | [nature-paper-card](nature-paper-card/) | 包含模块逻辑和结论边界的证据约束 16 节 Paper Card |
 | [deep-research](academic-research-skills/deep-research/) | 多 Agent 深度研究、系统综述、事实核查与方法学设计 |
+
+</details>
+
+<details>
+<summary><strong>实验设计、执行与调试</strong></summary>
+
+| 组件 | 作用 |
+|---|---|
+| [idea2experiment](idea2experiment/) | 将 idea、代码、数据和算力转成带门禁的实验 DAG，覆盖 sanity、baseline 复现、模型/数据 scale、模块、参数、确认性运行与审计 |
+| [autodebug](autodebug/) | 通过持久化、假设驱动的 ReAct 闭环诊断不符合预期的实验行为 |
 
 </details>
 
@@ -232,7 +246,6 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 
 | 组件 | 作用 |
 |---|---|
-| [autodebug](autodebug/) | 带持久化研究记录的假设驱动 ReAct 调试 |
 | [autorun](autorun/) | 使用 SQLite 状态和验收评审调度、执行 TODO 队列 |
 | [full-auto](full-auto/) | 对边界明确的任务执行规划、实现、自检和修复 |
 | [generate-docs](generate-docs/) | 增量生成分层项目文档 |
