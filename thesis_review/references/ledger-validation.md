@@ -28,7 +28,7 @@ The Stage-P citation inventory is mechanical. `AdjacentPDFText` is not a semanti
 
 - `02-page-layout-ledger.csv`: `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence,PDFSHA256`
 
-The Page-ID set must exactly equal `00-page-inventory.csv`, and `PhysicalPage` must form `1..N` with no gaps or duplicates. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode. `RenderDPI` normally follows the 160--200 dpi audit target; the validator accepts 120--600 only as a mechanical sanity range. `RenderArtifactIDHash` is the exact 64-hex render hash, optionally prefixed by the matching PageID. The Markdown projection must contain exactly the CSV Page-ID set.
+The Page-ID set must exactly equal `00-page-inventory.csv`; `PhysicalPage` must form `1..N` with no gaps or duplicates; and `Pnnnn` must map to physical page `nnnn` in both inventories. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode. `RenderDPI` normally follows the 160--200 dpi audit target; the validator accepts 120--600 only as a mechanical sanity range. Retain one decodable PNG as `page-renders/<PageID>.png`; its dimensions must match the frozen PDF page at the declared DPI, and `RenderArtifactIDHash` is that file's exact 64-hex SHA-256, optionally prefixed by the matching PageID. Each Markdown master must contain exactly one complete pipe table with its documented ID header, an immediately following separator row, consistent column counts, and every corresponding CSV ID exactly once in that table's ID column. Ledger IDs must not recur in prose, code fences, another column, or another table; prose mentions and standalone pipe rows do not count as ledger rows and invalidate the projection.
 
 ### Bibliography audit
 
@@ -38,13 +38,13 @@ For each `ReferenceID`, the `(ReferenceID,Field)` key is unique and the mandator
 
 `type,title,ordered_authors,year,venue,publication_status,volume,issue,pages_or_article_number,doi,arxiv_id,arxiv_version,url,access_date,isbn_or_other_persistent_id,existence,retraction_withdrawal_correction_superseding`.
 
-`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records an `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. The Markdown projection must contain exactly the CSV Reference-ID set.
+`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records an `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. The Markdown projection must contain every CSV ReferenceID exactly once as a complete table cell.
 
 ### Citation-claim audit
 
 - `04-citation-claim-audit-ledger.csv`: `PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`
 
-The Pair-ID set must exactly equal `00-citation-inventory.csv`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`. A substantive support verdict other than `unverifiable` requires an `http(s)` content endpoint in `ContentSourceOpened` and a page/section/table/figure/equation/record-level `ExactSourceLocator`; publication metadata alone is acceptable only when the attached proposition is publication metadata. The Markdown projection must contain exactly the CSV Pair-ID set.
+The Pair-ID set must exactly equal `00-citation-inventory.csv`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`. A substantive support verdict other than `unverifiable` requires an `http(s)` content endpoint in `ContentSourceOpened` and a structured locator such as `page 14`, `section 3.2`, `Table 2`, `Figure 4`, `Equation 7`, `Abstract`, or `publisher record: DOI ...`; a bare word such as `section` is invalid. Publication metadata alone is acceptable only when the attached proposition is publication metadata. The Markdown projection must contain every CSV PairID exactly once as a complete table cell.
 
 ### Chair and summary reconciliation
 
@@ -69,7 +69,7 @@ Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these to
 
 ## 3. Validation command
 
-Run the validator after Stage S in an environment with `pypdf` available (the bundled Codex workspace Python includes it; with `uv`, use `uv run --with pypdf`):
+Run the validator after Stage S in an environment with `pypdf` and Pillow available (the bundled Codex workspace Python includes both; with `uv`, use `uv run --with pypdf --with pillow`):
 
 ```text
 python scripts/validate_review_bundle.py <round-directory> --write-report <round-directory>/95-bundle-validation.md

@@ -15,6 +15,9 @@ thesis-review-round-YYYYMMDD/
   01-policy-basis.md
   02-page-layout-ledger.md
   02-page-layout-ledger.csv
+  page-renders/                   # mandatory PNG, one exact hashed render per PageID
+    P0001.png
+    ...
   03-bibliography-audit-ledger.md
   03-bibliography-audit-ledger.csv
   04-citation-claim-audit-ledger.md

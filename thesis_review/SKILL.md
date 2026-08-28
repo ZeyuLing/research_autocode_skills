@@ -298,7 +298,7 @@ Run a fresh isolated AI-style assessment on every revised frozen artifact. Do no
 A review is complete only when it includes:
 
 - the frozen manifest and policy basis;
-- the completed Markdown and CSV physical-page layout ledgers and suspect-page dispositions;
+- the completed Markdown and CSV physical-page layout ledgers and suspect-page dispositions, plus exactly one retained checksum-bound PNG in `page-renders/<PageID>.png` for every physical page;
 - the completed Markdown and CSV bibliography-integrity and citation-claim ledgers, with deterministic entry/Pair IDs, reconciled counts, and no silent unchecked rows;
 - all independent reviewer reports required for the degree level;
 - a complete Gate A--I whole-thesis matrix, whole-thesis synthesis, and persona-weighted deep review in every R-numbered report; ledger ownership cannot substitute for any of them;

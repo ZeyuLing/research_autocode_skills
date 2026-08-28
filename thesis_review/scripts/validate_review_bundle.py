@@ -14,7 +14,9 @@ import csv
 import hashlib
 import json
 import re
+import struct
 import sys
+import zlib
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -25,9 +27,17 @@ HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
 PUBLIC_URL_RE = re.compile(r"https?://[^\s;,]+", re.IGNORECASE)
 SOURCE_LOCATOR_RE = re.compile(
-    r"(?:\b(?:p{1,2}|pages?|section|sec|abstract|table|figure|equation|"
-    r"theorem|lemma|appendix|supplement|paragraph|heading|lines?|record|"
-    r"metadata|anchor)\b|§|页|节|表|图|式|定理|附录)",
+    r"(?:"
+    r"\b(?:p{1,2}\.?|pages?|section|sec\.?|table|figure|equation|"
+    r"theorem|lemma|appendix|supplement|paragraph|heading|lines?|anchor)"
+    r"\s*[#§:]?\s*[A-Za-z]?\d+(?:\.\d+)*(?:\s*[-–]\s*\d+(?:\.\d+)*)?\b"
+    r"|\b(?:abstract|introduction|conclusion|methods?|results?)\b"
+    r"|\b(?:metadata|publisher|proceedings|official)\s+record\s*[:#]?\s*\S+"
+    r"|§\s*\d+(?:\.\d+)*"
+    r"|第\s*\d+(?:\.\d+)*\s*[页节]"
+    r"|[表图式]\s*\(?\s*\d+(?:\.\d+)*(?:-\d+)?\s*\)?"
+    r"|附录\s*[A-Za-z0-9]+"
+    r")",
     re.IGNORECASE,
 )
 PAGE_ID_RE = re.compile(r"^P(\d{4})$")
@@ -138,15 +148,15 @@ def sha256(path: Path) -> str:
 
 def validate_pdf_structure_and_pages(
     path: Path, declared_pages: int, errors: list[str]
-) -> None:
+) -> list[tuple[float, float]]:
     try:
         with path.open("rb") as handle:
             if handle.read(5) != b"%PDF-":
                 errors.append(f"{path.name}: invalid PDF header")
-                return
+                return []
     except OSError as exc:
         errors.append(f"{path.name}: cannot read PDF header: {exc}")
-        return
+        return []
     try:
         from pypdf import PdfReader
     except ImportError:
@@ -154,13 +164,20 @@ def validate_pdf_structure_and_pages(
             "validator dependency missing: install pypdf or use the bundled "
             "workspace Python runtime"
         )
-        return
+        return []
     try:
         reader = PdfReader(str(path), strict=False)
         actual_pages = len(reader.pages)
+        page_sizes: list[tuple[float, float]] = []
+        for page in reader.pages:
+            width = float(page.mediabox.width)
+            height = float(page.mediabox.height)
+            if int(page.rotation or 0) % 180:
+                width, height = height, width
+            page_sizes.append((width, height))
     except Exception as exc:  # pypdf exposes several parser exception types
         errors.append(f"{path.name}: cannot parse frozen PDF: {exc}")
-        return
+        return []
     if actual_pages < 1:
         errors.append(f"{path.name}: parsed PDF has no pages")
     if declared_pages and actual_pages != declared_pages:
@@ -168,6 +185,7 @@ def validate_pdf_structure_and_pages(
             f"{path.name}: parsed page count {actual_pages} != "
             f"physical_page_count {declared_pages}"
         )
+    return page_sizes
 
 
 def validate_iso_date(value: str) -> bool:
@@ -182,6 +200,7 @@ def validate_markdown_id_projection(
     path: Path,
     expected_ids: set[str],
     id_pattern: re.Pattern[str],
+    id_header_aliases: set[str],
     label: str,
     errors: list[str],
 ) -> None:
@@ -192,8 +211,162 @@ def validate_markdown_id_projection(
         return
     if len(text.strip()) < 32:
         errors.append(f"{path.name}: Markdown master is empty or shell-only")
-    actual_ids = {match.group(0) for match in id_pattern.finditer(text)}
+
+    def parse_pipe_row(line: str) -> list[str] | None:
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            return None
+        return [
+            cell.replace(r"\|", "|").strip()
+            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
+        ]
+
+    def is_separator_row(cells: list[str], width: int) -> bool:
+        return (
+            len(cells) == width
+            and all(re.fullmatch(r":?-{3,}:?", cell) for cell in cells)
+        )
+
+    lines = text.splitlines()
+    target_tables: list[tuple[int, list[str], int]] = []
+    folded_aliases = {alias.casefold() for alias in id_header_aliases}
+    for index in range(len(lines) - 1):
+        header = parse_pipe_row(lines[index])
+        separator = parse_pipe_row(lines[index + 1])
+        if header is None or separator is None or not is_separator_row(separator, len(header)):
+            continue
+        id_columns = [
+            column
+            for column, cell in enumerate(header)
+            if cell.casefold() in folded_aliases
+        ]
+        if len(id_columns) == 1:
+            target_tables.append((index, header, id_columns[0]))
+    if len(target_tables) != 1:
+        errors.append(
+            f"{path.name}: expected exactly one complete Markdown table with "
+            f"ID header {sorted(id_header_aliases)}, found {len(target_tables)}"
+        )
+        compare_sets(f"{label} Markdown projection", expected_ids, set(), errors)
+        return
+
+    header_index, header, id_column = target_tables[0]
+    row_counts: Counter[str] = Counter()
+    data_row_count = 0
+    target_data_lines: set[int] = set()
+    for line_number in range(header_index + 2, len(lines)):
+        cells = parse_pipe_row(lines[line_number])
+        if cells is None:
+            break
+        target_data_lines.add(line_number)
+        data_row_count += 1
+        if len(cells) != len(header):
+            errors.append(
+                f"{path.name}:{line_number + 1}: Markdown table row has "
+                f"{len(cells)} cells; expected {len(header)}"
+            )
+            continue
+        identifier = cells[id_column]
+        if not id_pattern.fullmatch(identifier):
+            errors.append(
+                f"{path.name}:{line_number + 1}: ID-column value "
+                f"{identifier!r} does not match the required ID format"
+            )
+            continue
+        row_counts[identifier] += 1
+        for column, cell in enumerate(cells):
+            if column == id_column:
+                continue
+            misplaced = sorted(set(id_pattern.findall(cell)))
+            if misplaced:
+                errors.append(
+                    f"{path.name}:{line_number + 1}: IDs must occur only in "
+                    f"the designated ID column, found {misplaced}"
+                )
+    if data_row_count == 0:
+        errors.append(f"{path.name}: target Markdown table has no data rows")
+    for line_number, line in enumerate(lines):
+        if line_number in target_data_lines:
+            continue
+        outside_ids = sorted(set(id_pattern.findall(line)))
+        if outside_ids:
+            errors.append(
+                f"{path.name}:{line_number + 1}: IDs outside the target "
+                f"Markdown table are forbidden: {outside_ids}"
+            )
+    actual_ids = set(row_counts)
     compare_sets(f"{label} Markdown projection", expected_ids, actual_ids, errors)
+    duplicates = sorted(identifier for identifier, count in row_counts.items() if count != 1)
+    if duplicates:
+        errors.append(
+            f"{path.name}: IDs must occur in exactly one Markdown table row: {duplicates}"
+        )
+
+
+def read_valid_png_dimensions(path: Path, errors: list[str]) -> tuple[int, int] | None:
+    try:
+        data = path.read_bytes()
+    except OSError as exc:
+        errors.append(f"{path.name}: cannot read render PNG: {exc}")
+        return None
+    if not data.startswith(b"\x89PNG\r\n\x1a\n"):
+        errors.append(f"{path.name}: invalid PNG signature")
+        return None
+    offset = 8
+    dimensions: tuple[int, int] | None = None
+    saw_idat = False
+    saw_iend = False
+    while offset + 12 <= len(data):
+        length = struct.unpack(">I", data[offset:offset + 4])[0]
+        chunk_type = data[offset + 4:offset + 8]
+        chunk_end = offset + 12 + length
+        if chunk_end > len(data):
+            errors.append(f"{path.name}: truncated PNG chunk")
+            return None
+        payload = data[offset + 8:offset + 8 + length]
+        declared_crc = struct.unpack(">I", data[offset + 8 + length:chunk_end])[0]
+        actual_crc = zlib.crc32(chunk_type + payload) & 0xFFFFFFFF
+        if declared_crc != actual_crc:
+            errors.append(f"{path.name}: PNG chunk CRC mismatch")
+            return None
+        if chunk_type == b"IHDR":
+            if length != 13 or dimensions is not None:
+                errors.append(f"{path.name}: invalid PNG IHDR")
+                return None
+            dimensions = struct.unpack(">II", payload[:8])
+        elif chunk_type == b"IDAT":
+            saw_idat = True
+        elif chunk_type == b"IEND":
+            saw_iend = True
+            break
+        offset = chunk_end
+    if dimensions is None or not saw_idat or not saw_iend:
+        errors.append(f"{path.name}: incomplete PNG render")
+        return None
+    try:
+        from PIL import Image
+    except ImportError:
+        errors.append(
+            "validator dependency missing: install Pillow or use the bundled "
+            "workspace Python runtime"
+        )
+        return None
+    try:
+        with Image.open(path) as image:
+            image.verify()
+        with Image.open(path) as image:
+            image.load()
+            decoded_dimensions = image.size
+    except Exception as exc:  # Pillow exposes several decoder exception types
+        errors.append(f"{path.name}: PNG pixels cannot be decoded: {exc}")
+        return None
+    if decoded_dimensions != dimensions:
+        errors.append(
+            f"{path.name}: decoded PNG dimensions {decoded_dimensions} do not "
+            f"match IHDR {dimensions}"
+        )
+        return None
+    return dimensions
 
 
 def is_placeholder(value: str) -> bool:
@@ -612,16 +785,16 @@ def validate_helper_bundle(
 
 def validate_process(
     root: Path, errors: list[str]
-) -> tuple[dict[str, Any], Path, str, int, int]:
+) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
     process_path = root / "00-process-parameters.json"
     try:
         process = json.loads(process_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"cannot read 00-process-parameters.json: {exc}")
-        return {}, root / "__missing__.pdf", "", 0, 0
+        return {}, root / "__missing__.pdf", "", 0, 0, []
     if not isinstance(process, dict):
         errors.append("00-process-parameters.json root must be an object")
-        return {}, root / "__missing__.pdf", "", 0, 0
+        return {}, root / "__missing__.pdf", "", 0, 0, []
     keys = set(process)
     if keys != PROCESS_KEYS:
         errors.append(
@@ -689,15 +862,21 @@ def validate_process(
         page_count = 0
     else:
         page_count = page_count_raw
-    if frozen_path.is_file():
+    pdf_page_sizes = (
         validate_pdf_structure_and_pages(frozen_path, page_count, errors)
+        if frozen_path.is_file()
+        else []
+    )
     degree = str(process.get("degree_level") or "").casefold()
     if degree not in {"doctorate", "masters"}:
         errors.append("degree_level must be doctorate or masters for a complete panel")
         reviewer_count = 0
     else:
         reviewer_count = 5 if degree == "doctorate" else 3
-    return process, frozen_path, expected_hash, page_count, reviewer_count
+    return (
+        process, frozen_path, expected_hash, page_count, reviewer_count,
+        pdf_page_sizes,
+    )
 
 
 def validate_rows_mandatory(
@@ -725,7 +904,7 @@ def main(argv: list[str] | None = None) -> int:
     root = args.round_directory.resolve()
     errors: list[str] = []
     warnings: list[str] = []
-    process, _frozen_path, expected_hash, page_count, reviewer_count = (
+    process, _frozen_path, expected_hash, page_count, reviewer_count, pdf_page_sizes = (
         validate_process(root, errors)
     )
     required_files = {
@@ -793,17 +972,49 @@ def main(argv: list[str] | None = None) -> int:
         )
     physical_inventory: list[int] = []
     physical_ledger: list[int] = []
+    render_dir = root / "page-renders"
+    if not render_dir.is_dir():
+        errors.append("missing required page-renders directory")
+        render_files: dict[str, Path] = {}
+    else:
+        render_files = {path.stem: path for path in render_dir.glob("*.png")}
+        unexpected = sorted(
+            path.name for path in render_dir.iterdir()
+            if not path.is_file() or path.suffix.casefold() != ".png"
+        )
+        if unexpected:
+            errors.append(f"page-renders: unexpected entries {unexpected}")
+    compare_sets(
+        "page render files", set(page_inv_by_id), set(render_files), errors
+    )
     for line, row in enumerate(page_inventory, start=2):
         try:
-            physical_inventory.append(int(row["PhysicalPage"]))
+            physical_page_number = int(row["PhysicalPage"])
+            physical_inventory.append(physical_page_number)
+            page_match = PAGE_ID_RE.fullmatch(row["PageID"])
+            if page_match and physical_page_number != int(page_match.group(1)):
+                errors.append(
+                    f"00-page-inventory.csv:{line}: {row['PageID']} must map "
+                    f"to PhysicalPage {int(page_match.group(1))}, got "
+                    f"{physical_page_number}"
+                )
         except ValueError:
             errors.append(
                 f"00-page-inventory.csv:{line}: invalid PhysicalPage "
                 f"{row['PhysicalPage']!r}"
             )
     for line, row in enumerate(page_ledger, start=2):
+        physical_page_number: int | None = None
         try:
-            physical_ledger.append(int(row["PhysicalPage"]))
+            physical_page_number = int(row["PhysicalPage"])
+            physical_ledger.append(physical_page_number)
+            page_match = PAGE_ID_RE.fullmatch(row["PageID"])
+            if page_match and physical_page_number != int(page_match.group(1)):
+                errors.append(
+                    f"02-page-layout-ledger.csv:{line}: {row['PageID']} must map "
+                    f"to PhysicalPage {int(page_match.group(1))}, got "
+                    f"{physical_page_number}"
+                )
         except ValueError:
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: invalid PhysicalPage "
@@ -834,6 +1045,7 @@ def main(argv: list[str] | None = None) -> int:
                 f"02-page-layout-ledger.csv:{line}: unresolved disposition "
                 f"{row['Disposition']!r}"
             )
+        render_dpi: int | None = None
         try:
             render_dpi = int(row["RenderDPI"])
             if render_dpi < 120 or render_dpi > 600:
@@ -852,6 +1064,33 @@ def main(argv: list[str] | None = None) -> int:
                 "RenderArtifactIDHash must be a 64-hex hash, optionally "
                 "prefixed by the matching PageID"
             )
+        render_path = render_files.get(row["PageID"])
+        if render_path is not None:
+            declared_match = HEX64_FIND_RE.search(row["RenderArtifactIDHash"])
+            if declared_match and sha256(render_path) != declared_match.group(1).upper():
+                errors.append(
+                    f"02-page-layout-ledger.csv:{line}: render-file hash mismatch "
+                    f"for {row['PageID']}"
+                )
+            dimensions = read_valid_png_dimensions(render_path, errors)
+            if (
+                dimensions is not None
+                and render_dpi is not None
+                and physical_page_number is not None
+                and 1 <= physical_page_number <= len(pdf_page_sizes)
+            ):
+                width_points, height_points = pdf_page_sizes[physical_page_number - 1]
+                expected_width = round(width_points * render_dpi / 72.0)
+                expected_height = round(height_points * render_dpi / 72.0)
+                if (
+                    abs(dimensions[0] - expected_width) > 2
+                    or abs(dimensions[1] - expected_height) > 2
+                ):
+                    errors.append(
+                        f"{render_path.name}: pixel dimensions {dimensions} do not "
+                        f"match page {physical_page_number} at {render_dpi} dpi "
+                        f"({expected_width}, {expected_height})"
+                    )
     expected_pages = list(range(1, page_count + 1)) if page_count else []
     if page_count and sorted(physical_inventory) != expected_pages:
         errors.append(
@@ -874,6 +1113,7 @@ def main(argv: list[str] | None = None) -> int:
         root / "02-page-layout-ledger.md",
         set(page_inv_by_id),
         re.compile(r"(?<![A-Za-z0-9])P\d{4}(?![A-Za-z0-9])"),
+        {"Page ID", "PageID"},
         "page ledger",
         errors,
     )
@@ -993,6 +1233,7 @@ def main(argv: list[str] | None = None) -> int:
         root / "03-bibliography-audit-ledger.md",
         set(bib_inv_by_id),
         re.compile(r"(?<![A-Za-z0-9])REF\d{4}(?![A-Za-z0-9])"),
+        {"Reference ID", "ReferenceID"},
         "bibliography ledger",
         errors,
     )
@@ -1127,6 +1368,7 @@ def main(argv: list[str] | None = None) -> int:
         root / "04-citation-claim-audit-ledger.md",
         set(citation_inv_by_pair),
         re.compile(r"(?<![A-Za-z0-9])C\d{4}-S\d{2}(?![A-Za-z0-9])"),
+        {"Pair ID", "PairID"},
         "citation-claim ledger",
         errors,
     )

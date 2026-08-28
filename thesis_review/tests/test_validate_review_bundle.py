@@ -3,10 +3,12 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import struct
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 from pypdf import PdfWriter
@@ -83,6 +85,48 @@ def read_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
     with path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         return list(reader.fieldnames or []), list(reader)
+
+
+def write_grayscale_png(path: Path, width: int, height: int) -> None:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    raw = (b"\x00" + b"\xff" * width) * height
+    payload = (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(
+            b"IHDR",
+            struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0),
+        )
+        + chunk(b"IDAT", zlib.compress(raw, 9))
+        + chunk(b"IEND", b"")
+    )
+    path.write_bytes(payload)
+
+
+def write_empty_idat_png(path: Path, width: int, height: int) -> None:
+    def chunk(kind: bytes, payload: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(payload))
+            + kind
+            + payload
+            + struct.pack(">I", zlib.crc32(kind + payload) & 0xFFFFFFFF)
+        )
+
+    path.write_bytes(
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(
+            b"IHDR",
+            struct.pack(">IIBBBBB", width, height, 8, 0, 0, 0, 0),
+        )
+        + chunk(b"IDAT", b"")
+        + chunk(b"IEND", b"")
+    )
 
 
 class ValidateReviewBundleTests(unittest.TestCase):
@@ -165,19 +209,30 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "prior-round or author-side information.\n"
         )
 
-    def build_bundle(self, root: Path) -> str:
+    def build_bundle(self, root: Path, page_count: int = 1) -> str:
         pdf = root / "frozen-thesis.pdf"
         writer = PdfWriter()
-        writer.add_blank_page(width=595.28, height=841.89)
+        for _ in range(page_count):
+            writer.add_blank_page(width=595.28, height=841.89)
         with pdf.open("wb") as handle:
             writer.write(handle)
         digest = hashlib.sha256(pdf.read_bytes()).hexdigest().upper()
+        render_dir = root / "page-renders"
+        render_dir.mkdir()
+        render_digests: dict[str, str] = {}
+        for physical_page in range(1, page_count + 1):
+            page_id = f"P{physical_page:04d}"
+            render_path = render_dir / f"{page_id}.png"
+            write_grayscale_png(render_path, 1654, 2339)
+            render_digests[page_id] = hashlib.sha256(
+                render_path.read_bytes()
+            ).hexdigest().upper()
         process = {
             "round_id": "fixture",
             "retry_id": "r1",
             "frozen_pdf_file": pdf.name,
             "selected_pdf_sha256": digest,
-            "physical_page_count": 1,
+            "physical_page_count": page_count,
             "degree_level": "masters",
             "degree_type": "academic",
             "institution": None,
@@ -201,7 +256,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "# Policy\n\n" + self.declaration(digest), encoding="utf-8"
         )
         (root / "02-page-layout-ledger.md").write_text(
-            "# Page ledger\n\n| PageID | Disposition |\n|---|---|\n| P0001 | clean |\n",
+            "# Page ledger\n\n| Page ID | Disposition |\n|---|---|\n"
+            + "".join(
+                f"| P{physical_page:04d} | clean |\n"
+                for physical_page in range(1, page_count + 1)
+            ),
             encoding="utf-8",
         )
         (root / "03-bibliography-audit-ledger.md").write_text(
@@ -233,32 +292,35 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root / "00-page-inventory.csv",
             PAGE_INVENTORY_COLUMNS,
             [{
-                "PageID": "P0001",
-                "PhysicalPage": "1",
+                "PageID": f"P{physical_page:04d}",
+                "PhysicalPage": str(physical_page),
                 "PrintedPage": "",
                 "Region": "front matter",
                 "MechanicalSignals": "none",
                 "PDFSHA256": digest,
-            }],
+            } for physical_page in range(1, page_count + 1)],
         )
         write_csv(
             root / "02-page-layout-ledger.csv",
             PAGE_LEDGER_COLUMNS,
             [{
-                "PageID": "P0001",
-                "PhysicalPage": "1",
+                "PageID": f"P{physical_page:04d}",
+                "PhysicalPage": str(physical_page),
                 "PrintedPage": "",
                 "Region": "front matter",
                 "DominantContent": "text",
                 "Signals": "none",
                 "InspectionModeScale": "individual 100%",
                 "RenderDPI": "200",
-                "RenderArtifactIDHash": f"P0001:{digest}",
+                "RenderArtifactIDHash": (
+                    f"P{physical_page:04d}:"
+                    f"{render_digests[f'P{physical_page:04d}']}"
+                ),
                 "NeighborPagesChecked": "boundary page; none",
                 "Disposition": "clean",
                 "Evidence": "full-page render inspected",
                 "PDFSHA256": digest,
-            }],
+            } for physical_page in range(1, page_count + 1)],
         )
         write_csv(
             root / "00-bibliography-inventory.csv",
@@ -442,6 +504,132 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("Markdown master is empty or shell-only", result.stdout)
             self.assertIn("bibliography ledger Markdown projection", result.stdout)
+
+    def test_prose_only_markdown_id_claim_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "02-page-layout-ledger.md").write_text(
+                "This is prose, not a table. Claimed row P0001 was checked. "
+                "The remaining text merely pads the file.\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "page ledger Markdown projection")
+
+    def test_standalone_pipe_row_is_not_a_markdown_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "02-page-layout-ledger.md").write_text(
+                "# Not a table\n\n"
+                "| P0001 | a standalone pipe row without a header or separator |\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "expected exactly one complete Markdown table")
+
+    def test_markdown_id_cannot_repeat_outside_target_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            page_markdown = root / "02-page-layout-ledger.md"
+            page_markdown.write_text(
+                page_markdown.read_text(encoding="utf-8")
+                + "\nA prose appendix repeats P0001 outside the master table.\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "IDs outside the target Markdown table")
+
+    def test_missing_or_hash_mismatched_render_file_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            render_path = root / "page-renders" / "P0001.png"
+            render_path.unlink()
+            self.assert_fails(root, "page render files")
+
+    def test_existing_render_with_wrong_declared_hash_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, page_rows = read_csv(root / "02-page-layout-ledger.csv")
+            page_rows[0]["RenderArtifactIDHash"] = f"P0001:{'A' * 64}"
+            write_csv(
+                root / "02-page-layout-ledger.csv",
+                PAGE_LEDGER_COLUMNS,
+                page_rows,
+            )
+            self.assert_fails(root, "render-file hash mismatch")
+
+    def test_render_dimensions_must_match_pdf_page_and_dpi(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            render_path = root / "page-renders" / "P0001.png"
+            write_grayscale_png(render_path, 100, 200)
+            render_digest = hashlib.sha256(render_path.read_bytes()).hexdigest().upper()
+            _, page_rows = read_csv(root / "02-page-layout-ledger.csv")
+            page_rows[0]["RenderArtifactIDHash"] = f"P0001:{render_digest}"
+            write_csv(
+                root / "02-page-layout-ledger.csv",
+                PAGE_LEDGER_COLUMNS,
+                page_rows,
+            )
+            self.assert_fails(root, "pixel dimensions")
+
+    def test_page_render_directory_rejects_extra_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "page-renders" / "notes.txt").write_text(
+                "not a render", encoding="utf-8"
+            )
+            self.assert_fails(root, "page-renders: unexpected entries")
+
+    def test_page_id_must_equal_physical_page_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root, page_count=2)
+            for filename, columns in (
+                ("00-page-inventory.csv", PAGE_INVENTORY_COLUMNS),
+                ("02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS),
+            ):
+                _, rows = read_csv(root / filename)
+                rows[0]["PhysicalPage"], rows[1]["PhysicalPage"] = (
+                    rows[1]["PhysicalPage"], rows[0]["PhysicalPage"]
+                )
+                write_csv(root / filename, columns, rows)
+            self.assert_fails(root, "P0001 must map to PhysicalPage 1")
+
+    def test_structural_png_with_undecodable_pixels_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            render_path = root / "page-renders" / "P0001.png"
+            write_empty_idat_png(render_path, 1654, 2339)
+            render_digest = hashlib.sha256(render_path.read_bytes()).hexdigest().upper()
+            _, page_rows = read_csv(root / "02-page-layout-ledger.csv")
+            page_rows[0]["RenderArtifactIDHash"] = f"P0001:{render_digest}"
+            write_csv(
+                root / "02-page-layout-ledger.csv",
+                PAGE_LEDGER_COLUMNS,
+                page_rows,
+            )
+            self.assert_fails(root, "PNG pixels cannot be decoded")
+
+    def test_locator_keyword_without_value_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, citation_rows = read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            citation_rows[0]["ExactSourceLocator"] = "section"
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            self.assert_fails(root, "ExactSourceLocator lacks a page/section")
 
     def test_fake_endpoint_date_locator_and_render_record_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

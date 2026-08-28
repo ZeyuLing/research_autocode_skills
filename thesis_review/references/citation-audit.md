@@ -29,8 +29,8 @@ Reconcile all machine-readable IDs against the neutral Stage-P inventories. Repo
 
 Use continuous deterministic rendered-reference IDs `REF0001...` in PDF order. In `03-bibliography-audit-ledger.md`, create a human-readable **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
 
-| Reference ID / displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Reference ID | Displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 The authoritative machine-readable master is `03-bibliography-audit-ledger.csv` in long form, with columns:
 
@@ -40,8 +40,8 @@ For every rendered entry, include exactly one row for each mandatory field: `typ
 
 In `04-citation-claim-audit-ledger.md`, create the following human-readable projection with one row per citation--source pair:
 
-| Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID / displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |
-|---|---|---|---|---|---|---|---|---|---|---|
+| Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID | Displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 
 Use continuous occurrence IDs `C0001...` in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference and assign continuous Pair IDs `C0001-S01`, `C0001-S02...`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
 
