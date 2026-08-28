@@ -1,6 +1,6 @@
 # Rendered pagination and float audit
 
-Use this protocol for every initial review, direct-edit round, and independent re-review. The objective is to make “all pages inspected” reproducible and to detect layout failures caused by interactions among floats, forced placement, captions, headings, and page breaks.
+Use this protocol for every initial review and independent re-review of the frozen PDF, and for rendered validation after a direct-edit task. The objective is to make “all pages inspected” reproducible and to detect visible layout failures involving figures, tables, captions, headings, and page breaks. Blind reviewers do not inspect or infer the underlying source constructs.
 
 ## 1. Freeze and render
 
@@ -25,7 +25,7 @@ Treat these as prompts for full-scale inspection, not automatic defects:
 - less than roughly 55 percent of the usable text area occupied on an ordinary content page;
 - more than roughly 70 percent of the usable area occupied by one float with little explanatory prose;
 - an isolated heading, caption, one-line paragraph, bibliography orphan, or table continuation;
-- two or more figures/tables placed consecutively without explanatory text when the source contains prose that could separate them;
+- two or more figures/tables placed consecutively without visible explanatory text;
 - large unexplained bottom whitespace, especially immediately before a figure/table on the next page;
 - a float-only or nearly float-only page that is not justified by an unavoidable full-page artifact;
 - abrupt page-count or label-location changes after a local edit;
@@ -36,38 +36,20 @@ Natural chapter-end whitespace, intentionally blank verso pages, and required fr
 
 Visual estimation against the ordinary text block is sufficient for triage; exact pixel-area measurement is optional. The approximate thresholds exist to force inspection, not to manufacture numerical pass/fail rules.
 
-## 4. Source forcing audit
+## 4. PDF-only pagination-cause boundary
 
-Search the complete active source tree for at least:
+Inspect every visible pagination symptom in the PDF, including abnormal whitespace, float-only pages, detached captions, isolated headings, and figures or tables that appear farther from their discussion than necessary. Inspect at least pages `p-1`, `p`, and `p+1` around each signal; use `p-2` and `p+2` for tall artifacts or apparent float queues.
 
-```text
-[H]
-\FloatBarrier
-\clearpage
-\newpage
-\pagebreak
-\afterpage
-\ContinuedFloat
-```
+Do not open the LaTeX/DOCX source or search for `[H]`, `\FloatBarrier`, `\clearpage`, `\newpage`, `\pagebreak`, `\afterpage`, or `\ContinuedFloat` during blind review. A visible symptom may be reported, but its source-level cause must be recorded as `not verifiable from the PDF`. Do not claim that a specific forcing command caused the defect.
 
-For every active occurrence:
-
-1. identify the nearest section, figure/table label, and rendered physical page;
-2. inspect at least pages `p-1`, `p`, and `p+1` at full scale; use `p-2` and `p+2` for tall artifacts or float queues;
-3. determine whether the construct is required by semantics/template or merely compensates for an earlier layout problem;
-4. check whether it prevents later prose from filling the remaining page, creates a float stack, separates a heading from its paragraph, or moves a small artifact onto a wasteful page;
-5. record the result in the page ledger even when clean.
-
-An `[H]` artifact that cannot fit in the remaining space and therefore leaves abnormal whitespace before moving to the next page is a pagination defect. Removing `[H]` blindly is not a sufficient repair; inspect the resulting float order and neighboring pages.
-
-If the review target is a frozen PDF and active source is not supplied, complete the rendered-page ledger and report visible pagination findings normally. Record the forcing audit as `not verifiable--source not supplied`, do not attribute the symptom to a specific LaTeX construct, and make source inspection a verification step. The bounded PDF-only review may still be complete, but its source-level cause and repair validation remain explicit limitations.
+During a separately requested direct-edit task, the editor may diagnose and change source constructs. That work is not reviewer evidence. The subsequent independent re-review starts again from the newly frozen PDF and judges only the visible result.
 
 ## 5. Figure and table continuation gate
 
-For a cropped, split, rotated, or continued artifact:
+For a cropped, split, rotated, or continued artifact visible in the PDF:
 
-1. render the uncropped source and both/all final parts at legible scale;
-2. verify that the union of final parts covers every semantic element exactly once, allowing only harmless background overlap;
+1. render every visible final part at legible scale;
+2. verify from the rendered parts that numbering, seams, labels, rows, and semantic units appear continuous and nonduplicated; if completeness requires an unavailable source, mark it `not verifiable from the PDF` rather than guessing;
 3. ensure the seam does not cross text, a person/object, plot marks, arrows, table rows, or a motion sequence;
 4. retain correct numbering, references, list-of-figures/tables behavior, and an explicit continuation title when required;
 5. inspect the page before the first part, every continuation page, and the first page after the artifact.
@@ -83,6 +65,6 @@ After any layout-affecting edit:
 3. compare total page count and affected figure/table/section page numbers with the previous frozen artifact;
 4. render and inspect at least two physical pages before and after every changed location;
 5. regenerate the whole-document contact sheet and page ledger, then inspect all new or changed signals at full scale;
-6. mark the prior finding resolved only after the final PDF, not the LaTeX source, visibly satisfies the remedy.
+6. mark the prior finding resolved only after the final PDF visibly satisfies the remedy.
 
-The gate passes only when every physical page has a ledger row, every signal has a disposition, every forcing construct has a neighbor-page audit, and no unresolved actionable pagination finding remains.
+The gate passes only when every physical page has a ledger row, every visible signal has a disposition, and no unresolved actionable pagination finding remains. Source-forcing coverage is not part of a PDF-only blind-review gate.

@@ -1,6 +1,6 @@
 ---
 name: thesis-review
-description: Review Chinese computer-science and AI master's or doctoral degree theses with isolated blind-review panels, evidence-anchored PDF and source inspection, institution-aware policy checks, CS experiment and reproducibility auditing, narrative and contribution assessment, formatting QA, adjudication, revision planning, and independent re-review. Use for 学位论文盲审、博士论文外审、硕士论文预审、thesis review, dissertation review, full-thesis quality audits, blind-review risk assessment, or verification after thesis revisions. Default to five independent reviewers for doctoral theses and three for master's theses.
+description: Review Chinese computer-science and AI master's or doctoral degree theses from one frozen rendered PDF with isolated holistic blind-review panels, explicit operational defense recommendations and skill-default A/B/C/D conclusions, institution-aware policy checks, citation verification against public authoritative sources, CS experiment and reproducibility auditing, narrative and contribution assessment, formatting QA, a separate non-attributional AI-style prose assessment, adjudication, revision planning, and independent re-review. Use for 学位论文盲审、博士论文外审、硕士论文预审、论文AI味判断、thesis review, dissertation review, full-thesis quality audits, blind-review risk assessment, or verification after thesis revisions. Default to five independent reviewers for doctoral theses and three for master's theses, plus one standalone AI-style assessor outside the panel.
 ---
 
 # Chinese CS Thesis Review
@@ -16,11 +16,13 @@ This skill is read-only unless the user explicitly asks to revise the thesis. A 
 Read these files completely before starting a review:
 
 - `references/china-policy.md` for the hierarchy of national law, post-award sampling, institutional rules, and current standards.
+- `references/grading-and-verdicts.md` for mandatory explicit defense recommendations, the skill-default A/B/C/D grades, institutional overrides, and chair adjudication.
 - `references/review-rubric.md` for the common and CS/AI checks.
 - `references/reviewer-panels.md` for panel composition, isolation, and reviewer-specific mandates.
 - `references/report-template.md` for report files and required fields.
-- `references/rendered-pagination-audit.md` for the mandatory physical-page ledger, forced-float audit, and post-edit visual regression gate.
+- `references/rendered-pagination-audit.md` for the mandatory physical-page ledger, PDF-visible pagination audit, and post-edit visual regression gate.
 - `references/citation-audit.md` for the mandatory full-text citation-occurrence ledger, claim--source verification, and bibliography/status audit.
+- `references/ai-style-audit.md` for the mandatory standalone AI-style prose assessment and its non-attribution boundary.
 
 Use only the sections relevant to the degree type and thesis form. Mark inapplicable criteria as `N/A` with a reason; never turn every checklist item into a mandatory experiment.
 
@@ -33,6 +35,25 @@ Keep these concepts separate in every report:
 3. **Defense committee size** is not the same as the number of external or blind reviewers.
 4. The default panel in this skill is an intentionally strict simulation: **five independent reviewers for a doctorate and three for a master's thesis**. Do not describe that default as a universal national statutory count.
 5. Institutional templates and current school rules control local formatting. Use current national standards only as a fallback or cross-check, not to override a binding school template.
+6. **Every R-numbered reviewer is a whole-thesis academic evaluator.** All reviewers assess significance, originality, technical correctness, evidence, thesis logic, integrity, writing, and rendered presentation. Personas change weighting, depth, and skepticism; they do not create exclusive scopes.
+7. **Every R-numbered reviewer must issue one explicit operational defense conclusion.** Use the verified institutional category and wording when supplied; otherwise issue the A/B/C/D grade and paired Chinese recommendation in `references/grading-and-verdicts.md`. The standalone AI-style assessor is outside this grading system.
+
+## Strict PDF-only blind-review boundary
+
+An independent blind-review or fresh independent re-review round evaluates exactly one frozen rendered thesis PDF. The only additional inputs permitted are reviewer-visible manifests, inventories, and mechanical statistics derived solely from that same PDF; the governing institutional rules; and public authoritative records opened only to verify citations already visible in that PDF. PDF-derived materials are navigation aids, not independent thesis evidence, and must identify the frozen PDF checksum from which they were generated.
+
+The panel reviewers, AI-style assessor, and chair must not open or search:
+
+- the LaTeX/DOCX source tree, `.bib` files, build logs, auxiliary files, comments, or inactive branches;
+- Git history, old commits, diffs, blame output, tags, or prior artifact versions;
+- sibling paper repositories, local paper drafts, supplements not included in the submitted PDF, code, configs, checkpoints, experiment logs, TODOs, or private data records;
+- prior review rounds, author responses, revision ledgers, or another reviewer's files before the fresh reports are frozen.
+
+The orchestrator may compile the author's source to produce the requested PDF before freezing the round, but after freezing it must give reviewers only the PDF and PDF-derived inventories. Source paths, source lines, Git facts, and author-side comparisons must not appear in an independent reviewer finding or grade. A separately requested source-sync, provenance, implementation, or revision audit is a different task outside the blind-review round and must never be presented as reviewer evidence.
+
+Every report must include an input-access declaration listing the local artifacts actually opened. If any reviewer, assessor, or chair opens a prohibited local artifact, the round is invalid: discard its reports and restart from the frozen PDF. Labeling the access “author-side” does not rescue or supplement the blind-review round.
+
+Absence of a training detail is not affirmative evidence of the opposite. In particular, a row reported as mean/standard-deviation does not prove that rows reported as point estimates were trained once. Unless the PDF explicitly states the repetition count for a configuration, write `the PDF does not state the repetition count for this configuration`; do not call it single-seed, single-run, or one training result, do not turn that unknown into a defect by itself, and do not use it to lower a grade.
 
 ## Workflow
 
@@ -44,45 +65,39 @@ Identify, in this order:
 - academic or professional degree;
 - institution, school/department, discipline, and expected submission year;
 - binding thesis template and review regulations, including revision dates;
-- review target: source tree, compiled PDF, DOCX, or a frozen PDF only;
+- review target: the latest frozen rendered PDF; source trees and editable documents are inputs only to a separately requested preparation or revision task;
 - user intent: initial review, direct revision, or re-review.
 
 Search official sources when rules may have changed. Record the title, issuing body, revision/effective date, URL or local file, and the exact provision used. If current institutional rules cannot be verified, say so and label any older rule as historical rather than current.
 
 ### 2. Freeze one evidence packet
 
-All reviewers must assess the same thesis version. Create a manifest containing:
+All reviewers must assess the same PDF bytes. Create a PDF-derived manifest containing:
 
-- file path, Git commit if available, PDF checksum, compilation time, and page count;
+- PDF path, checksum, freeze time, and page count;
 - chapter and section inventory;
 - figure, table, equation, algorithm, appendix, and bibliography inventories;
 - every in-text citation occurrence and citation--source pair, including its exact location and attached claim;
 - a physical-page layout ledger covering every rendered page, including suspect-page triage and reviewer disposition;
 - thesis-level scientific questions and claimed contributions;
+- the authored-prose corpus and exclusions used by the standalone AI-style assessor;
 - chapter-to-question, method-to-experiment, and claim-to-evidence mappings;
 - applicable institutional rules and standards;
-- a reviewer-visible evidence lane and, when supplied, a separate author-side evidence lane for papers, repositories, experiment logs, or data documentation.
+- the permitted public citation-verification endpoints and an explicit list of all prohibited local artifact classes.
 
-For LaTeX, compile the final artifact and inspect the rendered PDF. Source-only review cannot verify float placement, font size, overlap, blank pages, image resolution, or final cross-references. For DOCX or PDF, use the appropriate document/PDF inspection workflow and preserve page numbers.
+For LaTeX or DOCX, the orchestrator may compile or export the final artifact before the round. The blind-review packet then contains only the rendered PDF. Reviewers inspect the PDF itself for float placement, font size, overlap, blank pages, image resolution, cross-references, prose, equations, tables, bibliography, and visible experimental disclosure.
 
 Do not silently replace the frozen thesis during the panel review. If the thesis changes, close the round and start a new versioned round.
 
-#### Separate blind-review and author-side evidence lanes
+#### Reviewer-visible evidence and separate non-review tasks
 
-Every round must classify evidence before any reviewer starts:
+The reviewer-visible packet contains the frozen PDF, governing rules, and public authoritative records opened only to verify citations visible in the PDF. No thesis source or author-side artifact belongs to this packet.
 
-1. **Reviewer-visible lane:** the submitted thesis artifact, its rendered pages, governing rules, and sources that an ordinary reviewer can obtain from the thesis or its public citations. LaTeX source may be used to locate visible defects or verify compilation, but not to import undisclosed experimental facts.
-2. **Author-side lane:** sibling paper repositories, unpublished paper drafts, supplements not cited or supplied with the submission, internal code/configs/logs, TODOs, experiment records, private data documentation, and author declarations supplied for revision or provenance audit.
-
-R1--R5 verdicts, ABCD grades, and findings in a blind-review simulation must use only the reviewer-visible lane. They must not read the author-side lane before freezing their reports. A discrepancy that exists only between the thesis and a sibling paper repository is not a blind-review finding.
-
-After all independent reports are frozen, the chair may open the author-side lane to verify a reviewer concern, reject a false positive, recover an existing value, or plan a direct edit. Label every such result **author-side provenance audit**, not “discovered by the blind reviewer.” Author-side evidence may close or downgrade a finding but must not retroactively manufacture a harsher independent grade.
-
-If the user explicitly requests a source-assisted integrity audit in which reviewers inspect private companion materials, run it as a separately labeled audit. Do not present its outputs or scores as simulated blind-review opinions.
+If the user explicitly requests source synchronization, implementation verification, figure-origin comparison, or provenance tracing, finish or suspend the blind-review round and run that request as a separately labeled non-review task. Its output must live outside the blind-review bundle, must not be read by the reviewers or chair, and must not alter a blind-review grade. Start any later review from a newly frozen PDF.
 
 #### Establish evidence authority before comparing artifacts
 
-The following authority order applies to the author-side provenance audit and direct revision, not to what a blind reviewer is presumed to see. When companion materials disagree, record their role and authority before treating the disagreement as an author-side issue. Unless the author identifies a different final source or a formal correction exists, use this order for reported methods and results:
+The following authority order applies only to a separately requested source audit or direct revision, never to the blind-review round. When companion materials disagree, record their role and authority before treating the disagreement as a non-review author-side issue. Unless the author identifies a different final source or a formal correction exists, use this order for reported methods and results:
 
 1. the final published or submitted paper, its supplementary material, and the formal figure/table sources used to build that version;
 2. an official erratum, author-designated revision, or released artifact explicitly tied to that paper version;
@@ -101,21 +116,31 @@ Use the panel defined in `references/reviewer-panels.md`:
 - doctorate: R1--R5;
 - master's: R1--R3.
 
-When subagents are available, launch reviewers as isolated tasks. They may receive the reviewer-visible manifest, thesis, rules, and rubric, but must not receive the author-side evidence lane or read another reviewer's report before submitting their own. With limited concurrency, run reviewers in batches while preserving that isolation.
+In addition, run the standalone AI-style assessor defined in `references/ai-style-audit.md`. This assessor is not R6, does not participate in academic/defense grading, and must freeze `05-ai-style-assessment.md` without reading R1--R5, the chair synthesis, old rounds, or author-side material. Its task is to judge recurrent prose-style signals, not to infer AI use or authorship.
+
+Every panel reviewer must apply the complete common rubric to the whole thesis before performing the persona-weighted deep dive. Every reviewer must disposition Gates A--I from `references/review-rubric.md`: policy/identity/integrity; thesis-level story; topic/literature/positioning; methods/reasoning; data/protocol; experiments/results; reproducibility/disclosed traceability; writing/self-contained exposition; and figures/tables/equations/citations/pages. A reviewer may express lower confidence outside their deepest expertise, but may not omit a gate or treat another reviewer as its sole academic owner.
+
+Persona assignments determine where a reviewer spends additional effort and what kind of failure they are especially likely to detect. They do not allow a reviewer to grade only novelty, only experiments, only narrative, only citations, or only formatting. Exhaustive ledgers may have designated owners for workload control, but ledger ownership is separate from the obligation of every reviewer to form a comprehensive academic judgment; semantic citation support and visual page disposition remain expert judgments, not mechanical matches.
+
+When subagents are available, launch reviewers as isolated tasks. They may receive only the frozen PDF, PDF-derived manifest, rules, rubric, and public citation-verification sources, and must not read another reviewer's report before submitting their own. With limited concurrency, run reviewers in batches while preserving that isolation.
 
 When isolated agents are unavailable, perform separate passes with separate notes and disclose that independence was simulated rather than process-isolated. Never draft a consensus first and then ask reviewers to agree with it.
 
 Each reviewer must:
 
 - inspect the complete thesis, not only their specialty pages;
-- prioritize their assigned lens without ignoring fatal problems outside it;
-- cite exact page/section/table/figure/equation or source location;
+- complete all nine Gate A--I rows in the common whole-thesis assessment matrix from `references/report-template.md` before the persona-weighted deep review, with evidence anchors and no unjustified `N/A`;
+- prioritize the assigned lens for extra depth without treating any other domain as outside scope;
+- cite exact PDF physical/logical page, section, table, figure, or equation; never use a source-line anchor in blind review;
 - distinguish direct observation, inference, and unverified concern;
 - test the thesis's strongest claims against its evidence;
 - state what was checked and what could not be verified;
-- issue an individual verdict before seeing other reports.
+- issue an individual category, exact defense recommendation, decision regime/source, confidence, and rationale before seeing other reports; under the skill-default regime this is the required A/B/C/D pair;
+- verify that the grade, recommendation, severities, and required revision path are mutually consistent before freezing the report.
 
-For a doctoral thesis, citation auditing is split between two isolated owners. R5 owns the exhaustive bibliography-integrity audit and must write `03-bibliography-audit-ledger.md`: every bibliography entry, including uncited entries, receives separate authoritative verdicts for title, complete ordered authorship, year, venue/type and publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status. R4 owns the citation-claim audit and must write `04-citation-claim-audit-ledger.md`: every active in-text citation occurrence and every source in a citation cluster is checked against the exact proposition it is asked to support. For a master's thesis, R3 owns both ledgers. Ownership is not optional and does not mean that other reviewers may ignore citation problems they encounter. R4 and R5 must not collaborate in a shared ledger or read each other's results before freezing their independent verdicts; the chair reconciles the two frozen ledgers afterward. A resolved citation key, plausible title, metadata API match, keyword match, or sample of important references is not a substitute for either audit.
+For a doctoral thesis, citation auditing is split between two isolated owners. R5 owns the exhaustive bibliography-integrity audit and must write `03-bibliography-audit-ledger.md`: every bibliography entry rendered in the PDF receives separate authoritative verdicts for title, complete ordered authorship, year, venue/type and publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status. R4 owns the citation-claim audit and must write `04-citation-claim-audit-ledger.md`: every visible in-text citation occurrence and every displayed source in a citation cluster is checked against the exact proposition it is asked to support. For a master's thesis, R3 owns both ledgers. Ownership is not optional and does not mean that other reviewers may ignore citation problems they encounter. R4 and R5 must not collaborate in a shared ledger or read each other's results before freezing their independent verdicts; the chair reconciles the two frozen ledgers afterward. A resolved citation marker, plausible title, metadata API match, keyword match, or sample of important references is not a substitute for either audit.
+
+The R4/R5 ledger split is an exhaustive-work assignment, not a division of academic judgment. R4 must still assess contribution, methods, experiments, narrative, writing, and presentation; R5 must still assess significance, method intelligibility, evidential sufficiency, experimental interpretation, and thesis coherence. The same principle applies to every other persona.
 
 ### 4. Classify every finding
 
@@ -123,7 +148,7 @@ Use both severity and remedy class.
 
 Severity:
 
-- `S0` — integrity, authorship, anonymity, fabricated/untraceable evidence, or a thesis-level defect that can invalidate review.
+- `S0` — a defect that invalidates the submitted artifact or creates a substantiated integrity/foundational blocker. Every `S0` must be subclassified as `procedural` (for example, a repairable blind-copy, identity-disclosure, or wrong-artifact failure without evidence of misconduct) or `integrity/foundational` (for example, fabricated evidence or citations, authorship/integrity misconduct, or foundational thesis invalidity). The subtype controls C versus D under the skill-default regime.
 - `S1` — major scientific, logical, experimental, or structural defect that may lead to rejection or mandatory major revision.
 - `S2` — substantive but repairable weakness that does not overturn the central contribution.
 - `S3` — local writing, citation, formatting, numerical-labeling, or presentation defect.
@@ -132,7 +157,7 @@ Severity:
 Remedy class:
 
 - `W` — resolvable by writing, reorganization, citation repair, or formatting.
-- `E` — resolvable by reusing or verifying existing evidence in the supplied papers, repositories, logs, or data.
+- `E` — resolvable if the author later supplies or recovers existing evidence in a separate revision task; the blind reviewers do not open local papers, repositories, logs, or data.
 - `N` — genuinely requires a new experiment, annotation, user study, training run, or unavailable evidence.
 - `P` — requires an institutional or administrative policy decision.
 
@@ -151,11 +176,14 @@ Flag a break only when it is real and locatable. In particular, verify:
 - baseline comparability, implementation source, training budget, representation conversion, and metric protocol;
 - ablations that correspond to claimed causal contributions;
 - uncertainty, multiple seeds, significance, and user-study design when required by the strength of the claim, not as universal rituals;
-- exact internal agreement among prose, tables, figures, captions, and appendices; compare against companion source papers only in the separately labeled author-side provenance audit;
-- source authority before conflict claims: final paper and supplement take precedence over obsolete TODO, planning, debug, and scratch files unless formally superseded;
+- exact internal agreement among the PDF's prose, tables, figures, captions, bibliography, and appendices; do not compare against companion papers or repositories during review;
 - hyperparameters, software/hardware, preprocessing, and commands needed for reasonable reproduction;
 - negative results, boundary conditions, or claim limits where omission would mislead;
 - whether each chapter contributes to one thesis-level story rather than preserving the branding and framing of separate papers.
+
+Multiple-seed coverage is not a universal acceptance requirement for deep-learning or foundation-model experiments. A targeted multi-seed diagnostic establishes robustness only for the configuration it actually repeats; it does not imply that every cell of a larger ablation matrix or every bidirectional main table must be rerun with the same number of seeds. Elevate seed coverage to a finding only when the thesis claims statistical significance or population-level stability, reports visibly unstable or contradictory runs, omits a material stochastic choice, or when plausible run-to-run variance could reverse a central comparison. Otherwise, record the diagnostic's scope as neutral context and do not penalize the thesis, lower the grade, or prescribe universal reruns.
+
+When only one configuration visibly reports `mean ± dispersion`, the only permissible observation is that this configuration reports a multi-run or uncertainty summary if the PDF defines that notation. For every other configuration, the repeat count is `not stated in the PDF`. Point estimates do not establish single-run training, and unequal reporting formats do not establish unequal training counts.
 
 Never invent a value, source, training detail, or result to fill a gap. An unverified item remains explicitly unverified.
 
@@ -176,14 +204,14 @@ Apply the full protocol in `references/rendered-pagination-audit.md`. Its requir
 - render every physical page at a legible resolution and record it in `02-page-layout-ledger.md`;
 - use whole-document contact sheets only for triage, never as proof that an individual page is correct;
 - inspect every page individually or in a small legible group, then inspect every automatically or manually flagged page at full-page scale;
-- when source is supplied, map every `[H]`, `\FloatBarrier`, `\clearpage`, `\newpage`, `\pagebreak`, and equivalent source-level forcing construct to the final PDF and inspect at least the preceding, containing, and following pages; for a PDF-only review, mark the source-forcing cause `not verifiable--source not supplied` without suppressing a visible PDF finding;
+- inspect visible pagination effects page by page; source-level forcing constructs and their causes are outside the blind-review packet and must be recorded as `not verifiable from the PDF` without suppressing a visible PDF finding;
 - flag nearly blank pages, float-only pages, pages dominated by one figure or table, adjacent float stacks, anomalous bottom whitespace, clipped content, split captions, and a large float that prevents later prose from filling the current page;
 - treat occupancy thresholds as triage signals, not automatic findings; close or retain each signal by visual evidence;
-- for cropped or continued figures, verify the seam against the uncropped source so that no text, person, plot element, or semantic unit is lost or duplicated.
+- for cropped or continued figures, verify visible seams, numbering, labels, and semantic continuity from the rendered parts; if completeness requires an unavailable original, state `not verifiable from the PDF`.
 
-R5 owns this gate, but every reviewer must report any visible page defect encountered. A statement such as “all pages viewed” is insufficient without the completed page ledger and suspect-page dispositions.
+R5 owns only the doctoral exhaustive page-ledger deliverable and its 100-percent closure. Gate I remains a mandatory whole-thesis judgment domain for every reviewer, and every reviewer must report any visible page defect encountered. A statement such as “all pages viewed” is insufficient for the R5 ledger without the completed page rows and suspect-page dispositions.
 
-Apply the full protocol in `references/citation-audit.md` as two independent gates. For a doctorate, R5 must complete the field-by-field bibliography and existence audit, while R4 must complete the occurrence-by-occurrence claim--source audit; for a master's thesis, R3 completes both. Every mismatch, inaccessible field, ambiguous source, and unsupported occurrence must be recorded explicitly. Static BibTeX closure, an aggregate metadata match, or a spot check does not pass either gate. A substantiated fabricated or nonexistent citation is an `S0` integrity blocker.
+Apply the full protocol in `references/citation-audit.md` as two independent gates. For a doctorate, R5 must complete the field-by-field bibliography and existence audit, while R4 must complete the occurrence-by-occurrence claim--source audit; for a master's thesis, R3 completes both. Every mismatch, inaccessible field, ambiguous source, and unsupported occurrence must be recorded explicitly. Rendered-marker closure, an aggregate metadata match, or a spot check does not pass either gate. A substantiated fabricated or nonexistent citation is an `S0` integrity blocker.
 
 Treat the ordinary author copy and the submitted blind-review copy as different artifacts. Do not report author, supervisor, institution, or student-number fields that correctly appear in an ordinary author copy as anonymity defects. When a blind-review copy is in scope, render or obtain that actual copy and scan the entire artifact--not only the cover--for identity disclosures in body text, captions, tables, acknowledgments, CV/publications, data and project descriptions, footnotes, URLs, PDF metadata, filenames, comments, and figure watermarks. Apply the institution's exact anonymization rules; in their absence, flag school, department, laboratory, company, employer, partner organization, and other wording that can directly or cumulatively identify the candidate.
 
@@ -191,21 +219,23 @@ The conservative format reviewer must be able to understand the thesis without r
 
 ### 7. Adjudicate only after all reports are frozen
 
-The chair first reads all independent reports and the reviewer-visible evidence packet. Only after preserving the independent verdicts may the chair read the author-side lane, then:
+The chair first reads all independent reports and the reviewer-visible PDF packet. The chair must not open author-side material, thesis source, Git history, old rounds, or sibling repositories during adjudication. The chair then:
 
-1. deduplicates findings without erasing reviewer disagreement;
+1. preserves every reviewer's frozen category, defense recommendation, decision regime, and rationale, then deduplicates findings without erasing disagreement;
 2. verifies each `S0`/`S1` finding against the thesis and governing source;
 3. rejects checklist-driven false positives and unsupported concerns;
 4. preserves a single-reviewer severe finding when its reviewer-visible evidence is decisive;
 5. records unresolved technical or policy disputes instead of averaging them away;
-6. produces the combined risk decision and revision roadmap;
+6. produces a separate overall category, explicit defense recommendation, combined risk decision, and revision roadmap under the same decision regime using the adjudicated evidence;
 7. separates `W/E` remedies from the genuinely new `N` experiments or user-provided evidence;
 8. lists strengths and contributions that survived all reviewer lenses;
-9. records private-paper, repository, log, or author-declaration checks in a separate author-side provenance section and never attributes them to the blind panel.
+9. records the exact permitted inputs it opened and invalidates the round if any prohibited local artifact was accessed.
 
-Before issuing the combined decision, the chair must join the frozen bibliography and citation-claim ledgers by bibliography key and run a cross-ledger consistency gate. A cited key whose title, ordered authors, persistent identifier, existence, or publication identity is `mismatch` in the bibliography ledger cannot remain `direct`, `partial`, or `context-only` in the citation-claim ledger without a separately identified correct source. Likewise, a citation-claim row whose opened source metadata does not identify the cited work is invalid even if its disposition is non-empty. Record every conflict, reclassify the affected pair conservatively, and require a corrected frozen-round audit before a `ready` decision. Row counts and `pending=0` do not override a substantive cross-ledger contradiction.
+Keep the frozen AI-style judgment separate from the reviewer verdict distribution and academic/defense categories. The chair may carry its evidence-backed writing remedies into the revision ledger, but must repeat that it is not an AI-use, authorship, plagiarism, or misconduct determination.
 
-Do not average reviewer scores unless the institution supplies a mandatory scoring form. If scores are required, preserve each score and the rule-based conclusion rather than substituting an ungrounded mean.
+Before issuing the combined decision, the chair must join the frozen bibliography and citation-claim ledgers by stable rendered reference identity/displayed label and run a cross-ledger consistency gate. A cited reference whose title, ordered authors, persistent identifier, existence, or publication identity is `mismatch` in the bibliography ledger cannot remain `direct`, `partial`, or `context-only` in the citation-claim ledger without a separately identified correct source. Likewise, a citation-claim row whose opened source metadata does not identify the cited work is invalid even if its disposition is non-empty. Record every conflict and reclassify the affected pair conservatively. A **substantive** cross-ledger contradiction is one that changes source identity, existence, publication status material to the claim, or claim support; record it as at least `S2`, require a corrected frozen-round audit, and do not issue **A — 同意答辩** until it is closed. Assign B, C, or D according to the adjudicated severity and `references/grading-and-verdicts.md`. Pure punctuation, capitalization, abbreviation, or house-style differences that do not alter source identity or support are local `S3` items and do not by themselves fail the combined gate. Row counts and `pending=0` never override a substantive contradiction.
+
+Under the skill-default regime, do not average A/B/C/D grades, convert them to points, or let a majority mechanically erase a decisive minority finding. Under an institutional regime, follow its verified aggregation rule. If the institution supplies a mandatory numeric scoring form, preserve each score and its rule-based conclusion rather than substituting an ungrounded mean.
 
 ### 8. Direct-edit mode
 
@@ -213,11 +243,11 @@ Only enter this mode when the user asks for modification.
 
 - Convert adjudicated findings into a versioned revision ledger.
 - Apply the smallest change that resolves the evidence-backed issue.
-- Use the author-side lane to recover existing values and align the thesis with the author's final papers, while keeping those repairs distinct from what the simulated blind panel independently observed.
+- Direct editing is a separate author-side task. Source files and author-designated final papers may be used here to recover existing values and align the thesis, but those materials remain outside every blind-review report.
 - Preserve user data and unrelated changes.
 - Recompile after LaTeX edits and inspect affected pages plus neighboring pages.
 - Re-run numerical, cross-reference, citation, and float checks after each structural batch.
-- After any citation, claim, related-work, bibliography, publication-status, dataset-source, or attribution edit, regenerate the affected bibliography and citation-claim ledgers and recheck every changed entry or occurrence plus all repeated uses of the affected source.
+- After any citation, claim, related-work, bibliography, publication-status, dataset-source, or attribution edit, freeze the new PDF, regenerate the affected bibliography and citation-claim ledgers from that PDF, and recheck every changed entry or occurrence plus all repeated uses of the affected source.
 - After any float, caption, heading, table, figure-size, barrier, or page-break edit, rebuild to a stable PDF, compare page count and affected label locations, inspect at least two neighboring physical pages on both sides, and rerun the whole-document page-layout ledger. A local improvement that creates a remote regression is not a fix.
 - Do not use `[H]`, a barrier, a forced page break, or indiscriminate shrinking as the default pagination repair. First identify whether the failure is caused by float backlog, remaining-page height, source aspect ratio, caption length, or ordering. Preserve formal source figures and their semantic content.
 - When a tall multi-panel figure must continue across pages, split only at a semantic boundary, retain one figure number with an explicit continuation, and compare both rendered parts against the original at legible scale. Never accept a split that crosses embedded text or visual content.
@@ -226,7 +256,7 @@ Only enter this mode when the user asks for modification.
 
 ### 9. Independent re-review
 
-For a revised thesis, freeze a new evidence packet and run a new panel round. Reviewers first inspect the revised thesis without reading the author response. They then receive the prior issue ledger and verify each item as:
+For a revised thesis, freeze a new PDF-only packet and run a **fresh independent re-review pass**. Reviewers inspect the revised PDF without reading the author response, prior issue ledger, source tree, Git diff, or old reports; they complete a fresh Gate A--I matrix and whole-thesis synthesis and record new defects or regressions. Only after every fresh report is frozen may a separately labeled **post-freeze issue-closure verification pass** compare the new PDF against the prior issue ledger or author response. The verification pass is not part of the independent re-review evidence packet and cannot retroactively alter its findings or grades. It classifies prior items as:
 
 - `resolved`;
 - `partially resolved`;
@@ -236,7 +266,11 @@ For a revised thesis, freeze a new evidence packet and run a new panel round. Re
 
 The chair must report new defects introduced by revision. A high closure rate does not justify passing an unresolved `S0` or decisive `S1` issue.
 
+Each reviewer and the chair must issue a fresh category and defense recommendation for the newly frozen artifact under the round's decision regime. Do not mechanically carry forward or edit the previous round's conclusion.
+
 When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, both the bibliography and citation-claim ledgers have 100 percent coverage and no unresolved actionable mismatch, all prior findings are resolved or not reproducible, and the stable build introduces no regression. `S4` suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
+
+Run a fresh isolated AI-style assessment on every revised frozen artifact. Do not show the assessor the previous report before it freezes its new judgment. A `high` AI-style label prevents a claim that final prose-polish review is complete, but does not by itself alter the academic or integrity verdict.
 
 ## Completion standard
 
@@ -246,11 +280,16 @@ A review is complete only when it includes:
 - the completed physical-page layout ledger and suspect-page dispositions;
 - the completed bibliography-integrity and citation-claim ledgers, with entry/occurrence/source counts and no silent unchecked rows;
 - all independent reviewer reports required for the degree level;
+- a complete Gate A--I whole-thesis matrix, whole-thesis synthesis, and persona-weighted deep review in every R-numbered report; ledger ownership cannot substitute for any of them;
+- one internally consistent category, exact defense recommendation, decision regime/source, confidence, and whole-thesis rationale in every R-numbered report; use A/B/C/D under the skill-default regime;
+- the standalone `05-ai-style-assessment.md`, reported separately from R1--R5 and containing the non-attribution disclaimer;
 - a chair synthesis with agreements and disagreements;
+- a chair table preserving every independent category/recommendation and a separately reasoned overall category/recommendation, with no ungrounded averaging;
 - a precise, prioritized revision ledger;
 - a separate list of genuinely new experiments or missing user evidence;
 - a statement of review limitations;
-- an explicit statement of which artifacts were reviewer-visible and which were used only for author-side provenance or revision;
+- an explicit statement that the reviewer-visible local artifact was exactly one frozen PDF, plus a list of permitted public citation-verification sources;
+- an input-access declaration from every reviewer, assessor, and chair confirming that no prohibited local artifact was opened;
 - for direct edits, compilation/render verification and a re-review result.
 
 Do not claim that “all problems are solved” unless the re-review found no unresolved `S0`/`S1`, no material `S2` that contradicts a central claim, and no policy blocker.

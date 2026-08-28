@@ -14,6 +14,8 @@ Use this order of authority:
 
 Never infer a local pass/fail rule from another university. Use other institutions only to understand common practice or to design a conservative simulation.
 
+The A/B/C/D defense recommendations in `grading-and-verdicts.md` are the skill's explicit fallback simulation when no verified institutional category scheme is available. They are not national statutory grades. When a current institution or school form defines different letters, wording, or consequences, that verified form controls and must be cited in every report.
+
 ## National law
 
 The **Academic Degrees Law of the People's Republic of China** took effect on 2025-01-01.

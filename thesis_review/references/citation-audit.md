@@ -1,14 +1,14 @@
 # Full-text citation and bibliography audit
 
-Use this protocol in every initial review and independent re-review. For a doctoral thesis, R5 owns the bibliography-integrity half and R4 owns the citation-claim half; for a master's thesis, R3 owns both. The objective is to verify both the identity of every listed source and every use of external evidence, not merely whether citation keys compile.
+Use this protocol in every initial review and independent re-review. For a doctoral thesis, R5 owns the bibliography-integrity half and R4 owns the citation-claim half; for a master's thesis, R3 owns both. The objective is to verify both the identity of every reference rendered in the PDF and every visible use of external evidence, not merely whether citation markers resolve.
 
 ## 1. Scope and evidence boundary
 
-Audit all active citation occurrences in the frozen thesis, including citations in abstracts, chapters, captions, tables, footnotes, appendices, and author/publication material when they make scholarly claims. Exclude inactive source branches and comments, but record how active files were determined.
+Audit all citation occurrences visible in the frozen PDF, including citations in abstracts, chapters, captions, tables, footnotes, appendices, and author/publication material when they make scholarly claims. Do not open source branches, comments, `.bib` files, auxiliary files, or citation commands; PDF visibility defines the corpus.
 
-Treat one occurrence with multiple cited keys as multiple **citation--source pairs**. Repeated uses of the same source remain separate pairs because different sentences may make different claims. Audit every cited bibliography entry; inventory uncited entries separately without automatically treating them as defects.
+Treat one occurrence with multiple displayed references as multiple **citation--source pairs**. Repeated uses of the same source remain separate pairs because different sentences may make different claims. Audit every bibliography entry rendered in the PDF. Entries that exist only in a hidden `.bib` file are outside the submitted artifact and must not be opened or counted.
 
-In an isolated blind-review round, use only the thesis, its bibliography, and public sources reachable from the citations. Do not use private companion papers, internal repositories, logs, or author declarations before the reviewer verdict is frozen. Later author-side checks must be labeled provenance audit.
+In an isolated blind-review round, use only the frozen thesis PDF, its rendered bibliography, and public authoritative sources reachable from or identifiable through the rendered citations. Do not use the thesis source, `.bib`, Git history, private companion papers, internal repositories, logs, old rounds, or author declarations. Source-assisted provenance work is a separate non-review task and cannot alter the blind-review verdict.
 
 ## 2. Build two independently owned inventories
 
@@ -19,34 +19,34 @@ Create two files:
 
 Record in the relevant ledger:
 
-- frozen PDF checksum, source commit, review date, and active source roots;
-- number of active citation commands/occurrences;
+- frozen PDF checksum, review date, and physical page count;
+- number of visible citation occurrences;
 - number of citation--source pairs after expanding clusters;
-- number of unique cited keys and bibliography entries, including uncited entries;
-- missing keys, duplicate keys, uncited entries, unresolved citations, and bibliography parse limitations.
+- number of unique displayed reference identities and rendered bibliography entries;
+- unresolved citation markers, duplicate rendered entries, citation-to-reference mapping failures, and PDF extraction limitations.
 
-In `03-bibliography-audit-ledger.md`, create a **bibliography master table** with exactly one row per BibTeX/bibliography entry, including uncited entries:
+In `03-bibliography-audit-ledger.md`, create a **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
 
-| Bib key | Cited? | Type | Title verdict | Ordered authors verdict | Year verdict | Venue and publication/acceptance-status verdict | Pages/article-number verdict | DOI/arXiv/URL verdict | Authoritative record(s) opened | Existence/integrity verdict | Finding/disposition |
+| Reference ID / displayed label | Cited in PDF? | Type | Title verdict | Ordered authors verdict | Year verdict | Venue and publication/acceptance-status verdict | Pages/article-number verdict | DOI/arXiv/URL verdict | Authoritative record(s) opened | Existence/integrity verdict | Finding/disposition |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
 Each field verdict must be `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse all metadata into one check mark. Record both the thesis value and the verified canonical value whenever they differ. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
 
 In `04-citation-claim-audit-ledger.md`, create a **citation-occurrence table** with one row per citation--source pair:
 
-| Occurrence ID | PDF/source location | Exact attached proposition | Cite key | Public source/identifier | Source opened | Support | Metadata/status | Severity/finding | Disposition/evidence |
+| Occurrence ID | PDF location | Exact attached proposition | Reference ID / displayed label | Public source/identifier | Source opened | Support | Metadata/status | Severity/finding | Disposition/evidence |
 |---|---|---|---|---|---|---|---|---|---|
 
-Use stable occurrence IDs in reading order. For a citation cluster, repeat the occurrence ID for each key. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+Use stable occurrence IDs in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
 
 ## 3. Static closure checks
 
-Before semantic verification, check the complete active corpus:
+Before semantic verification, check the complete rendered corpus:
 
-1. every cited key resolves to exactly one bibliography entry;
-2. there are no duplicate-key collisions or unresolved citation markers;
+1. every visible citation marker resolves to exactly one rendered bibliography entry;
+2. there are no duplicate rendered-reference identities or unresolved citation markers;
 3. every title matches the authoritative title in content, including subtitle when part of the official record;
-4. every author is present in the official order; do not store `et al.` as the BibTeX author list or silently omit consortium/corporate authors;
+4. the complete canonical author list and order are verified from the official record; when the governing rendered style legitimately abbreviates the display with `et al.`, record the canonical list in the ledger rather than treating style-compliant abbreviation as an omission;
 5. the year follows the governing style's event/proceedings/issue rule and does not confuse online-first, preprint-upload, acceptance, conference, or issue year;
 6. venue and status are verified separately: `published`, `accepted/in press`, `preprint`, `submitted/under review`, `withdrawn/retracted/corrected`, or `unverifiable`; an arXiv posting, project page, code repository, author CV, or search snippet does not by itself prove conference/journal acceptance;
 7. journal volume/issue and page range or article number, and proceedings page range where assigned, match the official record; use `legitimate N/A` for arXiv-only and genuinely pageless records rather than inventing pages;
@@ -56,7 +56,7 @@ Before semantic verification, check the complete active corpus:
 11. datasets, software, standards, laws, websites, and repositories cite the appropriate primary artifact rather than an unrelated secondary paper;
 12. self-citations and publications listed in the CV use accurate authorship and status.
 
-Static closure is necessary but not sufficient. A clean BibTeX build does not establish that a source supports the sentence citing it.
+Static closure is necessary but not sufficient. A visually resolved citation does not establish that a source supports the sentence citing it. Duplicate or unused keys that exist only in `.bib` are not part of a PDF-only review.
 
 ### Authoritative-source order for bibliography fields
 
@@ -70,7 +70,7 @@ Use the strongest available record and record the exact endpoint opened:
 
 Search-result snippets, generated citation sites, Semantic Scholar/OpenAlex-style aggregators, code README files, and another paper's bibliography are discovery aids, not final authority. If no first-party record is accessible, require two independent corroborating records where feasible and mark the field `unverifiable` rather than guessing.
 
-For `accepted/in press`, require an official accepted-paper list, publisher forthcoming record, DOI/proceedings record, or an acceptance document supplied in the separately labeled author-side lane. Do not upgrade `submitted`, `under review`, or `arXiv preprint` to accepted/published from author assertion alone in the blind-review lane.
+For `accepted/in press`, require an official accepted-paper list, publisher forthcoming record, DOI, or proceedings record that is publicly accessible. If no such public record is available, mark the status `unverifiable`; do not open a private acceptance document or upgrade `submitted`, `under review`, or `arXiv preprint` from author assertion alone.
 
 ### Fabricated or nonexistent citation escalation
 
@@ -82,7 +82,7 @@ Open an integrity investigation when any of the following occurs:
 - the entry combines a title, author list, venue, year, or pages from different works;
 - exact-title, author-title, identifier, and official venue searches all fail and an authoritative record indicates the claimed work does not exist.
 
-Do not label a paywalled, obscure, future, private, or temporarily inaccessible work fabricated solely because it was not found quickly. Record search routes and negative evidence. A substantiated fabricated/nonexistent citation is `S0` and blocks a `ready` verdict until resolved; an unresolved existence concern remains an explicit high-priority question or finding according to the available affirmative evidence.
+Do not label a paywalled, obscure, future, private, or temporarily inaccessible work fabricated solely because it was not found quickly. Record search routes and negative evidence. A substantiated fabricated/nonexistent citation is `S0` and normally requires **D — 不同意答辩** under the skill-default scheme until the integrity finding is explicitly resolved; an unresolved existence concern remains an explicit high-priority question or finding according to the available affirmative evidence.
 
 ## 4. Verify every citation occurrence semantically
 
@@ -113,7 +113,7 @@ Do not infer support from title similarity, abstract keywords, citation count, v
 
 Apply the ordinary five-question finding test and minimum sufficient remedy.
 
-- `S0`: fabricated/nonexistent source, systematic deceptive attribution, or citation conduct that creates a substantiated integrity blocker.
+- `S0` (`integrity/foundational`): fabricated/nonexistent source, systematic deceptive attribution, or citation conduct that creates a substantiated integrity blocker.
 - `S1`: an unsupported or misrepresented source is indispensable to a central novelty, correctness, dataset, safety, or thesis-level conclusion.
 - `S2`: a material related-work, method, data, protocol, or result claim is only partially supported or omits a decisive source, but can be repaired without overturning the thesis.
 - `S3`: local missing citation, ambiguous placement, metadata/status error, irrelevant cluster member, or formatting inconsistency.
@@ -123,27 +123,27 @@ Prefer repairing the sentence, moving the citation, splitting a compound claim, 
 
 ### Reviewer independence
 
-For a doctoral panel, R4 and R5 receive the same frozen thesis and may receive a mechanically generated citation/Bib-key inventory, but they must not edit a shared ledger, exchange provisional findings, or read each other's ledger/report before freezing their own verdicts. R5 decides source identity and field accuracy; R4 decides whether each source supports the attached proposition. If either reviewer encounters a problem outside that primary assignment, the reviewer records it normally. The chair reconciles duplicate or dependent findings only after both reports are frozen.
+For a doctoral panel, R4 and R5 receive the same frozen PDF and may receive a mechanically generated inventory extracted only from that PDF, but they must not edit a shared ledger, exchange provisional findings, or read each other's ledger/report before freezing their own verdicts. **Within the two exhaustive audit deliverables**, R5 signs the source-identity and field-accuracy dispositions, while R4 signs whether each source supports the attached proposition. This is ledger workload allocation only: both remain comprehensive whole-thesis reviewers, and either records any problem found in any gate. The chair reconciles duplicate or dependent findings only after both reports are frozen.
 
 ### Mandatory chair cross-ledger consistency gate
 
-After both independent ledgers are frozen, join them by bibliography key and check every cited key before synthesis:
+After both independent ledgers are frozen, join them by stable rendered reference identity/displayed label and check every cited reference before synthesis:
 
 1. the source identity recorded by R4 must agree with R5's authoritative title, ordered authors, persistent identifier, and existence verdict;
 2. if R5 marks the cited work's identifier, title/author combination, or existence as `mismatch`, every R4 occurrence using that record is invalid until the intended source is identified; it cannot remain `direct`, `partial`, or `context-only` merely because the row has a non-empty disposition;
 3. if R4's own metadata note names a work different from the thesis bibliography or attached proposition, classify the pair as `mismatch` (or `unverifiable` only when identity truly cannot be resolved), regardless of R4's provisional support label;
 4. if R4 and R5 used different versions or records, state which one governs and why; do not silently merge their metadata;
-5. reconcile the set of cited keys and the occurrence count, and list every cross-ledger conflict in the chair report.
+5. reconcile the set of cited rendered references and the occurrence count, and list every cross-ledger conflict in the chair report.
 
-Any substantive conflict fails the combined citation gate. Preserve both independent reports, but do not issue a panel-level `ready` decision until the thesis is corrected and the affected bibliography entries, every occurrence reusing them, and both ledgers are re-audited in a new frozen round. Mechanical completeness (`pending=0`, expected row count, or a live URL) never overrides this identity check.
+A **substantive** conflict changes source identity, existence, publication status material to the proposition, or whether the source supports the proposition. It fails the combined citation gate and must be recorded as at least `S2`; a central or integrity consequence may raise it to `S1` or `S0`. Preserve both independent reports, but do not issue **A — 同意答辩** until the thesis is corrected and the affected bibliography entries, every occurrence reusing them, and both ledgers are re-audited in a new frozen round. Use B, C, or D according to the adjudicated severity. A punctuation, capitalization, abbreviation, or house-style difference that leaves identity and support unchanged is a local `S3`, not a substantive cross-ledger failure. Mechanical completeness (`pending=0`, expected row count, or a live URL) never overrides the identity check.
 
 ## 6. Completion and re-review gate
 
 The bibliography-integrity gate passes only when:
 
-- the bibliography master table has exactly one row per bibliography entry, including uncited entries;
+- the bibliography master table has exactly one row per bibliography entry rendered in the PDF;
 - every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict and an authoritative evidence endpoint;
-- every unique cited entry has field-level metadata, existence, and publication-status dispositions;
+- every unique cited rendered entry has field-level metadata, existence, and publication-status dispositions;
 - every factual bibliography mismatch is linked to a finding or unresolved question; none is silently corrected or waived as formatting;
 - every suspected fabricated/nonexistent entry has a documented integrity adjudication;
 - no row remains `pending`, `unchecked`, or silently omitted;
@@ -151,12 +151,12 @@ The bibliography-integrity gate passes only when:
 
 The citation-claim gate passes only when:
 
-- ledger occurrence counts reconcile with the active source/PDF inventory;
+- ledger occurrence counts reconcile with the frozen PDF inventory;
 - every citation--source pair has a non-empty support status and disposition;
 - every missing, partial, context-only, mismatch, or unverifiable row is linked to a finding, an explicit question, or a reasoned non-finding;
 - no row remains `pending`, `unchecked`, or silently omitted;
 - the citation-claim-owning reviewer reports counts and limitations in the independent report.
 
-The combined citation gate passes only when the chair's key-wise cross-ledger join has no unresolved identity/support contradiction. Record the joined-key count and conflict count in the chair synthesis or re-review report.
+The combined citation gate passes only when the chair's reference-wise cross-ledger join has no unresolved identity/support contradiction. Record the joined-reference count and conflict count in the chair synthesis or re-review report.
 
-After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, regenerate the affected ledger or both ledgers. Recheck every changed entry or occurrence and every other occurrence that reuses the affected source. Previous 100 percent ledgers do not carry over to a new frozen PDF or commit.
+After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, freeze the new PDF and regenerate the affected ledger or both ledgers from that PDF. Recheck every changed entry or occurrence and every other occurrence that reuses the affected source. Previous 100 percent ledgers do not carry over to a new frozen PDF.

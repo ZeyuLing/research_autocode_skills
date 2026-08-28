@@ -2,6 +2,16 @@
 
 Use the rubric as a coverage map. A finding exists only when supported by the reviewed thesis or governing rule.
 
+## Common use by every reviewer
+
+Every R-numbered reviewer applies the entire rubric to the complete thesis. Gates A--I are shared academic obligations, not assignments split among personas. A persona determines which domains receive additional depth, which alternatives are tested most aggressively, and which exhaustive ledger the reviewer may own; it does not permit the reviewer to ignore the other gates or defer their overall judgment to another reviewer.
+
+Each report must summarize its judgment of Gates A--I before the persona-weighted deep review. Every gate row needs an evidence anchor and a disposition such as `adequate`, `concern`, `unverifiable`, or justified `N/A`. The reviewer's persona labels the depth as `baseline`, `emphasized`, or `primary`; these depth labels are attention descriptors, not scoring weights or voting rights.
+
+In an independent blind-review round, every evidence anchor must be visible in the frozen PDF or in a public authoritative source opened to verify a citation already present in that PDF. Do not inspect the thesis source, `.bib`, Git history, sibling repositories, local papers, code, configs, logs, old rounds, or author-side records. A question that requires those materials is `not verifiable from the submitted PDF`, not a hidden defect.
+
+Use `N/A` only when a criterion is genuinely inapplicable to the thesis, not because it falls outside the reviewer's primary expertise. Limited expertise may lower confidence and should be disclosed, but it does not remove the gate from the assessment. Requiring a disposition does not impose a finding quota: a reviewer may record an evidence-backed strength or no material concern. The final category follows `grading-and-verdicts.md` and reflects the whole thesis.
+
 ## Degree-level threshold
 
 ### Doctorate
@@ -55,14 +65,14 @@ Evaluate practical problem definition, engineering or professional value, requir
 - The chapter introduction explains problems and module responsibilities; implementation details appear in the method sections.
 - Every major module has a scientific or engineering role, not merely an architectural description.
 - Mathematical definitions are dimensionally and logically consistent.
-- Algorithms, objectives, inference procedures, and training procedures agree with figures and code when code is in scope.
+- Algorithms, objectives, inference procedures, and training procedures agree with the PDF's own figures, tables, equations, and appendices. Code is outside the blind-review scope.
 - Complexity, convergence, identifiability, stability, or physical assumptions are analyzed when central to the claim.
 - The method does not promise physical realism, universality, causality, or controllability beyond what its objective and evidence establish.
 - Cross-chapter terminology and representations are explained without manufacturing a false unified representation requirement.
 
 ## Gate E: data and evaluation protocol
 
-- Evidence conflicts are assessed only after classifying source authority. Final papers, supplements, formal table/figure sources, and author-designated final artifacts outrank TODO lists, experiment plans, debug notes, scratch outputs, and abandoned drafts.
+- Evidence conflicts in blind review are limited to contradictions visible within the frozen PDF or between a PDF citation claim and its public authoritative source. Comparisons against final papers, local supplements, formal table/figure sources, TODOs, debug notes, or other author-side artifacts belong to a separate non-review source audit.
 - Dataset origin, composition, licenses, private-data constraints, and construction contribution are described at a defensible granularity.
 - Official dataset splits are stated correctly; custom splits are reproducible.
 - Training data exclude protected public test partitions where claimed.
@@ -83,18 +93,18 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Tables and prose match exactly, including signs, decimal precision, and dataset/protocol names.
 - Comparisons do not mix incompatible representations or protocols into one ranking.
 - Ablations isolate claimed components or are worded as configuration evidence rather than causal proof.
-- Multiple seeds, confidence intervals, or significance tests are expected only when stochastic variation matters to the claim and the field protocol supports them.
+- Multiple seeds, confidence intervals, or significance tests are expected only when stochastic variation matters to the claim and the field protocol supports them. A point estimate does not prove a single training run. If the PDF does not state a configuration's repeat count, record it as `not stated in the PDF`; never infer `single-seed`, `single-run`, or “reported once” merely because another row shows `mean ± dispersion`.
 - User studies include participant count, recruitment/eligibility, comparison design, randomization, instructions, response scale, aggregation, and uncertainty when those details are available or essential.
 - Qualitative figures illustrate defined phenomena and do not substitute for population-level evidence.
 - Failure cases or limits are included when omission would overstate robustness; a separate severe “limitations” section is not mandatory.
 - Results are interpreted, not merely restated, and alternative explanations are considered where consequential.
 - No missing cell, placeholder, invented estimate, or unexplained `N/A` remains.
 
-## Gate G: reproducibility and source alignment
+## Gate G: reproducibility and disclosed traceability
 
-- Every chapter's reported result is traceable to a source paper, experiment artifact, or documented thesis-only experiment.
-- Values copied from papers are exact and retain protocol context.
-- Source paper updates are propagated to thesis figures, tables, method text, and references.
+- Every chapter provides enough visible method, protocol, data, configuration, and evaluation detail for a reviewer to interpret the reported result and its limits.
+- Values repeated across the PDF's prose, tables, figures, captions, and appendices agree and retain protocol context.
+- A blind reviewer does not compare against local source papers or repositories. Whether a sibling paper update has been propagated is outside scope unless the PDF itself contains a visible contradiction or cites a public version for the exact disputed claim.
 - Configuration tables avoid columns dominated by `N/A`; heterogeneous modules may be described separately in prose.
 - Code, commands, configs, checkpoints, logs, and dependencies are cited when available and relevant.
 - Private data or enterprise constraints are described honestly without demanding disclosure that violates confidentiality.
@@ -119,7 +129,7 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Text inside figures is legible at print scale; images are sharp and not incorrect draft alternatives.
 - Captions function as concise titles. Extended interpretation belongs in body text.
 - Figures and tables are not needlessly adjacent; large floats do not create avoidable float-only or nearly blank pages.
-- No `[H]`, `\clearpage`, `\newpage`, or barrier is used merely to force a local visual preference without checking neighboring pages.
+- Visible pagination has no avoidable blank space, float stack, orphan heading, detached caption, or abnormal break. The underlying LaTeX forcing construct is not inferred from the PDF.
 - Tables use appropriate font size, column widths, alignment, line breaks, notes, and multipage mechanisms.
 - Equations, symbols, algorithms, and units are consistently numbered and referenced.
 - Table-of-contents hierarchy is balanced across technical chapters and exposes the thesis logic.
@@ -128,7 +138,7 @@ Evaluate practical problem definition, engineering or professional value, requir
 - A DOI resolving to another work, an official proceedings/accepted-paper record contradicting the entry, or a title--author--year combination shown not to exist triggers a fabricated-citation integrity investigation; do not call a merely inaccessible source fabricated without affirmative evidence.
 - The bibliography ledger and citation-claim ledger jointly reconcile bibliography entries, unique cited keys, active citation occurrences, and citation--source pairs, with no unchecked or silently omitted row.
 - The final PDF has no overlap, clipping, broken glyph, malformed arrow, missing image, unresolved reference, or unexpected blank page.
-- Every physical page and every active float/page-forcing construct has a recorded disposition in the rendered-pagination ledger; contact-sheet triage alone does not satisfy this gate.
+- Every physical page has a recorded disposition in the rendered-pagination ledger; contact-sheet triage alone does not satisfy this gate. Source-level float/page-forcing constructs are outside the blind-review packet.
 
 ## Finding test
 
@@ -141,3 +151,5 @@ Before reporting an issue, answer all five:
 5. What is the least costly sufficient remedy?
 
 If any answer is missing, downgrade it to a question or omit it.
+
+For every experiment-scope statement, additionally ask whether the PDF states it directly or whether it is only inferred from formatting or omission. Formatting-only inferences about seeds, run counts, checkpoint selection, or training coverage must not become findings.

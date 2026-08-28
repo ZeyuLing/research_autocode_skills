@@ -1,4 +1,4 @@
 interface:
   display_name: "Chinese CS Thesis Review"
-  short_description: "Independent blind review for Chinese CS theses"
-  default_prompt: "Use $thesis-review to run an independent five-reviewer audit of this Chinese CS doctoral thesis."
+  short_description: "PDF-only blind review and AI-style prose audit"
+  default_prompt: "Use $thesis-review to review only the latest frozen thesis PDF with an independent panel and a separate AI-style prose assessment."

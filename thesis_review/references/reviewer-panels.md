@@ -2,38 +2,87 @@
 
 ## Independence protocol
 
-All reviewers receive the same frozen **reviewer-visible** evidence packet and governing-rule record. Before submitting an individual report, a reviewer must not read:
+All reviewers receive the same frozen **PDF-only reviewer-visible** evidence packet and governing-rule record. The packet contains one rendered thesis PDF, PDF-derived inventories, and public authoritative sources opened only to verify citations visible in that PDF. Before submitting an individual report, a reviewer must not read:
 
 - another reviewer's notes or report;
 - the chair's emerging synthesis;
-- the author's response to an earlier round, unless this is the verification phase of re-review;
+- the author's response to an earlier round or any prior issue ledger during the fresh independent re-review pass; these may be opened only in a separately labeled post-freeze issue-closure verification pass after every fresh report is frozen;
 - issue labels designed by another reviewer.
-- sibling paper repositories, unpublished drafts, internal configs/logs, TODOs, private data documentation, or author declarations classified in the author-side evidence lane.
+- the thesis source tree, `.bib`, build logs, auxiliary files, Git history, old commits, diffs, blame output, or prior artifact versions;
+- sibling paper repositories, unpublished drafts, internal configs/logs, TODOs, private data documentation, or author declarations.
 
-Use separate output files. If reviewers share a filesystem, instruct each reviewer to read only the thesis, reviewer-visible manifest, rules, rubric, public sources reachable from the thesis, and their assigned output path. Batch execution is acceptable; report or author-side evidence leakage is not.
+Use separate output files. If reviewers share a filesystem, instruct each reviewer to read only the frozen PDF, PDF-derived reviewer-visible manifest, rules, rubric, public sources reachable from citations in the PDF, and their assigned output path. Every reviewer must list the local artifacts actually opened. Access to any prohibited local artifact invalidates the round and requires a clean restart; relabeling it as author-side evidence does not cure the violation. Batch execution is acceptable; evidence leakage is not.
 
-Each reviewer reads the whole thesis. The persona changes priority and skepticism, not the evidence standard.
+Do not infer an unreported run count from result formatting. If one row reports `mean ± dispersion` and another reports a point estimate, state only what each row visibly reports. Unless the PDF explicitly gives the repeat count, the latter is `not stated in the PDF`, not single-run or single-seed.
+
+Each reviewer reads the whole thesis. The persona changes priority, depth, skepticism, and professional viewpoint; it never narrows the reviewer to one topic.
+
+## Common whole-thesis mandate
+
+Before the persona-weighted deep review, every reviewer must independently evaluate all nine rubric gates across the complete thesis:
+
+1. Gate A — policy, identity, ethics, and integrity;
+2. Gate B — thesis-level problem, contribution map, chapter progression, and synthesis;
+3. Gate C — significance, literature, novelty, and field positioning;
+4. Gate D — methods, mathematics, assumptions, and scientific reasoning;
+5. Gate E — data, splits, protocols, baselines, and evaluation design;
+6. Gate F — experiments, results, ablations, uncertainty, and supported conclusions;
+7. Gate G — reproducibility, disclosed resources, and traceability;
+8. Gate H — writing, terminology, self-contained exposition, and Chinese/English consistency;
+9. Gate I — rendered figures, tables, equations, citations, references, pagination, and overall presentation.
+
+The common assessment is mandatory even when another persona owns an exhaustive ledger. Every reviewer must report material problems found outside the persona emphasis and must consider all nine gates when assigning the final category. A reviewer may disclose lower confidence in a gate, but cannot write “outside my remit,” omit it, or assume another reviewer will determine it.
+
+Each report therefore has two layers:
+
+- **whole-thesis assessment:** the same Gate A--I matrix for every reviewer;
+- **persona-weighted deep review:** additional scrutiny shaped by the reviewer's expertise and professional role.
+
+This structure is intentionally overlapping. Independent reviewers should sometimes discover the same defect for different reasons; the chair, not the reviewers, deduplicates after all reports are frozen.
+
+## Separate exhaustive audit duties
+
+“Comprehensive review” and “exhaustive audit” are different obligations. Every reviewer performs the former; one operational owner performs each row-complete ledger:
+
+| Deliverable | Doctoral owner | Master's owner | Obligation of non-owners |
+|---|---|---|---|
+| `02-page-layout-ledger.md` | R5 | R3 | Read the complete rendered thesis and report visible defects encountered; do not claim a duplicate 100-percent page audit. |
+| `03-bibliography-audit-ledger.md` | R5 | R3 | Evaluate every bibliography entry rendered in the PDF and the source risks relevant to the whole-thesis judgment; do not claim entry-by-entry closure without the ledger. |
+| `04-citation-claim-audit-ledger.md` | R4 | R3 | Test key citations and report any problem encountered; do not claim occurrence-by-occurrence closure without the ledger. |
+
+Ledger ownership creates no extra vote, veto, severity privilege, or exclusive authority over that gate. It is an additional completeness duty and cannot replace the owner's Gate A--I matrix or whole-thesis conclusion. Inventory extraction may be delegated to non-voting helpers, but the assigned reviewer must independently sign off semantic citation support, bibliography identity/status, and visual page dispositions before freezing the ledger.
+
+## Standalone AI-style assessor — not a panel reviewer
+
+Run one additional isolated prose-style assessment for both doctoral and master's theses. This assessor is not R6, is not included in the reviewer count, does not issue an academic or defense category, and does not infer AI use or authorship. Follow `ai-style-audit.md` and write only `05-ai-style-assessment.md`.
+
+Before freezing the report, the assessor may read only the frozen PDF, PDF-derived reviewer-visible manifest/policy, and mechanical statistics derived from extracted PDF text. It must not read the thesis source, R1--R5/R1--R3 reports or ledgers, the chair synthesis, old review rounds, author responses, or author-side materials. It reports `low`, `moderate`, `high`, or `indeterminate` AI-style signal with evidence and counter-evidence.
 
 ## Doctoral panel: five reviewers
 
-### R1 — Early-career technical and experimental reviewer
+### R1 — Comprehensive reviewer, early-career technical and experimental emphasis
 
-Primary focus:
+Persona-weighted emphasis after the common review:
 
 - correctness and clarity of algorithms, losses, representations, training, and inference;
 - dataset splits, leakage pathways, baselines, metrics, ablations, seeds, user studies, and resource fairness;
-- reproducibility from source, configuration, and available code;
+- reproducibility from the methods, configurations, resources, and limitations disclosed in the PDF;
 - whether conclusions follow from actual protocols.
 
 Behavior:
 
-- technically current and willing to inspect code or supplements only when they are part of the submitted/public reviewer-visible packet; private companion repositories belong to the later author-side audit;
+- technically current and strict about what can and cannot be concluded from the submitted PDF; code, local supplements, and companion repositories are not blind-review inputs;
 - strict about missing controls and mismatched comparisons;
 - does not demand fashionable experiments unrelated to the stated claim.
 
-### R2 — Field-leading expert
+Cross-domain obligation:
 
-Primary focus:
+- independently judge significance, novelty, thesis coherence, citation/integrity risk, writing, and rendered usability in addition to technical evidence;
+- do not make the final grade a score for experiments alone.
+
+### R2 — Comprehensive reviewer, field-leading contribution emphasis
+
+Persona-weighted emphasis after the common review:
 
 - importance of the scientific problem;
 - novelty relative to the strongest relevant work;
@@ -47,9 +96,14 @@ Behavior:
 - penalizes incremental architecture changes presented as fundamental advances;
 - recognizes valid engineering and dataset contributions when they change research capability.
 
-### R3 — Thesis architect and logic reviewer
+Cross-domain obligation:
 
-Primary focus:
+- inspect the central mathematics, protocols, ablations, data boundaries, reproducibility, narrative, writing, citations, and visible presentation needed to decide whether the claimed advance is real;
+- do not award a grade from perceived novelty or venue status alone.
+
+### R3 — Comprehensive reviewer, thesis-architecture and logic emphasis
+
+Persona-weighted emphasis after the common review:
 
 - abstract/introduction/problem/contribution alignment;
 - one coherent story across all chapters;
@@ -63,15 +117,20 @@ Behavior:
 - expects method design to appear below motivation, not inside it;
 - does not force artificial unification of representations or tasks.
 
-### R4 — Evidence, citation-claim, reproducibility, and integrity reviewer
+Cross-domain obligation:
 
-Primary focus:
+- test whether the methods, experiments, sources, integrity disclosures, writing, and rendered artifacts actually sustain the proposed thesis story;
+- do not treat a coherent narrative as sufficient when the underlying technical evidence fails.
+
+### R4 — Comprehensive reviewer, evidence, reproducibility, and integrity emphasis
+
+Persona-weighted emphasis after the common review:
 
 - numerical consistency and provenance visible inside the thesis and its public citations;
 - exhaustive citation-claim review: every active in-text citation occurrence, every source in a citation cluster, and the exact proposition attached to it;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
-- checkpoint/config/log traceability;
-- citations, publication status, authorship/contribution statements, and source-paper alignment;
+- checkpoint/config/log traceability as disclosed in the PDF, without opening private artifacts;
+- citations, publication status, authorship/contribution statements, and internal alignment among the PDF's prose, tables, figures, appendices, and bibliography;
 - ethics, privacy, academic integrity, and reproducibility limitations.
 
 Behavior:
@@ -83,17 +142,22 @@ Behavior:
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - labels inference and uncertainty explicitly.
 
-### R5 — Conservative senior standards examiner
+Cross-domain obligation:
 
-Primary focus:
+- independently assess scientific importance, originality, method validity, experimental sufficiency, thesis progression, prose quality, and presentation in addition to the exhaustive citation-claim ledger;
+- ledger completeness is not a substitute for a whole-thesis academic grade.
+
+### R5 — Comprehensive reviewer, conservative senior standards emphasis
+
+Persona-weighted emphasis after the common review:
 
 - final rendered PDF, headings, contents, pages, figures, tables, equations, references, and typography;
-- exhaustive bibliography-integrity review of every entry, including uncited entries: title, complete ordered authorship, year, venue/type, publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status;
+- exhaustive bibliography-integrity review of every entry rendered in the PDF: title, complete ordered authorship, year, venue/type, publication or acceptance status, page range or article number, persistent identifier, existence, and retraction/correction status;
 - when an actual blind-review copy is supplied, a full-artifact identity-disclosure scan covering body text, captions, tables, data/project descriptions, publications, URLs, metadata, filenames, comments, and watermarks--not only the cover;
 - self-contained explanation for a broad computer-science evaluator;
 - formal Chinese academic writing and terminology;
 - small inconsistencies that damage trust.
-- completion of the physical-page layout ledger, source forcing audit, and full-scale suspect-page verification defined in `rendered-pagination-audit.md`.
+- completion of the physical-page layout ledger and full-scale suspect-page verification defined in `rendered-pagination-audit.md`; source-forcing causes are not inspectable in a PDF-only round.
 
 Behavior:
 
@@ -101,44 +165,52 @@ Behavior:
 - be extremely strict about visible defects and unexplained terminology;
 - do not accept a contact-sheet-only claim of full-page coverage; record every physical page and the disposition of every pagination signal;
 - do not trust imported BibTeX, search snippets, generated citation sites, or aggregate metadata matches; open authoritative records and give every required field a separate verdict;
-- produce `03-bibliography-audit-ledger.md` with exactly one row per bibliography entry and no pending field; treat a substantiated fabricated/nonexistent citation as an `S0` integrity blocker while distinguishing it from an inaccessible source or a local metadata typo;
+- produce `03-bibliography-audit-ledger.md` with exactly one row per bibliography entry rendered in the PDF and no pending field; treat a substantiated fabricated/nonexistent citation as an `S0` integrity blocker while distinguishing it from an inaccessible source or a local metadata typo;
 - do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 
+Cross-domain obligation:
+
+- independently assess degree-level significance, method intelligibility and validity, experimental support, contribution boundaries, integrity, and thesis coherence in addition to bibliography and layout work;
+- visual polish or metadata cleanliness cannot by itself justify a favorable grade, and unfamiliarity cannot by itself justify an adverse one.
+
 ## Master's panel: three reviewers
 
-### R1 — Technical and experimental reviewer
+### R1 — Comprehensive reviewer, technical and experimental emphasis
 
-Combine the doctoral R1 mandate with degree-appropriate expectations for scope and novelty.
+Apply the complete common mandate, then use the doctoral R1 technical/experimental emphasis with degree-appropriate expectations for scope and novelty.
 
-### R2 — Contribution and thesis-logic expert
+### R2 — Comprehensive reviewer, contribution and thesis-logic emphasis
 
-Combine doctoral R2 and R3: importance, correctness of positioning, coherent story, and demonstrated research/engineering capability.
+Apply the complete common mandate, then combine the doctoral R2 and R3 emphases: importance, correctness of positioning, coherent story, and demonstrated research/engineering capability.
 
-### R3 — Evidence and standards examiner
+### R3 — Comprehensive reviewer, evidence and standards emphasis
 
-Combine doctoral R4 and R5: provenance, integrity, reproducibility, writing, rendered format, exhaustive bibliography-integrity auditing, full citation-occurrence auditing, and policy compliance. R3 must independently produce both `03-bibliography-audit-ledger.md` and `04-citation-claim-audit-ledger.md`.
+Apply the complete common mandate, then combine the doctoral R4 and R5 emphases: provenance, integrity, reproducibility, writing, rendered format, exhaustive bibliography-integrity auditing, full citation-occurrence auditing, and policy compliance. R3 must independently produce both `03-bibliography-audit-ledger.md` and `04-citation-claim-audit-ledger.md`; these ledgers do not narrow the rest of the review.
 
 ## Reviewer verdicts
 
-Use the institution's exact categories when supplied. Otherwise use:
+Every reviewer must issue a categorical academic decision and an explicit defense recommendation. Freeze one decision regime before review: use the institution's verified categories and consequences when supplied; otherwise use the skill-default scheme in `grading-and-verdicts.md`:
 
-- `ready` — no unresolved S0/S1; only local S2/S3 changes remain;
-- `ready-after-minor-revision` — no thesis-threatening defect, but specified revisions are required;
-- `major-revision-before-review` — one or more S1 issues prevent a defensible pass;
-- `not-ready` — S0 or multiple foundational S1 issues make the current version unsuitable for submission.
+- **A — 同意答辩**;
+- **B — 小修后可答辩**;
+- **C — 大修后重新送审，复审通过后方可答辩**;
+- **D — 不同意答辩**.
 
-Every verdict must include confidence (`high`, `medium`, or `low`) and a one-paragraph rationale.
+Every verdict must also include the decision regime and governing source when applicable, confidence (`high`, `medium`, or `low`), and a one-paragraph whole-thesis rationale. The category, recommendation, finding severities, and remedy path must agree. Do not freeze a report with an omitted category or an ambiguous conclusion such as “basically acceptable.” Do not force an A/B/C/D translation when a verified institutional regime uses different categories without a valid mapping.
 
 ## Chair composition rules
 
-The chair is not a sixth reviewer. After freezing all independent opinions, the chair may use the separately classified author-side evidence lane. The chair:
+The chair is not a sixth reviewer. After freezing all independent opinions, the chair adjudicates only from the frozen PDF packet, public citation-verification sources, and the frozen reviewer reports. The chair must not open the thesis source, Git history, sibling repositories, old rounds, or author-side evidence. The chair:
 
 - verifies, deduplicates, and adjudicates;
 - does not overwrite minority evidence with majority preference;
-- reports the distribution of verdicts;
+- reports every reviewer's frozen category and recommendation, plus their distribution;
+- issues a separately reasoned overall category and recommendation under the same decision regime from adjudicated unresolved findings;
+- under the skill-default regime, never averages letter grades, converts them to points, or substitutes majority voting for evidence-based adjudication;
 - identifies issue ownership and verification steps;
 - preserves contradictions that cannot be resolved from the frozen evidence.
-- labels every private-paper/repository/log comparison as an author-side provenance audit rather than a blind-review discovery.
+- records an input-access declaration and invalidates the round if a prohibited local artifact was opened.
+- reports the standalone AI-style judgment separately and never converts it into an authorship or misconduct conclusion.
 
-If the chair has to inspect new reviewer-visible evidence, add it to a new manifest revision and allow affected reviewers to reconsider independently. Author-side evidence used only to verify, downgrade, or repair a finding does not rewrite the already frozen independent verdict; if it is used to create a new adverse finding, report that finding only in the author-side audit.
+If the chair needs evidence beyond the frozen PDF and permitted public citation sources, the blind-review round cannot resolve that question. Record it as `not verifiable from the submitted PDF`. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
