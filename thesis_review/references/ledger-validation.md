@@ -1,0 +1,88 @@
+# Machine-readable ledger and bundle validation
+
+Use these contracts for every complete review round. Markdown reports contain reasoning and signed dispositions; CSV files are the authoritative row sets for completeness, deterministic IDs, and reconciliation. Mechanical validation never replaces reviewer judgment.
+
+## 1. CSV conventions
+
+- UTF-8 with a header row and RFC-4180-style quoting for commas, quotes, or newlines.
+- Stable, case-sensitive IDs assigned in frozen-PDF reading order.
+- Never reuse an ID for a different rendered object or citation pair.
+- `pending`, `unchecked`, placeholder ellipses, and silently blank mandatory verdicts fail completion.
+- Process large ledgers in deterministic ID ranges and checkpoint batches; concatenate only after duplicate/missing/extra validation.
+- Every sidecar records the frozen PDF SHA-256 in its companion Markdown report and, when practical, in a `PDFSHA256` column.
+
+## 2. Required machine-readable contracts
+
+### Stage-P inventories
+
+- `00-page-inventory.csv`: `PageID,PhysicalPage,PrintedPage,Region,MechanicalSignals,PDFSHA256`
+- `00-bibliography-inventory.csv`: `ReferenceID,DisplayedLabel,RenderedEntry,Cited,PDFSHA256`
+- `00-citation-inventory.csv`: `PairID,OccurrenceID,PDFLocation,DisplayedReferenceID,AdjacentPDFText,PDFSHA256`
+
+The Stage-P citation inventory is mechanical. `AdjacentPDFText` is not a semantic proposition verdict.
+
+### Page audit
+
+- `02-page-layout-ledger.csv`: `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence,PDFSHA256`
+
+The Page-ID set must exactly equal `00-page-inventory.csv`, and `PhysicalPage` must form `1..N` with no gaps or duplicates. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode.
+
+### Bibliography audit
+
+- `03-bibliography-audit-ledger.csv`: `ReferenceID,DisplayedLabel,Cited,Field,RenderedValue,CanonicalValue,Verdict,EvidenceEndpoint,EndpointType,CheckedAt,EvidenceNote,FindingDisposition,PDFSHA256`
+
+For each `ReferenceID`, the `(ReferenceID,Field)` key is unique and the mandatory field set is exactly:
+
+`type,title,ordered_authors,year,venue,publication_status,volume,issue,pages_or_article_number,doi,arxiv_id,arxiv_version,url,access_date,isbn_or_other_persistent_id,existence,retraction_withdrawal_correction_superseding`.
+
+`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists.
+
+### Citation-claim audit
+
+- `04-citation-claim-audit-ledger.csv`: `PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`
+
+The Pair-ID set must exactly equal `00-citation-inventory.csv`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`. A substantive support verdict other than `unverifiable` requires non-empty `ContentSourceOpened` and `ExactSourceLocator`; publication metadata alone is acceptable only when the attached proposition is publication metadata.
+
+### Chair and summary reconciliation
+
+- `91-revision-ledger.csv`: `LedgerID,Priority,ChairFindingID,SourceReviewerFindingIDs,Severity,Remedy,ExactPDFAnchor,DirectObservation,MinimumEditEvidence,Dependency,Owner,Status,Verification`
+- `91-ai-actionable-ledger.csv`: `AIFindingID,Impact,ExactPDFAnchor,DirectStyleObservation,MinimumEditingAction,Status,Verification`
+- `93-current-actionable-items.csv`: `LedgerID,CurrentFindingIDs,SeverityRemedy,ExactPDFAnchor,DirectPDFObservation,MinimumRequiredAction,OriginReviewers,ChairDisposition`
+- `93-current-ai-actionable-items.csv`: `AIFindingID,Impact,ExactPDFAnchor,DirectStyleObservation,MinimumEditingAction,ChairStatus`
+
+The open required academic `LedgerID` set in `91-revision-ledger.csv` must exactly equal the `LedgerID` set in `93-current-actionable-items.csv`. The open `material`/`local` `AIFindingID` set in `91-ai-actionable-ledger.csv` must exactly equal the ID set in `93-current-ai-actionable-items.csv`. Duplicates, missing IDs, or extra IDs invalidate Stage S.
+
+The matching rows must also agree field by field. Academic mapping: `CurrentFindingIDs = ChairFindingID`; `SeverityRemedy = Severity + "/" + Remedy`; `ExactPDFAnchor = ExactPDFAnchor`; `DirectPDFObservation = DirectObservation`; `MinimumRequiredAction = MinimumEditEvidence`; `OriginReviewers = SourceReviewerFindingIDs`; `ChairDisposition = Status`. AI mapping: the two files use identical `AIFindingID`, `Impact`, `ExactPDFAnchor`, `DirectStyleObservation`, and `MinimumEditingAction`, with `ChairStatus = Status`. Any same-ID content drift invalidates Stage S.
+
+Current-round academic and AI ledger `Status` values are limited to `open`, `closed`, `resolved`, `not required`, `not applicable`, or `N/A`; any other value is invalid. `91-revision-ledger.csv` additionally limits `Priority` to `P0`--`P3`, `Severity` to `S0`--`S3`, and `Remedy` to `W/E/N/P`. `91-ai-actionable-ledger.csv` limits `Impact` to `material` or `local`; optional AI findings do not enter this CSV.
+
+### Optional helper provenance
+
+Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these top-level fields:
+
+`actor_id,round_id,retry_id,prompt_sha256,fresh_context_declaration,input_receipt_access_declaration,received_blocks,opened_inputs,tool,version,command_or_query,pdf_sha256_start,pdf_sha256_end,outputs,limitations,recipient_stages`
+
+`received_blocks`, `opened_inputs`, `limitations`, and `recipient_stages` are arrays. `outputs` is a non-empty array of objects with exactly `file` and `sha256`; `file` is a neutral basename inside `helpers/`, and its hash is verified. The prompt and PDF hashes are 64 hexadecimal characters; both PDF hashes equal the frozen PDF. Every non-provenance file in `helpers/` must be registered by exactly one provenance record. Unregistered, multiply registered, missing, path-traversing, or hash-mismatched helper output invalidates the bundle. If no helper is consumed, omit the `helpers/` directory.
+
+## 3. Validation command
+
+Run the bundled standard-library validator after Stage S:
+
+```text
+python scripts/validate_review_bundle.py <round-directory> --write-report <round-directory>/95-bundle-validation.md
+```
+
+The validator checks required files by degree type, frozen-PDF checksum, deterministic ID sets, mandatory bibliography fields, allowed verdict/status values, page coverage, current academic/AI action reconciliation, and required clean-room declarations. A nonzero exit code blocks a claim of completion. Review the printed failures; do not edit ledgers mechanically merely to satisfy counts.
+
+## 4. Manual sign-off that validation cannot replace
+
+The owning reviewer still signs:
+
+- every page's actual visual disposition;
+- every bibliography field's canonical value and evidence quality;
+- every citation pair's exact attached proposition and source-content support;
+- every finding's severity/remedy and grade consequence;
+- every AI-style finding's contextual recurrence and impact;
+- the chair's cross-ledger identity/support adjudication.
+
+Counts, live URLs, hashes, and `pending=0` never establish semantic correctness by themselves.

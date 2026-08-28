@@ -120,4 +120,4 @@ If a rule is historical or unverified, it cannot by itself create an `S0` or ins
 
 ## Skill provenance
 
-The workflow was designed after reviewing the MIT-licensed [Agents365-ai/thesis-reviewer](https://github.com/Agents365-ai/thesis-reviewer). It retains useful ideas such as separating general and CS-specific checks, performing chapter and cross-chapter review, and generating a structured revision roadmap. This implementation is independently written and adds current 2025 standards, policy-level separation, isolated 5/3 reviewer panels, rendered-PDF inspection, evidence adjudication, remedy classes, and independent re-review.
+The workflow was designed after reviewing the MIT-licensed [Agents365-ai/thesis-reviewer](https://github.com/Agents365-ai/thesis-reviewer). It retains useful ideas such as separating general and CS-specific checks, performing chapter and cross-chapter review, and generating a structured revision roadmap. This implementation is independently written and adds current national standards, policy-level separation, clean-room 5/3 reviewer panels, rendered-PDF inspection, evidence adjudication, remedy classes, and independent re-review.

@@ -4,11 +4,21 @@ Store a review round in a dedicated directory:
 
 ```text
 thesis-review-round-YYYYMMDD/
+  00-process-parameters.json
   00-manifest.md
+  00-page-inventory.csv
+  00-bibliography-inventory.csv
+  00-citation-inventory.csv
+  helpers/                         # optional; include only helpers actually consumed
+    H01-provenance.json
+    H01-<mechanical-sidecar>.*
   01-policy-basis.md
   02-page-layout-ledger.md
+  02-page-layout-ledger.csv
   03-bibliography-audit-ledger.md
+  03-bibliography-audit-ledger.csv
   04-citation-claim-audit-ledger.md
+  04-citation-claim-audit-ledger.csv
   05-ai-style-assessment.md
   R1-comprehensive-review.md
   R2-comprehensive-review.md
@@ -17,8 +27,14 @@ thesis-review-round-YYYYMMDD/
   R5-comprehensive-review.md      # doctorate only
   90-chair-synthesis.md
   91-revision-ledger.md
+  91-revision-ledger.csv
+  91-ai-actionable-ledger.csv
   92-new-evidence-or-experiments.md
-  99-rereview.md                  # re-review rounds
+  93-user-facing-summary.md
+  93-current-actionable-items.csv
+  93-current-ai-actionable-items.csv
+  94-post-freeze-prior-issue-closure.md  # optional, only after a fresh re-review round is frozen
+  95-bundle-validation.md               # mechanical Stage-O validation, never reviewer input
 ```
 
 For a master's thesis, all three are comprehensive reviewers: R1 has a technical/experimental emphasis, R2 a contribution/thesis-logic emphasis, and R3 an evidence/standards emphasis.
@@ -29,28 +45,60 @@ Both citation ledgers are mandatory. For a doctorate, R5 owns `03-bibliography-a
 
 `05-ai-style-assessment.md` is mandatory for both degree levels but is not an R-numbered reviewer report. Its assessor freezes independently from the reviewer panel and follows `ai-style-audit.md`.
 
+Every new bundle follows `clean-room-orchestration.md`. `00`--`05`, every R report, `90`--`93`, and optional `94` are stage-owned artifacts; a conversation-aware orchestrator may not draft their substantive content. CSV files are the machine-readable master row sets and Markdown files are signed human-readable summaries/views. Preserve deterministic IDs, quote multiline CSV fields, and never let a Markdown row exist without the matching CSV row. `95` records mechanical completeness only and cannot cure semantic defects.
+
+## Neutral process parameters
+
+Stage O writes only the closed administrative envelope below. Unknown values remain `null`; do not add free-form notes or thesis assertions.
+
+```json
+{
+  "round_id": "...",
+  "retry_id": "...",
+  "frozen_pdf_file": "frozen-thesis.pdf",
+  "selected_pdf_sha256": "...",
+  "physical_page_count": 1,
+  "degree_level": "doctorate|masters|null",
+  "degree_type": "academic|professional|null",
+  "institution": null,
+  "school_or_department": null,
+  "discipline": null,
+  "expected_submission_year": null,
+  "artifact_type": "author-copy|blind-copy|unknown",
+  "review_mode": "initial|fresh-rereview",
+  "output_language": "zh-CN",
+  "governing_rule_urls": [],
+  "governing_local_files": [{"neutral_file": "rule-01.pdf", "official_title": "...", "sha256": "..."}],
+  "decision_regime_status": "verified-institutional|skill-default|undetermined"
+}
+```
+
 ## Manifest
 
 ```markdown
 # Frozen evidence manifest
 
+- Process-parameter file and SHA-256:
+- Packet-builder fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
+- Packet-builder input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; exact local artifacts and public endpoints opened; confirmation that no unlisted substantive assertion was received
+- Frozen PDF SHA-256 at start and end:
 - Degree/institution/discipline:
 - Review round and purpose:
 - Frozen PDF path, SHA-256, timestamp, and pages:
 - Governing template/rules:
 - Reviewer-visible artifact: exactly one frozen thesis PDF
 - Permitted public citation-verification sources:
-- Prohibited local artifacts: thesis source, `.bib`, build/auxiliary files, Git history, sibling repositories, local papers, code/config/logs, old rounds, and author-side records
+- Prohibited context and artifacts: conversation/memory summaries, user explanations, earlier assistant outputs, other actors' messages, thesis source, `.bib`, build/auxiliary files, Git history, sibling repositories, local papers, code/config/logs, old rounds, source/provenance audits, and author-side records
 - Items explicitly out of scope:
 
 ## Thesis structure
 ...
 
-## Scientific question -> chapter -> contribution map
-...
+## Thesis-stated questions and contributions — neutral navigation only
+Record only statements explicitly visible in the PDF, with exact page anchors. Do not adjudicate them or create a consensus map.
 
-## Claim -> evidence map
-...
+## Objective inventories and locations
+Chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, citation occurrences, and PDF-derived corpus locations.
 ```
 
 ## Independent reviewer report
@@ -62,8 +110,10 @@ Both citation ledgers are mandatory. For a doctorate, R5 owns `03-bibliography-a
 - Whole-thesis mandate: Gate A--I
 - Persona emphasis:
 - Separate exhaustive audit duties, if any:
+- Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Input-access declaration: list every local artifact actually opened; confirm that no prohibited local artifact was accessed
+- Input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; every local artifact and public endpoint opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end:
 
 ## Verdict
 - Decision regime: institutional / skill-default
@@ -141,6 +191,7 @@ The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally r
 - Suspect-page signals / resolved / unresolved:
 - Actionable layout findings:
 - Neighbor-page verification status:
+- Machine-readable master: `02-page-layout-ledger.csv`; duplicate/missing/extra page IDs:
 - Source-forcing cause: `not verifiable from the PDF`
 ```
 
@@ -153,11 +204,16 @@ The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally 
 - Title fields verified / mismatched / unverifiable:
 - Ordered-author fields verified / mismatched / unverifiable:
 - Year fields verified / mismatched / unverifiable:
-- Venue and publication-status fields verified / mismatched / unverifiable:
+- Venue fields verified / mismatched / unverifiable:
+- Publication/acceptance-status fields verified / mismatched / unverifiable:
+- Volume/issue fields verified / mismatched / legitimate N/A / unverifiable:
 - Page-range or article-number fields verified / mismatched / legitimate N/A / unverifiable:
-- DOI/arXiv/URL fields verified / mismatched / legitimate N/A / unverifiable:
+- DOI/arXiv/version/URL/access-date fields verified / mismatched / legitimate N/A / unverifiable:
+- ISBN/other-persistent-ID fields verified / mismatched / legitimate N/A / unverifiable:
+- Retraction/withdrawal/correction/superseding-status fields verified / mismatched / legitimate N/A / unverifiable:
 - Suspected fabricated/nonexistent entries and adjudication status:
 - Metadata/status verified entries:
+- Machine-readable master: `03-bibliography-audit-ledger.csv`; duplicate/missing/extra reference IDs:
 ```
 
 The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
@@ -173,6 +229,7 @@ The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionall
 - Mismatch pairs:
 - Inaccessible/unverifiable pairs:
 - Ledger rows and unchecked rows:
+- Machine-readable master: `04-citation-claim-audit-ledger.csv`; duplicate/missing/extra Pair IDs:
 ```
 
 Questions are not counted as defects until evidence supports them.
@@ -188,8 +245,10 @@ Before freezing an R-numbered report, verify that the decision regime, category,
 - Frozen artifact:
 - Reviewer-visible inputs:
 - Excluded material:
+- Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Input-access declaration:
+- Input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received
+- Frozen PDF SHA-256 at start and end:
 - Required disclaimer: This is a prose-style assessment, not a determination of AI use, authorship, plagiarism, or misconduct.
 
 ## Overall judgment
@@ -218,6 +277,9 @@ Before freezing an R-numbered report, verify that the decision regime, category,
 
 ## Limitations
 ...
+
+## Out-of-scope observations for chair verification
+PDF-visible non-style observations only, without AI finding IDs or severity; `none` is valid. Do not message reviewers.
 ```
 
 Do not add an academic/defense category, R1--R5 severity, AI probability, or misconduct finding to this report.
@@ -227,6 +289,12 @@ Do not add an academic/defense category, R1--R5 severity, AI probability, or mis
 ```markdown
 # Chair synthesis
 
+## Clean-room boundary
+- Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
+- Exact current-round input allowlist:
+- Chair input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; confirm no unlisted substantive assertion, prohibited context/artifact, or neighboring-path enumeration
+- Frozen PDF SHA-256 at start and end:
+
 ## Overall risk and recommendation
 - Decision regime: institutional / skill-default
 - Overall official category, recommendation, and governing source: required under `institutional`; otherwise N/A
@@ -234,7 +302,6 @@ Do not add an academic/defense category, R1--R5 severity, AI probability, or mis
 - Overall defense recommendation: exact Chinese action conclusion
 - Confidence:
 - Whole-thesis rationale:
-- Chair input-access declaration: list every local artifact opened; confirm that only the frozen PDF packet, permitted public citation sources, and frozen reviewer reports were used
 
 ## Reviewer coverage validation
 | Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |
@@ -254,14 +321,35 @@ State the category distribution. Under the skill-default regime, do not convert 
 - Material/local/optional findings:
 - Separation statement: report this outside the reviewer verdict distribution and do not infer AI use, authorship, plagiarism, or misconduct.
 
+## AI-style actionable findings
+| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Verification | Status |
+|---|---|---|---|---|---|---|
+
+These rows populate `91-ai-actionable-ledger.csv` and never receive academic severity/remedy classes or change the defense grade.
+
 ## Contributions that survived review
 ...
 
 ## Adjudicated findings
-| ID | Severity | Remedy | Reviewers | Evidence status | Owner | Required action | Verification |
+| Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |
+|---|---|---|---|---|---|---|---|---|---|
+
+## Mandatory citation cross-ledger consistency gate
+| Rendered reference ID | R4 identity/source | R5 canonical identity | Version/record agreement | Affected Pair IDs | Conflict class (`none` / `local` / `substantive`) | Reclassification/finding | Resolution |
+|---|---|---|---|---|---|---|---|
+
+- Unique cited rendered references joined:
+- Identity-agreement count:
+- Version disagreements:
+- Local conflicts:
+- Substantive conflicts:
+- Reclassified Pair IDs:
+- Unresolved conflicts:
+- Combined citation gate: pass / fail
 
 ## Disagreements and chair decisions
 | Topic | Positions | Evidence checked | Decision or unresolved status |
+|---|---|---|---|
 
 ## Thesis-level narrative and chapter logic
 ...
@@ -278,12 +366,24 @@ State the category distribution. Under the skill-default regime, do not convert 
 Prioritize by risk, not by chapter order.
 
 ```markdown
-| Priority | Finding | Exact edits/evidence | Dependency | Owner | Status | Verification |
-|---|---|---|---|---|---|---|
-| P0 | S0/S1 blocker | ... | ... | ... | open | ... |
-| P1 | material S2 | ... | ... | ... | open | ... |
-| P2 | S3/local | ... | ... | ... | open | ... |
+| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Minimum edit/evidence | Dependency | Owner | Status | Verification |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L01 | P0 | C-F01 | Rn-Fxx | S0/S1 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
+| L02 | P1 | C-F02 | Rn-Fxx | S2 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
+| L03 | P2 | C-F03 | Rn-Fxx | S3 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
 ```
+
+Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
+
+In the same `91-revision-ledger.md`, add the following separate table, mirrored exactly by `91-ai-actionable-ledger.csv`:
+
+```markdown
+## AI-style actionable ledger — separate from academic grading
+| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Status | Verification |
+|---|---|---|---|---|---|---|
+```
+
+Every unresolved current-round `AI-Fxx` with `material` or `local` impact appears exactly once. Do not assign academic severity, remedy class, priority, or defense consequence. Optional AI findings remain outside this actionable table.
 
 ## New evidence or experiments
 
@@ -297,14 +397,66 @@ Always split the list:
 
 ## Genuine new experiments or unavailable evidence (N)
 | Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |
+|---|---|---|---|---|
 ```
 
 An empty `N` table is a valid and often preferable result.
 
-## Re-review
+## Clean user-facing summary
+
+Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, or re-adjudicate evidence.
 
 ```markdown
-## Fresh category and defense recommendation
+# Current-round user-facing review summary
+
+## Clean-room identity
+- Review round ID:
+- Frozen PDF path and SHA-256:
+- Summary fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
+- Exact current-round input allowlist:
+- Summary input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received
+- Frozen PDF SHA-256 at start and end:
+
+## Independent and overall conclusions
+| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |
+|---|---|---|---|---|---|
+
+Keep the AI-style row visibly separate from R1--R5/R1--R3 and the chair; it has no defense category.
+
+## Current actionable items
+| Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |
+|---|---|---|---|---|---|---|---|
+
+## Current AI-style actionable items — separate from academic grading
+| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status |
+|---|---|---|---|---|---|
+
+## Optional suggestions
+Only current-round adjudicated S4 items, or `none`.
+
+## Unresolved questions and review limitations
+Only current-round chair-recorded questions/limitations, or `none`.
+
+## Reconciliation
+- Open required rows in 91-revision-ledger.md:
+- Rows in Current actionable items:
+- Missing ledger IDs: none / list and mark summary invalid
+- Extra summary IDs: none / list and mark summary invalid
+- Duplicate IDs: none / list and mark summary invalid
+- Open AI rows in 91-ai-actionable-ledger.csv:
+- Rows in Current AI-style actionable items:
+- Missing/extra/duplicate AI finding IDs: none / list and mark summary invalid
+- Statement: This summary introduces no new finding and uses no prior-round or author-side information.
+```
+
+The academic required row sets and the AI-actionable row sets must each be identical to their respective `91` sidecars. Every academic row traces to a current-round chair finding, current reviewer finding ID(s), and exact PDF anchor; every AI row traces to a current `AI-Fxx` and exact PDF anchor. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. If reconciliation fails, do not improvise; return the inconsistency to the clean chair or regenerate Stage S.
+
+For deterministic reconciliation, the CSV projections are exact field mappings, not paraphrases. For each open academic row, `93.CurrentFindingIDs = 91.ChairFindingID`, `93.SeverityRemedy = 91.Severity + "/" + 91.Remedy`, `93.ExactPDFAnchor = 91.ExactPDFAnchor`, `93.DirectPDFObservation = 91.DirectObservation`, `93.MinimumRequiredAction = 91.MinimumEditEvidence`, `93.OriginReviewers = 91.SourceReviewerFindingIDs`, and `93.ChairDisposition = 91.Status`. For each open material/local AI row, `AIFindingID`, `Impact`, `ExactPDFAnchor`, `DirectStyleObservation`, and `MinimumEditingAction` are byte-for-byte equal after CSV parsing and trimming, and `93.ChairStatus = 91.Status`.
+
+## Fresh re-review and optional prior-issue closure
+
+```markdown
+## Fresh category and defense recommendation — freeze before any prior ledger is opened
 - Decision regime: institutional / skill-default
 - Official category, recommendation, and governing source: required under `institutional`; otherwise N/A
 - Academic grade: A / B / C / D — required under `skill-default`; otherwise N/A
@@ -313,10 +465,7 @@ An empty `N` table is a valid and often preferable result.
 - Rationale for the newly frozen artifact:
 
 ## Fresh Gate A--I whole-thesis assessment
-Repeat the complete nine-row matrix from the independent-review template before consulting the prior issue ledger.
-
-| Prior finding | Status | Evidence in revised thesis | Regression check | Reviewer |
-|---|---|---|---|---|
+Repeat the complete nine-row matrix from the independent-review template. This report contains no prior-finding table and is frozen before any prior ledger is opened.
 
 ## New findings
 ...
@@ -325,7 +474,45 @@ Repeat the complete nine-row matrix from the independent-review template before 
 ...
 ```
 
-For an iterative review--revision loop, the final recommendation must also state:
+Only after all fresh R reports, the clean chair outputs, and `93-user-facing-summary.md` are frozen may a separate Stage-V actor write `94-post-freeze-prior-issue-closure.md`:
+
+```markdown
+# Post-freeze prior-issue closure verification
+- Current frozen PDF and round:
+- Current fresh reports/chair/summary already frozen:
+- Specifically allowlisted prior ledger/author response:
+- Prior frozen AI-style report identity/hash, only if longitudinal style comparison requested: not run / ...
+- Full regression baseline: not run / prior frozen PDF hash plus prior inventory/page/bibliography/citation ledger identities and hashes
+- Fresh-context and input-receipt/access declarations:
+- Frozen current PDF SHA-256 at start and end:
+
+| Prior finding | Status | Evidence in revised PDF | Regression check | Current-round related finding, if any |
+|---|---|---|---|---|
+
+## Longitudinal AI-style comparison — non-review
+- Status: not run / run
+- Prior AI report identity/hash:
+- Current AI report identity/hash:
+- Prior open material/local AI-F IDs:
+- Current corresponding evidence/status:
+- New current AI-F IDs:
+- Limitations:
+- Separation statement: this comparison does not alter the current chair decision, grade, current AI report, 91 ledgers, or 93 summary.
+
+## Full longitudinal regression audit — non-review
+- Status: not run / run with complete prior baseline
+- Prior/current PDF identities and hashes:
+- Prior/current page, bibliography, citation inventory/ledger identities and hashes:
+- Demonstrated regressions on comparable objects:
+- Current fresh findings whose introduction time is not verifiable:
+- Limitations:
+```
+
+This optional longitudinal artifact cannot edit or reinterpret the current independent reports, grades, chair decision, revision ledger, or clean user-facing summary.
+
+An author response is only a locator and record of the author's claim. Mark `resolved` only when the current frozen PDF visibly supplies the closure evidence; an author statement alone cannot close an item. Without the full prior baseline named above, Stage V performs prior-finding closure only and must state `global regression not assessed`; it may not infer that a current fresh finding was introduced by revision merely because an old issue ledger omitted it.
+
+When Stage V is run for an iterative review--revision loop, `94-post-freeze-prior-issue-closure.md` or a separate Stage-O process-completion record must additionally state the following. Never append these fields to or edit any frozen R, C, or S artifact:
 
 - whether every physical page was re-entered in the page ledger after the last edit;
 - whether every physical page and all affected neighboring pages were rechecked in the final PDF;

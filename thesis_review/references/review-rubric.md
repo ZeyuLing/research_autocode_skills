@@ -51,13 +51,13 @@ Evaluate practical problem definition, engineering or professional value, requir
 ## Gate C: topic, literature, and positioning
 
 - Topic has scientific, engineering, or societal value appropriate to the degree.
-- Related work covers foundational, directly competing, and current work.
+- Within the PDF-only boundary, related work visibly covers the foundational, directly competing, and current work needed for the thesis's own positioning; assess this relative to works presented or cited in the PDF and disclose that exhaustive field-wide completeness is not independently searched.
 - Literature organization supports the thesis questions rather than mirroring paper-by-paper citation lists.
 - Comparisons are accurate about objectives, representations, assumptions, supervision, data, and evaluation protocols.
 - Claimed gaps are substantive; differences such as continuous versus discrete representation are not treated as self-evident necessity.
 - Every active citation occurrence is audited by the doctoral R4 (or master's R3), including repeated uses of the same source and every source inside a citation cluster; citations directly support the exact attached proposition, with no citation laundering, ambiguous attachment, or irrelevant padding.
 - Bibliographic existence and keyword relevance are insufficient by themselves: verify claim--source entailment from the primary source or label the occurrence inaccessible/unverified.
-- Important negative, contradictory, or competing evidence is not omitted.
+- Important negative, contradictory, or competing evidence among works presented or cited in the PDF is not omitted or misrepresented. Do not assert that an uncited field-wide source was omitted unless a separately authorized literature audit is run outside the blind-review round.
 
 ## Gate D: methods and scientific reasoning
 

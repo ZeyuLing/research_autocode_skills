@@ -15,18 +15,20 @@ Do not:
 - penalize required institutional boilerplate, BibTeX output, reference lists, formulae, code, table cells, or standard declarations;
 - assume that common Chinese academic transitions are defective without checking recurrence, context, and reader impact.
 
-If the assessor encounters a factual, citation, integrity, or technical problem, route it to the appropriate review lane. Do not disguise it as an AI-style finding.
+If the assessor encounters a factual, citation, integrity, or technical problem, it must not message any reviewer or other actor before reports are frozen. Record the PDF-visible observation, if material, only in a sealed `Out-of-scope observations for chair verification` section of `05-ai-style-assessment.md`, without an AI finding ID, severity, or conclusion. The clean chair may independently verify it after all R reports are frozen. Do not disguise it as an AI-style finding.
 
 ## 2. Independence and evidence
 
-The AI-style assessor is independent of R1--R5 and the chair. Before freezing `05-ai-style-assessment.md`, the assessor must not read:
+Follow `clean-room-orchestration.md`. Launch the AI-style assessor in a fresh context with no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt. In Codex multi-agent execution, use `fork_turns: "none"`. The assessor is independent of R1--R5 and the chair. Before freezing `05-ai-style-assessment.md`, the assessor must not read, receive, or recall:
 
+- user explanations, corrections, rebuttals, desired interpretations, or claimed facts outside the PDF;
+- earlier assistant answers, issue tables, status reports, or messages from another current/completed task;
 - any R1--R5 report or ledger;
 - a chair synthesis, revision response, or issue list;
 - old review rounds;
 - private author-side papers, repositories, prompts, chat logs, or generation history.
 
-Use only the frozen thesis PDF, the PDF-only reviewer-visible manifest and policy basis, and mechanical statistics derived from extracted PDF text. Do not open the thesis source, `.bib`, Git history, sibling repositories, old rounds, or author-side files. The assessor must list every local artifact opened. Any prohibited access by the assessor invalidates the entire blind-review round, not only the AI-style assessment: discard all reports and restart cleanly from the frozen PDF. The assessor must not modify the thesis.
+Use only the frozen thesis PDF, neutral process envelope, PDF-only reviewer-visible manifest and policy basis, governing AI/clean-room/report rules, and mechanical statistics derived from extracted PDF text. Give the assessor exact paths and a private scratch/output directory; it must not enumerate the round parent or unrelated workspace. Do not open the thesis source, `.bib`, Git history, sibling repositories, old rounds, or author-side files. The assessor must include a fresh-context and input-receipt/access declaration covering the prompt hash, received blocks, opened artifacts, and public endpoints. Any prohibited context or artifact access by the assessor invalidates the round according to `clean-room-orchestration.md`. The assessor must not modify the thesis.
 
 ## 3. Scope
 
@@ -91,8 +93,8 @@ For every material or local finding, record the exact PDF page and section, the 
 Write `05-ai-style-assessment.md` with:
 
 - frozen artifact identity and reviewer-visible scope;
+- fresh-context and input-receipt/access declarations;
 - independence declaration and excluded material;
-- input-access declaration listing every local artifact opened;
 - overall label and confidence;
 - corpus coverage and mechanical checks;
 - signal-family summary with counter-evidence;
@@ -100,6 +102,6 @@ Write `05-ai-style-assessment.md` with:
 - passages sampled across every authored chapter;
 - limitations and the explicit statement: **This is a prose-style assessment, not a determination of AI use, authorship, plagiarism, or misconduct.**
 
-The chair may copy style remedies into the revision ledger but must report this judgment separately from the R1--R5 category/recommendation distribution. A `high` label blocks a claim that the thesis has completed final prose-polish review, but it does not by itself change the academic, defense, or integrity conclusion.
+The chair copies every unresolved `material` or `local` style remedy into the separate AI-actionable ledger without translating it to `S0--S4` or changing the defense grade. Any such open finding blocks a claim that the thesis has completed final prose-polish review, regardless of the overall signal label. The judgment remains separate from the R1--R5 category/recommendation distribution and does not by itself change the academic, defense, or integrity conclusion.
 
-After prose edits, run the assessor again on the newly frozen PDF without showing it the previous assessment. Then compare the two frozen reports only during adjudication.
+After prose edits, run the assessor again on the newly frozen PDF without showing it the previous assessment. Compare current and prior AI reports only in a separately labeled Stage-V longitudinal style comparison after the current R reports, chair outputs, and Stage-S summary are frozen. Never expose the prior AI report to the current chair or use the comparison to alter current grades, findings, revision ledger, or clean summary.

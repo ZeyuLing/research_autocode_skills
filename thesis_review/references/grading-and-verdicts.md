@@ -55,7 +55,7 @@ Each reviewer assigns the conclusion after completing the common whole-thesis as
 
 ## Chair adjudication
 
-The chair reports every frozen reviewer category and recommendation individually. Under the skill-default regime it must not average letters or convert them to points.
+The chair starts in the fresh Stage-C context defined by `clean-room-orchestration.md` and reports every frozen current-round reviewer category and recommendation individually. Under the skill-default regime it must not average letters or convert them to points.
 
 After evidence reconciliation, the chair issues a separate overall category and defense recommendation under the same decision regime. Under the skill-default regime, the chair applies the highest-adjudicated-severity mapping above rather than the arithmetic mean, median, or majority label. If it differs from the majority or from a severe minority opinion, the chair must identify the evidence and severity decision that explains the difference.
 
@@ -63,4 +63,6 @@ The standalone AI-style assessor never receives an academic/defense category and
 
 ## Re-review
 
-A re-review report must issue a fresh category and recommendation under the round's decision regime after checking both new defects and the prior ledger. Do not mechanically carry forward the old conclusion. Under the skill-default regime, a prior C can become A or B only when every decisive `S1` is resolved or not reproducible; a prior D can change only after every `S0` basis has been explicitly re-adjudicated.
+A fresh independent re-review report must issue a category and recommendation under the new round's decision regime from the newly frozen PDF alone. Before its report and grade are frozen, the reviewer must not see the prior ledger, author response, old grade, old reports, or earlier summary. Do not mechanically carry forward the old conclusion.
+
+Only after the fresh reviewer reports, clean chair decision, and clean current-round summary are frozen may a separately labeled post-freeze issue-closure verification compare the new PDF with a specifically identified prior ledger. That comparison reports whether earlier findings are resolved, partially resolved, not reproducible, or regressed elsewhere; it cannot retroactively change the fresh reports, grades, chair decision, or clean summary. When discussing longitudinal closure outside the independent round, a prior C can be considered cleared only when every decisive `S1` is resolved or not reproducible, and a prior D basis only after every `S0` has been explicitly re-adjudicated.

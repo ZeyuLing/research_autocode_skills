@@ -1,4 +1,4 @@
 interface:
   display_name: "Chinese CS Thesis Review"
-  short_description: "PDF-only blind review and AI-style prose audit"
-  default_prompt: "Use $thesis-review to review only the latest frozen thesis PDF with an independent panel and a separate AI-style prose assessment."
+  short_description: "Clean-room PDF-only thesis review and synthesis"
+  default_prompt: "Use $thesis-review to freeze the single thesis PDF selected by exact path and run a clean-room review with independent reviewers, a separate AI-style assessment, chair adjudication, and a context-isolated final summary."

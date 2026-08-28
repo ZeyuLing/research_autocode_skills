@@ -1,22 +1,22 @@
 # Rendered pagination and float audit
 
-Use this protocol for every initial review and independent re-review of the frozen PDF, and for rendered validation after a direct-edit task. The objective is to make “all pages inspected” reproducible and to detect visible layout failures involving figures, tables, captions, headings, and page breaks. Blind reviewers do not inspect or infer the underlying source constructs.
+Use this protocol for every initial review and independent re-review of the frozen PDF, and for rendered validation after a direct-edit task. In blind review, the page-ledger owner also follows the fresh-context and exact-input requirements in `clean-room-orchestration.md`; prior page ledgers, conversation hints, source-level diagnoses, and old PDF versions are not triage inputs. The objective is to make “all pages inspected” reproducible and to detect visible layout failures involving figures, tables, captions, headings, and page breaks. Blind reviewers do not inspect or infer the underlying source constructs.
 
 ## 1. Freeze and render
 
-1. Record PDF path, SHA-256, build time, physical page count, and the mapping between physical and printed/logical page numbers.
+1. Record neutral PDF path, SHA-256, freeze time, physical page count, and the mapping between physical and printed/logical page numbers. Record PDF metadata creation time separately as untrusted metadata; real build time is `not available from the PDF` unless a permitted governing record supplies it.
 2. Render every physical page at 160--200 dpi or another resolution that keeps body text, figure labels, and table notes legible.
 3. Build a whole-document contact sheet for density triage. Do not use the contact sheet as the only visual inspection.
 4. Inspect each page individually or in groups small enough to read the page structure. Open every suspect page at full-page scale and zoom embedded figure/table text when necessary.
 
 ## 2. Create the mandatory page ledger
 
-Write `02-page-layout-ledger.md` with one row per physical page:
+Write `02-page-layout-ledger.csv` as the machine-readable master and mirror it in `02-page-layout-ledger.md`, with one row per physical page:
 
-| Physical page | Printed page | Region | Dominant content | Signals | Full-scale checked | Disposition | Evidence |
-|---|---|---|---|---|---|---|---|
+| Page ID | Physical page | Printed page | Region | Dominant content | Signals | Inspection mode/scale | Render DPI | Render artifact ID/hash | Neighbor pages checked | Disposition | Evidence |
+|---|---|---|---|---|---|---|---|---|---|---|---|
 
-`Region` distinguishes front matter, chapter, references, appendix, and back matter. `Signals` records automated or visual triage. `Disposition` is `clean`, `intentional`, `finding <ID>`, or `recheck after edit`. Do not omit blank pages; explain whether each is template-mandated, chapter-structure-induced, or erroneous.
+Use deterministic Page IDs such as `P0001`. `Region` distinguishes front matter, chapter, references, appendix, and back matter. `Signals` records automated or visual triage. `Inspection mode/scale` is `individual`, `small-legible-group`, or `full-scale` with the actual zoom/scale; every page needs one valid inspection record, and every suspect page needs `full-scale`. `Disposition` is `clean`, `intentional`, `finding <ID>`, or `recheck after edit`. Do not omit blank pages; explain whether each is template-mandated, chapter-structure-induced, or erroneous. Reconcile the PDF page count, Stage-P inventory, CSV, and Markdown Page-ID sets; duplicate/missing/extra IDs must all be zero.
 
 ## 3. Mandatory triage signals
 
@@ -67,4 +67,4 @@ After any layout-affecting edit:
 5. regenerate the whole-document contact sheet and page ledger, then inspect all new or changed signals at full scale;
 6. mark the prior finding resolved only after the final PDF visibly satisfies the remedy.
 
-The gate passes only when every physical page has a ledger row, every visible signal has a disposition, and no unresolved actionable pagination finding remains. Source-forcing coverage is not part of a PDF-only blind-review gate.
+The gate passes only when `unchecked pages = 0`, every physical page has exactly one deterministic ledger row with a valid inspection mode/scale and render provenance, every visible signal has a disposition, duplicate/missing/extra Page IDs are zero, and no unresolved actionable pagination finding remains. Source-forcing coverage is not part of a PDF-only blind-review gate.

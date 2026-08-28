@@ -8,7 +8,7 @@ Audit all citation occurrences visible in the frozen PDF, including citations in
 
 Treat one occurrence with multiple displayed references as multiple **citation--source pairs**. Repeated uses of the same source remain separate pairs because different sentences may make different claims. Audit every bibliography entry rendered in the PDF. Entries that exist only in a hidden `.bib` file are outside the submitted artifact and must not be opened or counted.
 
-In an isolated blind-review round, use only the frozen thesis PDF, its rendered bibliography, and public authoritative sources reachable from or identifiable through the rendered citations. Do not use the thesis source, `.bib`, Git history, private companion papers, internal repositories, logs, old rounds, or author declarations. Source-assisted provenance work is a separate non-review task and cannot alter the blind-review verdict.
+In an isolated blind-review round, follow `clean-room-orchestration.md` and start each ledger owner in a fresh context. Use only the frozen thesis PDF, its rendered bibliography, neutral PDF-derived inventories, governing rules, and public authoritative sources reachable from or identifiable through the rendered citations. Do not use conversation history, memory summaries, user explanations/rebuttals, earlier assistant issue tables, another actor's messages, the thesis source, `.bib`, Git history, private companion papers, internal repositories, logs, old rounds, source/provenance audits, or author declarations. Source-assisted provenance work is a separate non-review task and cannot alter the blind-review verdict.
 
 ## 2. Build two independently owned inventories
 
@@ -25,19 +25,31 @@ Record in the relevant ledger:
 - number of unique displayed reference identities and rendered bibliography entries;
 - unresolved citation markers, duplicate rendered entries, citation-to-reference mapping failures, and PDF extraction limitations.
 
-In `03-bibliography-audit-ledger.md`, create a **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
+Reconcile all machine-readable IDs against the neutral Stage-P inventories. Report duplicate, missing, and extra IDs explicitly; `pending=0` is not evidence that a row was never omitted. For a large thesis, process deterministic ID ranges in checkpointed batches, then concatenate and validate the masters before the owning reviewer signs them.
 
-| Reference ID / displayed label | Cited in PDF? | Type | Title verdict | Ordered authors verdict | Year verdict | Venue and publication/acceptance-status verdict | Pages/article-number verdict | DOI/arXiv/URL verdict | Authoritative record(s) opened | Existence/integrity verdict | Finding/disposition |
-|---|---|---|---|---|---|---|---|---|---|---|---|
+Use stable deterministic rendered-reference IDs in PDF order. In `03-bibliography-audit-ledger.md`, create a human-readable **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
 
-Each field verdict must be `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse all metadata into one check mark. Record both the thesis value and the verified canonical value whenever they differ. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
+| Reference ID / displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
-In `04-citation-claim-audit-ledger.md`, create a **citation-occurrence table** with one row per citation--source pair:
+The authoritative machine-readable master is `03-bibliography-audit-ledger.csv` in long form, with columns:
 
-| Occurrence ID | PDF location | Exact attached proposition | Reference ID / displayed label | Public source/identifier | Source opened | Support | Metadata/status | Severity/finding | Disposition/evidence |
-|---|---|---|---|---|---|---|---|---|---|
+`ReferenceID,DisplayedLabel,Cited,Field,RenderedValue,CanonicalValue,Verdict,EvidenceEndpoint,EndpointType,CheckedAt,EvidenceNote,FindingDisposition,PDFSHA256`.
 
-Use stable occurrence IDs in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
+
+In `04-citation-claim-audit-ledger.md`, create the following human-readable projection with one row per citation--source pair:
+
+| Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID / displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |
+|---|---|---|---|---|---|---|---|---|---|---|
+
+Use stable occurrence IDs in PDF reading order, such as `C0001`. For a citation cluster, repeat the occurrence ID for each displayed reference and assign a unique deterministic Pair ID such as `C0001-S01`, `C0001-S02`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+
+The authoritative CSV schema is exactly the contract in `ledger-validation.md`:
+
+`PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`.
+
+The Markdown projection may combine `ContentSourceOpened` and `ExactSourceLocator` for readability; the CSV keeps them separate and carries the source PDF checksum.
 
 ## 3. Static closure checks
 
@@ -68,7 +80,7 @@ Use the strongest available record and record the exact endpoint opened:
 4. Crossref and DBLP as structured corroboration, not as substitutes when a first-party record is available;
 5. institutional repository or author page only as secondary evidence.
 
-Search-result snippets, generated citation sites, Semantic Scholar/OpenAlex-style aggregators, code README files, and another paper's bibliography are discovery aids, not final authority. If no first-party record is accessible, require two independent corroborating records where feasible and mark the field `unverifiable` rather than guessing.
+Search-result snippets, generated citation sites, Semantic Scholar/OpenAlex-style aggregators, code README files, and another paper's bibliography are discovery aids, not final authority. If no first-party record is accessible, require two independent corroborating records where feasible and mark the field `unverifiable` rather than guessing. When no authoritative page exists or resolves, record the attempted official endpoint/search route, query/date, and negative result; do not invent an evidence URL merely to fill the field.
 
 For `accepted/in press`, require an official accepted-paper list, publisher forthcoming record, DOI, or proceedings record that is publicly accessible. If no such public record is available, mark the status `unverifiable`; do not open a private acceptance document or upgrade `submitted`, `under review`, or `arXiv preprint` from author assertion alone.
 
@@ -82,21 +94,21 @@ Open an integrity investigation when any of the following occurs:
 - the entry combines a title, author list, venue, year, or pages from different works;
 - exact-title, author-title, identifier, and official venue searches all fail and an authoritative record indicates the claimed work does not exist.
 
-Do not label a paywalled, obscure, future, private, or temporarily inaccessible work fabricated solely because it was not found quickly. Record search routes and negative evidence. A substantiated fabricated/nonexistent citation is `S0` and normally requires **D — 不同意答辩** under the skill-default scheme until the integrity finding is explicitly resolved; an unresolved existence concern remains an explicit high-priority question or finding according to the available affirmative evidence.
+Do not label a paywalled, obscure, future, private, or temporarily inaccessible work fabricated solely because it was not found quickly. Record search routes and negative evidence. Once the chair substantiates a fabricated/nonexistent citation as an `integrity/foundational S0`, the skill-default conclusion is **D — 不同意答辩**. A source that is merely inaccessible, uncertain, or affected by a plausible local metadata typo is not yet that `S0`; retain it as an evidence-calibrated question or lower-severity finding.
 
 ## 4. Verify every citation occurrence semantically
 
 For every citation--source pair:
 
 1. identify the smallest exact proposition attached to the citation;
-2. open the cited primary source or an authoritative official record; use the version that matches the bibliography and frozen review date;
-3. verify the proposition against the source's actual task, assumptions, method, data, protocol, result, and conclusion;
+2. open the cited primary source content in the version that matches the bibliography and frozen review date; a publisher metadata page, DOI record, accepted-paper list, or proceedings index verifies identity/status only, not substantive content;
+3. verify the proposition against the source's actual task, assumptions, method, data, protocol, result, and conclusion, and record a source page, section, theorem, table, figure, or equivalent exact locator;
 4. distinguish what the source directly states from the thesis author's inference;
 5. check that a survey or secondary source is not being used to launder a stronger claim than its primary evidence supports;
 6. for clusters, determine what each source contributes; do not allow one relevant paper to mask unrelated padding;
 7. for comparisons or priority claims such as “first,” “most,” “state of the art,” “widely used,” or “few studies,” verify the search/date boundary or require narrower wording;
 8. for quotations, definitions, numerical values, dataset statistics, policy rules, and attributed limitations, verify exactness and context;
-9. for inaccessible sources, record the attempted persistent identifier or official endpoint and classify the row as `unverifiable`, never silently `verified`.
+9. for inaccessible source content, record the attempted persistent identifier or official endpoint and classify substantive support as `unverifiable`, never `direct`/`partial`/`context-only` from metadata alone. The exception is when the attached proposition is itself only publication metadata, in which case the official metadata record is content-appropriate evidence.
 
 Assign one support status:
 
@@ -125,6 +137,8 @@ Prefer repairing the sentence, moving the citation, splitting a compound claim, 
 
 For a doctoral panel, R4 and R5 receive the same frozen PDF and may receive a mechanically generated inventory extracted only from that PDF, but they must not edit a shared ledger, exchange provisional findings, or read each other's ledger/report before freezing their own verdicts. **Within the two exhaustive audit deliverables**, R5 signs the source-identity and field-accuracy dispositions, while R4 signs whether each source supports the attached proposition. This is ledger workload allocation only: both remain comprehensive whole-thesis reviewers, and either records any problem found in any gate. The chair reconciles duplicate or dependent findings only after both reports are frozen.
 
+Each ledger records the owner's fresh-context and input-receipt/access declarations, including prompt hash, all received blocks, exact local artifacts opened, and every public endpoint used. The owner receives exact paths and must not enumerate neighboring rounds or discover prior artifacts from the workspace.
+
 ### Mandatory chair cross-ledger consistency gate
 
 After both independent ledgers are frozen, join them by stable rendered reference identity/displayed label and check every cited reference before synthesis:
@@ -141,12 +155,13 @@ A **substantive** conflict changes source identity, existence, publication statu
 
 The bibliography-integrity gate passes only when:
 
-- the bibliography master table has exactly one row per bibliography entry rendered in the PDF;
-- every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict and an authoritative evidence endpoint;
+- the bibliography Markdown master table has exactly one summary row per rendered entry and the CSV has exactly the mandatory long-form field rows per entry;
+- every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict plus an authoritative endpoint or a documented attempted official route/query/date and negative result;
 - every unique cited rendered entry has field-level metadata, existence, and publication-status dispositions;
 - every factual bibliography mismatch is linked to a finding or unresolved question; none is silently corrected or waived as formatting;
 - every suspected fabricated/nonexistent entry has a documented integrity adjudication;
 - no row remains `pending`, `unchecked`, or silently omitted;
+- the inventory/CSV/Markdown reference-ID sets reconcile exactly, with zero duplicate, missing, or extra IDs;
 - the bibliography-owning reviewer reports counts and limitations in the independent report.
 
 The citation-claim gate passes only when:
@@ -155,6 +170,7 @@ The citation-claim gate passes only when:
 - every citation--source pair has a non-empty support status and disposition;
 - every missing, partial, context-only, mismatch, or unverifiable row is linked to a finding, an explicit question, or a reasoned non-finding;
 - no row remains `pending`, `unchecked`, or silently omitted;
+- the inventory/CSV/Markdown Pair-ID sets reconcile exactly, with zero duplicate, missing, or extra IDs;
 - the citation-claim-owning reviewer reports counts and limitations in the independent report.
 
 The combined citation gate passes only when the chair's reference-wise cross-ledger join has no unresolved identity/support contradiction. Record the joined-reference count and conflict count in the chair synthesis or re-review report.
