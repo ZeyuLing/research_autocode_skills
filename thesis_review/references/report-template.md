@@ -8,6 +8,8 @@ thesis-review-round-YYYYMMDD/
   00-manifest.md
   00-page-inventory.csv
   00-bibliography-inventory.csv
+  00-citation-candidate-ledger.csv
+  00-unmatched-bracket-ledger.csv
   00-citation-inventory.csv
   helpers/                         # optional; include only helpers actually consumed
     H01-provenance.json
@@ -61,6 +63,7 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
   "frozen_pdf_file": "frozen-thesis.pdf",
   "selected_pdf_sha256": "...",
   "physical_page_count": 1,
+  "frozen_at": "2026-08-29T12:34:56+08:00",
   "degree_level": "doctorate|masters|null",
   "degree_type": "academic|professional|null",
   "institution": null,
@@ -83,11 +86,13 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
 
 - Process-parameter file and SHA-256:
 - Packet-builder fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Packet-builder input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; exact local artifacts and public endpoints opened; confirmation that no unlisted substantive assertion was received
-- Frozen PDF SHA-256 at start and end:
+- Packet-builder input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; exact local artifacts and public endpoints opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
+- Operational prompt SHA-256: `<exactly one 64-hex hash>`
+- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
+- Frozen at: `<exact process-envelope frozen_at value>`
 - Degree/institution/discipline:
 - Review round and purpose:
-- Frozen PDF path, SHA-256, timestamp, and pages:
+- Frozen PDF path, SHA-256, `frozen_at` timestamp copied exactly from the process envelope, and pages:
 - Governing template/rules:
 - Reviewer-visible artifact: exactly one frozen thesis PDF
 - Permitted public citation-verification sources:
@@ -101,8 +106,20 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
 Record only statements explicitly visible in the PDF, with exact page anchors. Do not adjudicate them or create a consensus map.
 
 ## Objective inventories and locations
-Chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, citation occurrences, and PDF-derived corpus locations.
+Chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, the complete numeric-bracket candidate ledger, citation occurrences, unmatched-bracket glyph count/dispositions, and PDF-derived corpus locations.
+
+- Numeric-bracket candidate rows: `<integer>`
+- Citation-classified candidate rows: `<integer>`
+- Non-citation-classified candidate rows: `<integer>`
+- Unmatched square-bracket glyphs: `<integer>`
+- Unmatched glyph dispositions: `<concrete physical-page/context audit result; state none found when the validated count is zero>`
 ```
+
+When the unmatched count is positive, `00-unmatched-bracket-ledger.csv` is the row-level master with schema `GlyphID,PhysicalPage,Glyph,AdjacentPDFText,Disposition,PDFSHA256`; the manifest disposition names that file and its exact row count. When the count is zero, retain the header-only CSV and state explicitly that none were found.
+
+`01-policy-basis.md` begins with the packet builder's same complete declaration block before recording only the verified governing regime and sources.
+
+Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: fresh-context declaration using the exact no-inherited-turn wording above; input-receipt/access declaration naming received and opened inputs, no unlisted substantive assertion, no prohibited context/artifact, and no neighboring-path enumeration; exact operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
 
 ## Independent reviewer report
 
@@ -115,8 +132,9 @@ Chapters/sections, figures, tables, equations, algorithms, appendices, bibliogra
 - Separate exhaustive audit duties, if any:
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; every local artifact and public endpoint opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
-- Frozen PDF SHA-256 at start and end:
+- Operational prompt SHA-256: `<exactly one 64-hex hash>`
+- Input-receipt/access declaration: received messages/resources/preloads; every local artifact and public endpoint opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
 
 ## Verdict
 - Decision regime: institutional / skill-default
@@ -250,8 +268,9 @@ Before freezing an R-numbered report, verify that the decision regime, category,
 - Excluded material:
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received
-- Frozen PDF SHA-256 at start and end:
+- Operational prompt SHA-256: `<exactly one 64-hex hash>`
+- Input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received; no prohibited context/artifact used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
 - Required disclaimer: This is a prose-style assessment, not a determination of AI use, authorship, plagiarism, or misconduct.
 
 ## Overall judgment
@@ -295,8 +314,9 @@ Do not add an academic/defense category, R1--R5 severity, AI probability, or mis
 ## Clean-room boundary
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Exact current-round input allowlist:
-- Chair input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; confirm no unlisted substantive assertion, prohibited context/artifact, or neighboring-path enumeration
-- Frozen PDF SHA-256 at start and end:
+- Operational prompt SHA-256: `<exactly one 64-hex hash>`
+- Chair input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; confirm no unlisted substantive assertion, no prohibited context/artifact, and no neighboring-path enumeration
+- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
 
 ## Overall risk and recommendation
 - Decision regime: institutional / skill-default
@@ -360,6 +380,9 @@ These rows populate `91-ai-actionable-ledger.csv` and never receive academic sev
 ## Policy and blind-copy status
 ...
 
+## Optional suggestions
+Only current-round adjudicated S4 suggestions, or `none`.
+
 ## Review limitations
 ...
 ```
@@ -367,6 +390,8 @@ These rows populate `91-ai-actionable-ledger.csv` and never receive academic sev
 ## Revision ledger
 
 Prioritize by risk, not by chapter order.
+
+`91-revision-ledger.md` begins with the chair's complete fresh-context, input-receipt/access, prompt-hash, and start/end PDF-hash declaration block before the tables.
 
 ```markdown
 | Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Minimum edit/evidence | Dependency | Owner | Status | Verification |
@@ -392,6 +417,8 @@ Every unresolved current-round `AI-Fxx` with `material` or `local` impact appear
 
 Always split the list:
 
+`92-new-evidence-or-experiments.md` begins with the chair's complete fresh-context, input-receipt/access, prompt-hash, and start/end PDF-hash declaration block before these sections.
+
 ```markdown
 ## No-new-experiment remedies (W/E/P)
 - Existing evidence the author may recover in a separate revision task; reviewers do not inspect it:
@@ -416,9 +443,10 @@ Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer
 - Review round ID:
 - Frozen PDF path and SHA-256:
 - Summary fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist:
-- Summary input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received
-- Frozen PDF SHA-256 at start and end:
+- Exact current-round input allowlist: `00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md` (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
+- Operational prompt SHA-256: `<exactly one 64-hex hash>`
+- Summary input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received; no prohibited context/artifact used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
 
 ## Independent and overall conclusions
 | Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |
@@ -435,10 +463,10 @@ Keep the AI-style row visibly separate from R1--R5/R1--R3 and the chair; it has 
 |---|---|---|---|---|---|
 
 ## Optional suggestions
-Only current-round adjudicated S4 items, or `none`.
+Copy the current chair's `Optional suggestions` section exactly after whitespace normalization; do not summarize or add an item. Use `none` only when the chair section is `none`.
 
 ## Unresolved questions and review limitations
-Only current-round chair-recorded questions/limitations, or `none`.
+Copy the current chair's `Review limitations` section exactly after whitespace normalization; do not summarize or add an item. Use `none` only when the chair section is `none`.
 
 ## Reconciliation
 - Open required rows in 91-revision-ledger.md:

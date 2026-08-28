@@ -44,6 +44,12 @@ PAGE_ID_RE = re.compile(r"^P(\d{4})$")
 REFERENCE_ID_RE = re.compile(r"^REF(\d{4})$")
 OCCURRENCE_ID_RE = re.compile(r"^C(\d{4})$")
 PAIR_ID_RE = re.compile(r"^C(\d{4})-S(\d{2})$")
+BRACKET_CANDIDATE_ID_RE = re.compile(r"^BC(\d{4})$")
+NUMERIC_BRACKET_RE = re.compile(
+    r"\[(?P<items>\d{1,4}(?:\s*[-–—]\s*\d{1,4})?"
+    r"(?:\s*[,，]\s*\d{1,4}(?:\s*[-–—]\s*\d{1,4})?)*)\]"
+)
+NUMERIC_BRACKET_SPAN_RE = re.compile(r"\[[^\[\]]+\]")
 
 PAGE_INVENTORY_COLUMNS = [
     "PageID", "PhysicalPage", "PrintedPage", "Region",
@@ -61,6 +67,15 @@ BIB_LEDGER_COLUMNS = [
     "ReferenceID", "DisplayedLabel", "Cited", "Field", "RenderedValue",
     "CanonicalValue", "Verdict", "EvidenceEndpoint", "EndpointType",
     "CheckedAt", "EvidenceNote", "FindingDisposition", "PDFSHA256",
+]
+CITATION_CANDIDATE_COLUMNS = [
+    "CandidateID", "PhysicalPage", "Marker", "ExpandedNumbers",
+    "Classification", "ClassificationEvidence", "MappedOccurrenceID",
+    "AdjacentPDFText", "PDFSHA256",
+]
+UNMATCHED_BRACKET_COLUMNS = [
+    "GlyphID", "PhysicalPage", "Glyph", "AdjacentPDFText", "Disposition",
+    "PDFSHA256",
 ]
 CITATION_INVENTORY_COLUMNS = [
     "PairID", "OccurrenceID", "PDFLocation", "DisplayedReferenceID",
@@ -122,7 +137,7 @@ INSPECTION_MODE_PREFIXES = ("individual", "small-legible-group", "full-scale")
 
 PROCESS_KEYS = {
     "round_id", "retry_id", "frozen_pdf_file", "selected_pdf_sha256",
-    "physical_page_count", "degree_level", "degree_type", "institution",
+    "physical_page_count", "frozen_at", "degree_level", "degree_type", "institution",
     "school_or_department", "discipline", "expected_submission_year",
     "artifact_type", "review_mode", "output_language",
     "governing_rule_urls", "governing_local_files",
@@ -136,6 +151,8 @@ HELPER_PROVENANCE_KEYS = {
     "limitations", "recipient_stages",
 }
 HELPER_OUTPUT_KEYS = {"file", "sha256"}
+
+CANDIDATE_CLASSIFICATIONS = {"citation", "non-citation"}
 
 
 def sha256(path: Path) -> str:
@@ -188,6 +205,233 @@ def validate_pdf_structure_and_pages(
     return page_sizes
 
 
+def normalize_numeric_marker(value: str) -> str:
+    """Normalize only layout variants while preserving the numeric grammar."""
+    return (
+        re.sub(r"\s+", "", value)
+        .replace("，", ",")
+        .replace("–", "-")
+        .replace("—", "-")
+    )
+
+
+def normalize_extracted_text(value: str) -> str:
+    """Use one deterministic whitespace normalization for every PDF anchor."""
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def expand_numeric_marker(value: str) -> list[int] | None:
+    match = NUMERIC_BRACKET_RE.fullmatch(value.strip())
+    if not match:
+        return None
+    expanded: list[int] = []
+    for token in re.split(r"[,，]", match.group("items")):
+        token = token.strip()
+        range_match = re.fullmatch(r"(\d{1,4})\s*[-–—]\s*(\d{1,4})", token)
+        if range_match:
+            start = int(range_match.group(1))
+            end = int(range_match.group(2))
+            step = 1 if end >= start else -1
+            expanded.extend(range(start, end + step, step))
+        else:
+            expanded.append(int(token))
+    return expanded
+
+
+def extract_numeric_bracket_candidates(
+    pdf_path: Path,
+    reference_pages: set[int],
+    errors: list[str],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Re-extract the closed Stage-P candidate universe from the frozen PDF."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(pdf_path), strict=False)
+    except Exception as exc:
+        errors.append(f"cannot extract citation candidates from frozen PDF: {exc}")
+        return [], []
+    candidates: list[dict[str, Any]] = []
+    unmatched_glyphs: list[dict[str, Any]] = []
+    for physical_page, page in enumerate(reader.pages, start=1):
+        if physical_page in reference_pages:
+            continue
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            errors.append(
+                "citation-candidate extraction failed on physical page "
+                f"{physical_page}: {exc}"
+            )
+            continue
+        opening_stack: list[int] = []
+        unmatched_positions: list[tuple[int, str]] = []
+        for offset, character in enumerate(text):
+            if character == "[":
+                opening_stack.append(offset)
+            elif character == "]":
+                if opening_stack:
+                    opening_stack.pop()
+                else:
+                    unmatched_positions.append((offset, character))
+        unmatched_positions.extend((offset, "[") for offset in opening_stack)
+        for offset, glyph in sorted(unmatched_positions):
+            start = max(0, offset - 160)
+            end = min(len(text), offset + 161)
+            unmatched_glyphs.append({
+                "PhysicalPage": physical_page,
+                "Glyph": glyph,
+                "Adjacent": normalize_extracted_text(text[start:end]),
+            })
+        for match in NUMERIC_BRACKET_SPAN_RE.finditer(text):
+            if not re.search(r"\d", match.group(0)):
+                continue
+            start = max(0, match.start() - 160)
+            end = min(len(text), match.end() + 160)
+            candidates.append({
+                "PhysicalPage": physical_page,
+                "Marker": normalize_numeric_marker(match.group(0)),
+                "Expanded": expand_numeric_marker(match.group(0)),
+                "Adjacent": normalize_extracted_text(text[start:end]),
+                "Prefix": text[max(0, match.start() - 100):match.start()],
+            })
+    return candidates, unmatched_glyphs
+
+
+def obvious_non_citation_reason(candidate: dict[str, Any]) -> str | None:
+    """Reject high-certainty numeric-bracket lookalikes mechanically."""
+    if candidate["Expanded"] is None:
+        return "numeric bracket is not a pure integer citation marker"
+    numbers = list(candidate["Expanded"])
+    if 0 in numbers:
+        return "zero-bearing numeric interval/vector"
+    if len(numbers) != len(set(numbers)):
+        return "duplicate-number vector/array"
+    prefix = re.sub(r"\s+", " ", str(candidate["Prefix"])).strip()
+    if re.search(r"(?:∈|\\in)\s*$", prefix):
+        return "mathematical set/interval membership"
+    if re.search(
+        r"(?:档数(?:依次)?为|量化(?:档|级别)(?:依次)?为|数组(?:为)?|"
+        r"向量(?:为)?|形状(?:为)?|尺寸(?:为)?|维度(?:为)?|大小(?:为)?|"
+        r"levels?\s*(?:are|=)|array\s*(?:is|=)|vector\s*(?:is|=)|"
+        r"(?:tensor\s+)?shape\s*(?:is|=)|size\s*(?:is|=)|=)\s*$",
+        prefix,
+        flags=re.IGNORECASE,
+    ):
+        return "explicit numeric vector/array introduction"
+    if re.search(
+        r"(?:\b(?:interval|range|domain|shape|sizes?|levels?|array|vector)"
+        r"(?:\s+(?:is|are|of))?|区间|范围|集合|形状|大小|尺寸|维度)\s*$",
+        prefix,
+        flags=re.IGNORECASE,
+    ):
+        return "explicit interval/vector grammatical role"
+    if re.search(
+        r"\b(?:tensor|array|vector|matrix)\s+[A-Za-z_]\w*\s*$",
+        prefix,
+        flags=re.IGNORECASE,
+    ):
+        return "tensor/array index notation"
+    return None
+
+
+def derive_and_validate_reference_pages(
+    pdf_path: Path,
+    declared_reference_pages: set[int],
+    bibliography_rows: list[dict[str, str]],
+    errors: list[str],
+) -> set[int]:
+    """Bind the bibliography region to the rendered [1]...[N] entry run."""
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(pdf_path), strict=False)
+    except Exception as exc:
+        errors.append(f"cannot derive rendered bibliography pages: {exc}")
+        return set()
+    expected_labels: list[int] = []
+    for line, row in enumerate(bibliography_rows, start=2):
+        match = re.fullmatch(r"\[(\d{1,4})\]", row.get("DisplayedLabel", ""))
+        if not match:
+            errors.append(
+                f"00-bibliography-inventory.csv:{line}: invalid DisplayedLabel"
+            )
+            continue
+        expected_labels.append(int(match.group(1)))
+    expected_sequence = list(range(1, len(bibliography_rows) + 1))
+    if expected_labels != expected_sequence:
+        errors.append(
+            "00-bibliography-inventory.csv: DisplayedLabel sequence is not [1]..[N]"
+        )
+    events: list[tuple[int, int]] = []
+    for physical_page, page in enumerate(reader.pages, start=1):
+        try:
+            text = page.extract_text() or ""
+        except Exception as exc:
+            errors.append(
+                f"bibliography extraction failed on physical page {physical_page}: {exc}"
+            )
+            continue
+        events.extend(
+            (physical_page, int(value))
+            for value in re.findall(r"(?m)^\s*\[(\d{1,4})\]", text)
+        )
+    all_runs: list[list[tuple[int, int]]] = []
+    length = len(expected_sequence)
+    if length:
+        for start, (_page, number) in enumerate(events):
+            if number != 1:
+                continue
+            candidate = [events[start]]
+            cursor = start + 1
+            expected_next = 2
+            while cursor < len(events) and events[cursor][1] == expected_next:
+                candidate.append(events[cursor])
+                cursor += 1
+                expected_next += 1
+            all_runs.append(candidate)
+    longest_length = max((len(run) for run in all_runs), default=0)
+    runs = [run for run in all_runs if len(run) == longest_length]
+    if len(runs) != 1 or longest_length != length:
+        errors.append(
+            "frozen PDF must contain exactly one longest rendered line-start "
+            f"bibliography run and its length must equal the {length} inventory "
+            f"rows; longest_length={longest_length}, tied_longest_runs={len(runs)}"
+        )
+        return set()
+    first_page = runs[0][0][0]
+    last_page = runs[0][-1][0]
+    try:
+        first_page_text = reader.pages[first_page - 1].extract_text() or ""
+    except Exception as exc:
+        errors.append(
+            f"cannot verify bibliography heading on physical page {first_page}: {exc}"
+        )
+        return set()
+    if not re.search(
+        r"(?im)(?:^|\n)\s*(?:参考文献|references|bibliography)\s*(?:\n|$)",
+        first_page_text,
+    ):
+        errors.append(
+            "rendered bibliography run is not anchored by a References/参考文献 "
+            f"heading on physical page {first_page}"
+        )
+        return set()
+    derived_pages = set(range(first_page, last_page + 1))
+    if declared_reference_pages != derived_pages:
+        errors.append(
+            "00-page-inventory.csv: reference Region pages do not equal the "
+            f"rendered bibliography span; declared={sorted(declared_reference_pages)}, "
+            f"derived={sorted(derived_pages)}"
+        )
+    return derived_pages
+
+
+def parse_physical_page_locator(value: str) -> int | None:
+    match = re.search(
+        r"(?i)\bphysical\s+(?:page\s*)?p?\.?0*(\d+)\b", value
+    )
+    return int(match.group(1)) if match else None
+
+
 def validate_iso_date(value: str) -> bool:
     try:
         datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -203,6 +447,8 @@ def validate_markdown_id_projection(
     id_header_aliases: set[str],
     label: str,
     errors: list[str],
+    *,
+    required_headers: set[str] | None = None,
 ) -> None:
     try:
         text = path.read_text(encoding="utf-8")
@@ -251,6 +497,17 @@ def validate_markdown_id_projection(
         return
 
     header_index, header, id_column = target_tables[0]
+    if required_headers is not None:
+        actual_headers = {cell.casefold() for cell in header}
+        missing_headers = sorted(
+            value for value in required_headers
+            if value.casefold() not in actual_headers
+        )
+        if missing_headers:
+            errors.append(
+                f"{path.name}: target Markdown table is missing required "
+                f"headers {missing_headers}"
+            )
     row_counts: Counter[str] = Counter()
     data_row_count = 0
     target_data_lines: set[int] = set()
@@ -283,7 +540,7 @@ def validate_markdown_id_projection(
                     f"{path.name}:{line_number + 1}: IDs must occur only in "
                     f"the designated ID column, found {misplaced}"
                 )
-    if data_row_count == 0:
+    if data_row_count == 0 and expected_ids:
         errors.append(f"{path.name}: target Markdown table has no data rows")
     for line_number, line in enumerate(lines):
         if line_number in target_data_lines:
@@ -301,6 +558,113 @@ def validate_markdown_id_projection(
         errors.append(
             f"{path.name}: IDs must occur in exactly one Markdown table row: {duplicates}"
         )
+
+
+def parse_markdown_table_by_header(
+    text: str,
+    required_first_header: str,
+    filename: str,
+    errors: list[str],
+) -> tuple[list[str], list[list[str]]] | None:
+    """Return one exact pipe table selected by its first header cell."""
+
+    def parse_row(line: str) -> list[str] | None:
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            return None
+        return [
+            cell.replace(r"\|", "|").strip()
+            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
+        ]
+
+    lines = text.splitlines()
+    matches: list[tuple[list[str], list[list[str]]]] = []
+    for index in range(len(lines) - 1):
+        header = parse_row(lines[index])
+        separator = parse_row(lines[index + 1])
+        if (
+            not header
+            or header[0].casefold() != required_first_header.casefold()
+            or separator is None
+            or len(separator) != len(header)
+            or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator)
+        ):
+            continue
+        rows: list[list[str]] = []
+        for row_line in lines[index + 2:]:
+            row = parse_row(row_line)
+            if row is None:
+                break
+            rows.append(row)
+        matches.append((header, rows))
+    if len(matches) != 1:
+        errors.append(
+            f"{filename}: expected exactly one Markdown table whose first "
+            f"header is {required_first_header!r}, found {len(matches)}"
+        )
+        return None
+    header, rows = matches[0]
+    for index, row in enumerate(rows, start=1):
+        if len(row) != len(header):
+            errors.append(
+                f"{filename}: selected table row {index} has {len(row)} "
+                f"cells; expected {len(header)}"
+            )
+    return header, rows
+
+
+def parse_markdown_table_by_exact_headers(
+    text: str,
+    expected_headers: list[str],
+    filename: str,
+    errors: list[str],
+) -> list[list[str]] | None:
+    """Select exactly one pipe table by its complete ordered header schema."""
+
+    def parse_row(line: str) -> list[str] | None:
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            return None
+        return [
+            cell.replace(r"\|", "|").strip()
+            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
+        ]
+
+    expected_folded = [value.casefold() for value in expected_headers]
+    lines = text.splitlines()
+    matches: list[list[list[str]]] = []
+    for index in range(len(lines) - 1):
+        header = parse_row(lines[index])
+        separator = parse_row(lines[index + 1])
+        if (
+            header is None
+            or [value.casefold() for value in header] != expected_folded
+            or separator is None
+            or len(separator) != len(header)
+            or not all(re.fullmatch(r":?-{3,}:?", cell) for cell in separator)
+        ):
+            continue
+        rows: list[list[str]] = []
+        for row_line in lines[index + 2:]:
+            row = parse_row(row_line)
+            if row is None:
+                break
+            rows.append(row)
+        matches.append(rows)
+    if len(matches) != 1:
+        errors.append(
+            f"{filename}: expected exactly one Markdown table with schema "
+            f"{expected_headers}, found {len(matches)}"
+        )
+        return None
+    rows = matches[0]
+    for index, row in enumerate(rows, start=1):
+        if len(row) != len(expected_headers):
+            errors.append(
+                f"{filename}: selected table row {index} has {len(row)} "
+                f"cells; expected {len(expected_headers)}"
+            )
+    return rows
 
 
 def read_valid_png_dimensions(path: Path, errors: list[str]) -> tuple[int, int] | None:
@@ -384,7 +748,11 @@ def require_value(
     value = row.get(field, "").strip()
     if not value and not allow_blank:
         errors.append(f"{location}: blank mandatory field {field}")
-    elif value and is_placeholder(value):
+    elif (
+        value
+        and is_placeholder(value)
+        and not (field == "PrintedPage" and value == "X")
+    ):
         errors.append(f"{location}: placeholder in mandatory field {field}: {value!r}")
 
 
@@ -485,10 +853,40 @@ def validate_declarations(
     lower = text.casefold()
     if "fresh-context declaration" not in lower:
         errors.append(f"{path.name}: missing fresh-context declaration")
+    required_fresh_boundary = (
+        "no inherited user/thread/task turns beyond system/developer "
+        "instructions and the exact operational prompt"
+    )
+    if required_fresh_boundary not in lower:
+        errors.append(
+            f"{path.name}: fresh-context declaration does not state the "
+            "complete no-inherited-context boundary"
+        )
     if "input-receipt/access declaration" not in lower:
         errors.append(f"{path.name}: missing input-receipt/access declaration")
     if "received" not in lower or "opened" not in lower:
         errors.append(f"{path.name}: input receipt does not name received/opened inputs")
+    for description, alternatives in (
+        ("no unlisted substantive assertion", (
+            "no unlisted substantive assertion",
+            "no unlisted substantive assertions",
+        )),
+        ("no prohibited context/artifact", (
+            "no prohibited context/artifact",
+            "no prohibited context or artifact",
+            "no prohibited context and no prohibited artifact",
+        )),
+        ("no neighboring-path enumeration", (
+            "neighboring paths were not enumerated",
+            "neighboring paths not enumerated",
+            "no neighboring-path enumeration",
+            "no neighboring path enumeration",
+        )),
+    ):
+        if not any(value in lower for value in alternatives):
+            errors.append(
+                f"{path.name}: input receipt does not state {description}"
+            )
     prompt_hashes = extract_hashes_from_labeled_line(text, r"prompt\s+sha-?256")
     if len(prompt_hashes) != 1:
         errors.append(
@@ -507,23 +905,122 @@ def validate_declarations(
 
 
 def validate_reviewer_report(
-    path: Path, expected_pdf_hash: str, errors: list[str]
+    path: Path,
+    expected_pdf_hash: str,
+    reviewer_index: int,
+    degree_level: str | None,
+    errors: list[str],
 ) -> None:
     text = validate_declarations(path, expected_pdf_hash, errors)
     if not text:
         return
+    for heading in (
+        "Role, scope, and independence",
+        "Verdict",
+        "What I inspected",
+        "Whole-thesis synthesis",
+        "Whole-thesis assessment",
+        "Persona-weighted deep review",
+        "Strongest contributions",
+        "Findings",
+        "Questions, not findings",
+        "Coverage and limitations",
+    ):
+        if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+            errors.append(f"{path.name}: missing required section {heading!r}")
+    mandate = labeled_value(text, "Whole-thesis mandate")
+    if mandate is None or not re.search(r"Gate\s+A\s*(?:--|–|—|-)\s*I", mandate, re.I):
+        errors.append(f"{path.name}: Whole-thesis mandate must explicitly cover Gate A--I")
+    persona = labeled_value(text, "Persona emphasis")
+    persona_terms = {
+        1: ("technical", "method", "experiment", "技术", "方法", "实验"),
+        2: ("contribution", "thesis logic", "narrative", "贡献", "主线", "逻辑"),
+        3: ("evidence", "reproduc", "integrity", "证据", "复现", "完整性"),
+        4: ("citation", "claim", "source", "引用", "引文", "来源"),
+        5: ("format", "bibliograph", "layout", "page", "格式", "参考文献", "版面"),
+    }
+    expected_terms = persona_terms.get(reviewer_index, ())
+    if (
+        persona is None
+        or len(persona) < 12
+        or not any(term.casefold() in persona.casefold() for term in expected_terms)
+    ):
+        errors.append(
+            f"{path.name}: Persona emphasis is missing or does not match the "
+            f"distinct R{reviewer_index} emphasis"
+        )
+    for label in ("Decision regime", "Confidence"):
+        value = labeled_value(text, label)
+        if value is None or len(value) < 3 or is_placeholder(value):
+            errors.append(f"{path.name}: missing concrete {label}")
+    rationale = labeled_value(text, "One-paragraph whole-thesis rationale")
+    if rationale is None or len(rationale) < 60 or is_placeholder(rationale):
+        errors.append(f"{path.name}: whole-thesis rationale is absent or shell-only")
+    gate_rows: dict[str, list[str]] = {}
+    gate_counts: Counter[str] = Counter()
+    for line in text.splitlines():
+        match = re.match(r"^\|\s*([A-I])\s*(?:[—-]|\|)", line)
+        if not match:
+            continue
+        cells = [
+            cell.replace(r"\|", "|").strip()
+            for cell in re.split(r"(?<!\\)\|", line.strip()[1:-1])
+        ]
+        gate_counts[match.group(1)] += 1
+        gate_rows.setdefault(match.group(1), cells)
     for gate in "ABCDEFGHI":
-        pattern = rf"(?im)^\|\s*{gate}\s*(?:[—-]|\|)"
-        if len(re.findall(pattern, text)) != 1:
+        if gate_counts[gate] != 1:
             errors.append(
                 f"{path.name}: Gate {gate} must appear exactly once as a matrix row"
             )
+        if gate not in gate_rows:
+            continue
+        cells = gate_rows[gate]
+        if len(cells) != 6:
+            errors.append(f"{path.name}: Gate {gate} row must have exactly six cells")
+            continue
+        if cells[1].casefold() not in {"baseline", "emphasized", "primary"}:
+            errors.append(f"{path.name}: Gate {gate} has invalid review depth")
+        if cells[2].casefold() not in {"adequate", "concern", "unverifiable", "n/a"}:
+            errors.append(f"{path.name}: Gate {gate} has invalid disposition")
+        if len(cells[3]) < 5 or is_placeholder(cells[3]):
+            errors.append(f"{path.name}: Gate {gate} lacks decisive anchored evidence")
+        if not cells[4] or not cells[5] or is_placeholder(cells[5]):
+            errors.append(f"{path.name}: Gate {gate} lacks finding/confidence disposition")
     if not re.search(
         r"(?im)^\s*-\s*Academic grade:\s*(?:A|B|C|D|N/?A)\b", text
     ):
         errors.append(f"{path.name}: missing explicit academic grade")
     if not re.search(r"(?im)^\s*-\s*Defense recommendation:\s*\S", text):
         errors.append(f"{path.name}: missing explicit defense recommendation")
+    if degree_level == "doctorate" and reviewer_index == 4:
+        for heading in ("Full citation-claim audit",):
+            if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+                errors.append(f"{path.name}: missing doctoral audit-duty section {heading!r}")
+        for label in ("Citation--source pairs", "Ledger rows and unchecked rows"):
+            value = labeled_value(text, label)
+            if value is None or not re.search(r"\d", value):
+                errors.append(f"{path.name}: missing concrete citation-audit count {label!r}")
+    if degree_level == "doctorate" and reviewer_index == 5:
+        for heading in ("Full rendered-page audit", "Full bibliography-integrity audit"):
+            if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+                errors.append(f"{path.name}: missing doctoral audit-duty section {heading!r}")
+        for label in (
+            "Physical pages / unchecked pages",
+            "Bibliography entries rendered in the frozen PDF",
+            "Bibliography master rows / unchecked rows",
+        ):
+            value = labeled_value(text, label)
+            if value is None or not re.search(r"\d", value):
+                errors.append(f"{path.name}: missing concrete owner-audit count {label!r}")
+    if degree_level == "masters" and reviewer_index == 3:
+        for heading in (
+            "Full rendered-page audit",
+            "Full bibliography-integrity audit",
+            "Full citation-claim audit",
+        ):
+            if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+                errors.append(f"{path.name}: missing master's owner-audit section {heading!r}")
 
 
 def labeled_value(text: str, label: str) -> str | None:
@@ -537,15 +1034,110 @@ def validate_chair_report(
     path: Path,
     expected_pdf_hash: str,
     expected_cited_references: int,
+    reviewer_count: int,
     errors: list[str],
 ) -> None:
     text = validate_declarations(path, expected_pdf_hash, errors)
     if not text:
         return
-    if not re.search(
-        r"(?im)^##\s+Mandatory citation cross-ledger consistency gate\s*$", text
+    for heading in (
+        "Clean-room boundary",
+        "Overall risk and recommendation",
+        "Reviewer coverage validation",
+        "Independent verdicts",
+        "Standalone AI-style judgment",
+        "AI-style actionable findings",
+        "Contributions that survived review",
+        "Adjudicated findings",
+        "Mandatory citation cross-ledger consistency gate",
+        "Disagreements and chair decisions",
+        "Thesis-level narrative and chapter logic",
+        "Policy and blind-copy status",
+        "Optional suggestions",
+        "Review limitations",
     ):
-        errors.append(f"{path.name}: missing mandatory citation cross-ledger section")
+        if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+            errors.append(f"{path.name}: missing required chair section {heading!r}")
+    coverage_headers = [
+        "Reviewer", "Gate A", "B", "C", "D", "E", "F", "G", "H", "I",
+        "Whole-thesis rationale", "Audit duty complete", "Eligible for adjudication",
+    ]
+    coverage_rows = parse_markdown_table_by_exact_headers(
+        text, coverage_headers, path.name, errors
+    )
+    expected_reviewers = {f"R{index}" for index in range(1, reviewer_count + 1)}
+    if coverage_rows is not None:
+        coverage_by_actor = {
+            row[0]: row for row in coverage_rows if len(row) == len(coverage_headers)
+        }
+        compare_sets(
+            "chair reviewer-coverage actors",
+            expected_reviewers,
+            set(coverage_by_actor),
+            errors,
+        )
+        for actor, row in coverage_by_actor.items():
+            if any(not cell or is_placeholder(cell) for cell in row[1:]):
+                errors.append(f"{path.name}: reviewer-coverage row {actor} is incomplete")
+            if row[-1].casefold() not in {"yes", "eligible", "pass"}:
+                errors.append(f"{path.name}: reviewer {actor} is not eligible for adjudication")
+    verdict_headers = [
+        "Reviewer", "Persona", "Category/grade", "Defense recommendation",
+        "Decision regime/source", "Confidence", "Decisive reason",
+    ]
+    verdict_rows = parse_markdown_table_by_exact_headers(
+        text, verdict_headers, path.name, errors
+    )
+    if verdict_rows is not None:
+        verdict_by_actor = {
+            row[0]: row for row in verdict_rows if len(row) == len(verdict_headers)
+        }
+        compare_sets(
+            "chair independent-verdict actors",
+            expected_reviewers,
+            set(verdict_by_actor),
+            errors,
+        )
+        for index in range(1, reviewer_count + 1):
+            actor = f"R{index}"
+            report_path = path.parent / f"{actor}-comprehensive-review.md"
+            if actor not in verdict_by_actor or not report_path.is_file():
+                continue
+            report = report_path.read_text(encoding="utf-8", errors="replace")
+            row = verdict_by_actor[actor]
+            expected = (
+                labeled_value(report, "Academic grade") or "",
+                labeled_value(report, "Defense recommendation") or "",
+                labeled_value(report, "Confidence") or "",
+            )
+            if (row[2], row[3], row[5]) != expected:
+                errors.append(
+                    f"{path.name}: chair independent-verdict row {actor} does "
+                    "not exactly preserve the frozen reviewer verdict"
+                )
+            if len(row[1]) < 8 or len(row[6]) < 20:
+                errors.append(f"{path.name}: chair verdict row {actor} is shell-only")
+    ai_section_match = re.search(
+        r"(?ims)^##\s+Standalone AI-style judgment\s*$\n(.*?)(?=^##\s+|\Z)",
+        text,
+    )
+    if ai_section_match:
+        ai_section = ai_section_match.group(1)
+        chair_signal = labeled_value(ai_section, "Signal")
+        chair_ai_confidence = labeled_value(ai_section, "Confidence")
+        ai_path = path.parent / "05-ai-style-assessment.md"
+        if ai_path.is_file():
+            ai_text = ai_path.read_text(encoding="utf-8", errors="replace")
+            if chair_signal != (labeled_value(ai_text, "AI-style signal") or ""):
+                errors.append(
+                    f"{path.name}: standalone AI signal does not exactly preserve "
+                    "the frozen AI assessment"
+                )
+            if chair_ai_confidence != (labeled_value(ai_text, "Confidence") or ""):
+                errors.append(
+                    f"{path.name}: standalone AI confidence does not exactly preserve "
+                    "the frozen AI assessment"
+                )
     counts: dict[str, int] = {}
     for label in (
         "Unique cited rendered references joined",
@@ -587,6 +1179,10 @@ def validate_chair_report(
         r"(?im)^\s*-\s*Overall defense recommendation:\s*\S", text
     ):
         errors.append(f"{path.name}: missing overall defense recommendation")
+    for heading in ("Optional suggestions", "Review limitations"):
+        body = markdown_section_body(text, heading)
+        if body is None or not body:
+            errors.append(f"{path.name}: missing or empty chair section {heading!r}")
 
 
 def parse_count_label(
@@ -616,11 +1212,232 @@ def validate_ai_report(
         text,
     ):
         errors.append(f"{path.name}: missing allowed AI-style signal")
+    for heading in (
+        "Boundary and independence",
+        "Overall judgment",
+        "Coverage and mechanical checks",
+        "Signal-family summary and counter-evidence",
+        "Findings",
+        "Limitations",
+        "Out-of-scope observations for chair verification",
+    ):
+        if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", text):
+            errors.append(f"{path.name}: missing required AI section {heading!r}")
+    confidence = labeled_value(text, "Confidence")
+    rationale = labeled_value(text, "Rationale")
+    if confidence is None or confidence.casefold() not in {"high", "medium", "low"}:
+        errors.append(f"{path.name}: missing allowed AI confidence")
+    if rationale is None or len(rationale) < 40:
+        errors.append(f"{path.name}: AI rationale is absent or shell-only")
+
+
+def markdown_section_body(text: str, heading: str) -> str | None:
+    match = re.search(
+        rf"(?ims)^##\s+{re.escape(heading)}\s*$\n(.*?)(?=^##\s+|\Z)",
+        text,
+    )
+    return normalize_extracted_text(match.group(1)) if match else None
+
+
+def validate_summary_markdown_values(
+    path: Path,
+    academic_rows: dict[str, dict[str, str]],
+    ai_rows: dict[str, dict[str, str]],
+    errors: list[str],
+) -> None:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    specifications = (
+        (
+            "Ledger ID",
+            academic_rows,
+            [
+                ("Ledger ID", "LedgerID"),
+                ("Current finding ID(s)", "CurrentFindingIDs"),
+                ("Severity / remedy", "SeverityRemedy"),
+                ("Exact PDF anchor", "ExactPDFAnchor"),
+                ("Direct PDF-visible observation", "DirectPDFObservation"),
+                ("Minimum required action", "MinimumRequiredAction"),
+                ("Origin reviewer(s)", "OriginReviewers"),
+                ("Chair disposition", "ChairDisposition"),
+            ],
+        ),
+        (
+            "AI finding ID",
+            ai_rows,
+            [
+                ("AI finding ID", "AIFindingID"),
+                ("Impact (`material` / `local`)", "Impact"),
+                ("Exact PDF anchor", "ExactPDFAnchor"),
+                ("Direct style observation", "DirectStyleObservation"),
+                ("Minimum editing action", "MinimumEditingAction"),
+                ("Chair status", "ChairStatus"),
+            ],
+        ),
+    )
+    for first_header, csv_rows, mapping in specifications:
+        parsed = parse_markdown_table_by_header(text, first_header, path.name, errors)
+        if parsed is None:
+            continue
+        headers, rows = parsed
+        expected_headers = [header for header, _field in mapping]
+        if [value.casefold() for value in headers] != [
+            value.casefold() for value in expected_headers
+        ]:
+            continue
+        id_field = mapping[0][1]
+        markdown_by_id = {
+            row[0]: row for row in rows if len(row) == len(mapping)
+        }
+        for identifier in sorted(set(csv_rows) & set(markdown_by_id)):
+            markdown_row = markdown_by_id[identifier]
+            csv_row = csv_rows[identifier]
+            for index, (_header, field) in enumerate(mapping):
+                if markdown_row[index] != csv_row[field]:
+                    errors.append(
+                        f"{path.name}: Markdown/CSV value mismatch for "
+                        f"{identifier}/{field}: expected {csv_row[field]!r}, "
+                        f"got {markdown_row[index]!r}"
+                    )
+
+
+def validate_chair_ledger_markdown_values(
+    path: Path,
+    academic_rows: dict[str, dict[str, str]],
+    ai_rows: dict[str, dict[str, str]],
+    errors: list[str],
+) -> None:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    specifications = (
+        (
+            "Ledger ID", academic_rows,
+            [
+                ("Ledger ID", "LedgerID"), ("Priority", "Priority"),
+                ("Chair finding ID", "ChairFindingID"),
+                ("Source reviewer finding IDs", "SourceReviewerFindingIDs"),
+                ("Severity", "Severity"), ("Remedy", "Remedy"),
+                ("Exact PDF anchor", "ExactPDFAnchor"),
+                ("Direct observation", "DirectObservation"),
+                ("Minimum edit/evidence", "MinimumEditEvidence"),
+                ("Dependency", "Dependency"), ("Owner", "Owner"),
+                ("Status", "Status"), ("Verification", "Verification"),
+            ],
+        ),
+        (
+            "AI finding ID", ai_rows,
+            [
+                ("AI finding ID", "AIFindingID"),
+                ("Impact (`material` / `local`)", "Impact"),
+                ("Exact PDF anchor", "ExactPDFAnchor"),
+                ("Direct style observation", "DirectStyleObservation"),
+                ("Minimum editing action", "MinimumEditingAction"),
+                ("Status", "Status"), ("Verification", "Verification"),
+            ],
+        ),
+    )
+    for first_header, csv_rows, mapping in specifications:
+        parsed = parse_markdown_table_by_header(text, first_header, path.name, errors)
+        if parsed is None:
+            continue
+        headers, rows = parsed
+        expected_headers = [header for header, _field in mapping]
+        if [value.casefold() for value in headers] != [
+            value.casefold() for value in expected_headers
+        ]:
+            continue
+        markdown_by_id = {
+            row[0]: row for row in rows if len(row) == len(mapping)
+        }
+        for identifier in sorted(set(csv_rows) & set(markdown_by_id)):
+            markdown_row = markdown_by_id[identifier]
+            csv_row = csv_rows[identifier]
+            for index, (_header, field) in enumerate(mapping):
+                if markdown_row[index] != csv_row[field]:
+                    errors.append(
+                        f"{path.name}: Markdown/CSV value mismatch for "
+                        f"{identifier}/{field}: expected {csv_row[field]!r}, "
+                        f"got {markdown_row[index]!r}"
+                    )
+
+
+def validate_chair_finding_tables(
+    path: Path,
+    academic_rows: dict[str, dict[str, str]],
+    ai_rows: dict[str, dict[str, str]],
+    errors: list[str],
+) -> None:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    academic_headers = [
+        "Chair finding ID", "Source reviewer finding IDs", "Severity", "Remedy",
+        "Exact PDF anchor", "Direct observation", "Evidence status", "Owner",
+        "Minimum required action", "Verification",
+    ]
+    parsed_academic = parse_markdown_table_by_exact_headers(
+        text, academic_headers, path.name, errors
+    )
+    academic_by_chair_id = {
+        row["ChairFindingID"]: row for row in academic_rows.values()
+    }
+    if parsed_academic is not None:
+        markdown_by_id = {
+            row[0]: row for row in parsed_academic if len(row) == len(academic_headers)
+        }
+        compare_sets(
+            "chair adjudicated-finding rows",
+            set(academic_by_chair_id),
+            set(markdown_by_id),
+            errors,
+        )
+        mapping = [
+            "ChairFindingID", "SourceReviewerFindingIDs", "Severity", "Remedy",
+            "ExactPDFAnchor", "DirectObservation", None, "Owner",
+            "MinimumEditEvidence", "Verification",
+        ]
+        for identifier in sorted(set(academic_by_chair_id) & set(markdown_by_id)):
+            csv_row = academic_by_chair_id[identifier]
+            markdown_row = markdown_by_id[identifier]
+            for index, field in enumerate(mapping):
+                if field is not None and markdown_row[index] != csv_row[field]:
+                    errors.append(
+                        f"{path.name}: chair/91 value mismatch for "
+                        f"{identifier}/{field}"
+                    )
+    ai_headers = [
+        "AI finding ID", "Impact (`material` / `local`)", "Exact PDF anchor",
+        "Direct style observation", "Minimum editing action", "Verification", "Status",
+    ]
+    parsed_ai = parse_markdown_table_by_exact_headers(
+        text, ai_headers, path.name, errors
+    )
+    if parsed_ai is not None:
+        markdown_by_id = {
+            row[0]: row for row in parsed_ai if len(row) == len(ai_headers)
+        }
+        compare_sets(
+            "chair AI-actionable rows",
+            set(ai_rows),
+            set(markdown_by_id),
+            errors,
+        )
+        mapping = [
+            "AIFindingID", "Impact", "ExactPDFAnchor", "DirectStyleObservation",
+            "MinimumEditingAction", "Verification", "Status",
+        ]
+        for identifier in sorted(set(ai_rows) & set(markdown_by_id)):
+            csv_row = ai_rows[identifier]
+            markdown_row = markdown_by_id[identifier]
+            for index, field in enumerate(mapping):
+                if markdown_row[index] != csv_row[field]:
+                    errors.append(
+                        f"{path.name}: chair/91 AI value mismatch for "
+                        f"{identifier}/{field}"
+                    )
 
 
 def validate_summary_report(
     path: Path,
     expected_pdf_hash: str,
+    process: dict[str, Any],
+    reviewer_count: int,
     expected_academic_rows: int,
     expected_ai_rows: int,
     errors: list[str],
@@ -628,13 +1445,151 @@ def validate_summary_report(
     text = validate_declarations(path, expected_pdf_hash, errors)
     if not text:
         return
-    for heading in (
+    required_headings = (
+        "Clean-room identity",
+        "Independent and overall conclusions",
         "Current actionable items",
         "Current AI-style actionable items",
+        "Optional suggestions",
+        "Unresolved questions and review limitations",
         "Reconciliation",
-    ):
+    )
+    for heading in required_headings:
         if not re.search(rf"(?im)^##\s+{re.escape(heading)}(?:\s+.*)?$", text):
             errors.append(f"{path.name}: missing section '{heading}'")
+    round_id = labeled_value(text, "Review round ID")
+    if round_id != str(process.get("round_id", "")):
+        errors.append(
+            f"{path.name}: Review round ID does not equal the process envelope"
+        )
+    frozen_identity = labeled_value(text, "Frozen PDF path and SHA-256") or ""
+    frozen_name = str(process.get("frozen_pdf_file", ""))
+    if frozen_name not in frozen_identity or expected_pdf_hash not in frozen_identity.upper():
+        errors.append(
+            f"{path.name}: Frozen PDF path and SHA-256 are not bound to the "
+            "current process envelope"
+        )
+    allowlist_value = labeled_value(text, "Exact current-round input allowlist") or ""
+    expected_allowlist = {
+        "00-process-parameters.json",
+        "SKILL.md",
+        "clean-room-orchestration.md",
+        "report-template.md",
+        *(f"R{index}-comprehensive-review.md" for index in range(1, reviewer_count + 1)),
+        "05-ai-style-assessment.md",
+        "90-chair-synthesis.md",
+        "91-revision-ledger.md",
+        "91-revision-ledger.csv",
+        "91-ai-actionable-ledger.csv",
+        "92-new-evidence-or-experiments.md",
+    }
+    observed_allowlist = {
+        token.strip().strip("`\"")
+        for token in re.split(r"\s*;\s*", allowlist_value)
+        if token.strip()
+    }
+    if observed_allowlist != expected_allowlist:
+        errors.append(
+            f"{path.name}: Exact current-round input allowlist mismatch; "
+            f"missing={sorted(expected_allowlist-observed_allowlist)}, "
+            f"extra={sorted(observed_allowlist-expected_allowlist)}"
+        )
+    conclusion_table = parse_markdown_table_by_header(
+        text, "Actor", path.name, errors
+    )
+    if conclusion_table is not None:
+        headers, rows = conclusion_table
+        expected_headers = [
+            "Actor", "Persona/status", "Category or AI-style label",
+            "Exact defense recommendation", "Confidence",
+            "Decisive current-round basis",
+        ]
+        if [value.casefold() for value in headers] != [
+            value.casefold() for value in expected_headers
+        ]:
+            errors.append(f"{path.name}: independent-conclusion table schema mismatch")
+        actor_rows: dict[str, list[str]] = {}
+        for row in rows:
+            if len(row) != len(headers):
+                continue
+            if row[0] in actor_rows:
+                errors.append(f"{path.name}: duplicate conclusion actor {row[0]!r}")
+            actor_rows[row[0]] = row
+        expected_actors = {
+            *(f"R{index}" for index in range(1, reviewer_count + 1)),
+            "AI", "Chair",
+        }
+        compare_sets(
+            "Stage-S independent-conclusion actors",
+            expected_actors,
+            set(actor_rows),
+            errors,
+        )
+        for actor, row in actor_rows.items():
+            if len(row) == len(headers) and (len(row[1]) < 8 or len(row[5]) < 20):
+                errors.append(f"{path.name}: {actor} conclusion row is shell-only")
+        for index in range(1, reviewer_count + 1):
+            actor = f"R{index}"
+            report_path = path.parent / f"R{index}-comprehensive-review.md"
+            if not report_path.is_file():
+                continue
+            report = report_path.read_text(encoding="utf-8", errors="replace")
+            row = actor_rows.get(actor)
+            if row:
+                expected_grade = labeled_value(report, "Academic grade") or ""
+                expected_rec = labeled_value(report, "Defense recommendation") or ""
+                expected_conf = labeled_value(report, "Confidence") or ""
+                if row[2] != expected_grade or row[3] != expected_rec or row[4] != expected_conf:
+                    errors.append(
+                        f"{path.name}: {actor} conclusion does not exactly copy "
+                        "its independent current-round verdict"
+                    )
+        ai_text = (path.parent / "05-ai-style-assessment.md").read_text(
+            encoding="utf-8", errors="replace"
+        )
+        ai_row = actor_rows.get("AI")
+        if ai_row:
+            expected_signal = labeled_value(ai_text, "AI-style signal") or ""
+            expected_conf = labeled_value(ai_text, "Confidence") or ""
+            if (
+                ai_row[2] != expected_signal
+                or ai_row[3].casefold() != "n/a"
+                or ai_row[4] != expected_conf
+            ):
+                errors.append(
+                    f"{path.name}: AI conclusion does not exactly copy the "
+                    "separate current-round style judgment"
+                )
+        chair_path = path.parent / "90-chair-synthesis.md"
+        chair_text = chair_path.read_text(encoding="utf-8", errors="replace")
+        chair_row = actor_rows.get("Chair")
+        if chair_row:
+            expected_grade = labeled_value(chair_text, "Overall academic grade") or ""
+            expected_rec = labeled_value(chair_text, "Overall defense recommendation") or ""
+            expected_conf = labeled_value(chair_text, "Confidence") or ""
+            if (
+                chair_row[2] != expected_grade
+                or chair_row[3] != expected_rec
+                or chair_row[4] != expected_conf
+            ):
+                errors.append(
+                    f"{path.name}: Chair conclusion does not exactly copy the "
+                    "current-round chair verdict"
+                )
+        for summary_heading, chair_heading in (
+            ("Optional suggestions", "Optional suggestions"),
+            (
+                "Unresolved questions and review limitations",
+                "Review limitations",
+            ),
+        ):
+            summary_body = markdown_section_body(text, summary_heading)
+            chair_body = markdown_section_body(chair_text, chair_heading)
+            if summary_body != chair_body:
+                errors.append(
+                    f"{path.name}: section {summary_heading!r} must be an "
+                    f"exact current-round projection of chair section {chair_heading!r}"
+                )
     academic_91 = parse_count_label(
         text, "Open required rows in 91-revision-ledger.md", path.name, errors
     )
@@ -805,6 +1760,18 @@ def validate_process(
         value = process.get(key)
         if not isinstance(value, str) or not value.strip() or is_placeholder(value):
             errors.append(f"process envelope has invalid/blank {key}")
+    frozen_at = process.get("frozen_at")
+    if not isinstance(frozen_at, str) or not frozen_at.strip():
+        errors.append("process envelope has invalid/blank frozen_at")
+    else:
+        try:
+            parsed_frozen_at = datetime.fromisoformat(
+                frozen_at.strip().replace("Z", "+00:00")
+            )
+            if parsed_frozen_at.tzinfo is None:
+                errors.append("frozen_at must include an explicit timezone")
+        except ValueError:
+            errors.append("frozen_at must be an ISO-8601 datetime with timezone")
     local_files = process.get("governing_local_files")
     if not isinstance(local_files, list):
         errors.append("governing_local_files must be a list")
@@ -904,12 +1871,13 @@ def main(argv: list[str] | None = None) -> int:
     root = args.round_directory.resolve()
     errors: list[str] = []
     warnings: list[str] = []
-    process, _frozen_path, expected_hash, page_count, reviewer_count, pdf_page_sizes = (
+    process, frozen_path, expected_hash, page_count, reviewer_count, pdf_page_sizes = (
         validate_process(root, errors)
     )
     required_files = {
         "00-manifest.md", "00-page-inventory.csv",
-        "00-bibliography-inventory.csv", "00-citation-inventory.csv",
+        "00-bibliography-inventory.csv", "00-citation-candidate-ledger.csv",
+        "00-unmatched-bracket-ledger.csv", "00-citation-inventory.csv",
         "01-policy-basis.md", "02-page-layout-ledger.md",
         "02-page-layout-ledger.csv", "03-bibliography-audit-ledger.md",
         "03-bibliography-audit-ledger.csv",
@@ -1116,27 +2084,275 @@ def main(argv: list[str] | None = None) -> int:
         {"Page ID", "PageID"},
         "page ledger",
         errors,
+        required_headers={
+            "Page ID", "Physical page", "Printed page", "Region",
+            "Dominant content", "Signals", "Inspection mode/scale",
+            "Render DPI", "Render artifact ID/hash", "Neighbor pages checked",
+            "Disposition", "Evidence",
+        },
     )
 
     bib_inventory = read_csv(
         root / "00-bibliography-inventory.csv", BIB_INVENTORY_COLUMNS,
         errors, require_rows=True,
     )
+    validate_rows_mandatory(
+        bib_inventory, "00-bibliography-inventory.csv",
+        BIB_INVENTORY_COLUMNS, errors,
+    )
+    validate_pdf_hash(
+        bib_inventory, "00-bibliography-inventory.csv", expected_hash, errors
+    )
+
+    citation_candidates = read_csv(
+        root / "00-citation-candidate-ledger.csv",
+        CITATION_CANDIDATE_COLUMNS,
+        errors,
+        require_rows=True,
+    )
+    validate_rows_mandatory(
+        citation_candidates,
+        "00-citation-candidate-ledger.csv",
+        CITATION_CANDIDATE_COLUMNS,
+        errors,
+    )
+    validate_pdf_hash(
+        citation_candidates,
+        "00-citation-candidate-ledger.csv",
+        expected_hash,
+        errors,
+    )
+    reference_pages: set[int] = set()
+    for row in page_inventory:
+        region = row.get("Region", "").strip().casefold()
+        if (
+            "reference" in region
+            or "bibliograph" in region
+            or "参考文献" in region
+        ):
+            try:
+                reference_pages.add(int(row["PhysicalPage"]))
+            except (TypeError, ValueError):
+                pass
+    reference_pages = derive_and_validate_reference_pages(
+        frozen_path,
+        reference_pages,
+        bib_inventory,
+        errors,
+    ) if frozen_path.is_file() else set()
+    extracted_candidates, extracted_unmatched_glyphs = (
+        extract_numeric_bracket_candidates(frozen_path, reference_pages, errors)
+        if frozen_path.is_file()
+        else ([], [])
+    )
+    unmatched_rows = read_csv(
+        root / "00-unmatched-bracket-ledger.csv",
+        UNMATCHED_BRACKET_COLUMNS,
+        errors,
+        require_rows=bool(extracted_unmatched_glyphs),
+    )
+    validate_rows_mandatory(
+        unmatched_rows,
+        "00-unmatched-bracket-ledger.csv",
+        UNMATCHED_BRACKET_COLUMNS,
+        errors,
+    )
+    validate_pdf_hash(
+        unmatched_rows,
+        "00-unmatched-bracket-ledger.csv",
+        expected_hash,
+        errors,
+    )
+    if len(unmatched_rows) != len(extracted_unmatched_glyphs):
+        errors.append(
+            "00-unmatched-bracket-ledger.csv: row count does not equal the "
+            "validator's frozen-PDF unmatched-glyph extraction; "
+            f"ledger={len(unmatched_rows)}, extracted={len(extracted_unmatched_glyphs)}"
+        )
+    for index, row in enumerate(unmatched_rows, start=1):
+        line = index + 1
+        expected_id = f"UBG{index:04d}"
+        if row["GlyphID"] != expected_id:
+            errors.append(
+                f"00-unmatched-bracket-ledger.csv:{line}: GlyphID must be "
+                f"{expected_id}, got {row['GlyphID']!r}"
+            )
+        if index <= len(extracted_unmatched_glyphs):
+            extracted = extracted_unmatched_glyphs[index - 1]
+            try:
+                physical_page = int(row["PhysicalPage"])
+            except (TypeError, ValueError):
+                physical_page = -1
+            if physical_page != extracted["PhysicalPage"]:
+                errors.append(
+                    f"00-unmatched-bracket-ledger.csv:{line}: PhysicalPage "
+                    "does not match the frozen-PDF extraction"
+                )
+            if row["Glyph"] != extracted["Glyph"]:
+                errors.append(
+                    f"00-unmatched-bracket-ledger.csv:{line}: Glyph does not "
+                    "match the frozen-PDF extraction"
+                )
+            if normalize_extracted_text(row["AdjacentPDFText"]) != extracted["Adjacent"]:
+                errors.append(
+                    f"00-unmatched-bracket-ledger.csv:{line}: AdjacentPDFText "
+                    "does not exactly match the deterministic extraction window"
+                )
+        disposition = row["Disposition"].strip().casefold()
+        if (
+            len(disposition) < 12
+            or is_placeholder(disposition)
+            or re.search(r"\b(?:none|no unmatched|zero)\b", disposition)
+        ):
+            errors.append(
+                f"00-unmatched-bracket-ledger.csv:{line}: Disposition must "
+                "give a concrete non-contradictory glyph adjudication"
+            )
+    if len(citation_candidates) != len(extracted_candidates):
+        errors.append(
+            "00-citation-candidate-ledger.csv: row count does not equal the "
+            "validator's frozen-PDF extraction; "
+            f"ledger={len(citation_candidates)}, extracted={len(extracted_candidates)}"
+        )
+    candidate_occurrence_numbers: dict[str, list[int]] = {}
+    candidate_occurrence_pages: dict[str, int] = {}
+    candidate_occurrence_contexts: dict[str, str] = {}
+    citation_candidate_count = 0
+    for index, row in enumerate(citation_candidates, start=1):
+        line = index + 1
+        expected_id = f"BC{index:04d}"
+        if row["CandidateID"] != expected_id:
+            errors.append(
+                "00-citation-candidate-ledger.csv: CandidateID sequence mismatch "
+                f"at row {line}; expected {expected_id}, got {row['CandidateID']!r}"
+            )
+        if not BRACKET_CANDIDATE_ID_RE.fullmatch(row["CandidateID"]):
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: invalid CandidateID"
+            )
+        try:
+            physical_page = int(row["PhysicalPage"])
+        except (TypeError, ValueError):
+            physical_page = -1
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: invalid PhysicalPage"
+            )
+        marker = normalize_numeric_marker(row["Marker"])
+        parsed_numbers = expand_numeric_marker(row["Marker"])
+        if parsed_numbers is None:
+            declared_numbers: list[int] | None = None
+            if row["ExpandedNumbers"] != "N/A":
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: mixed/decimal "
+                    "numeric bracket must use ExpandedNumbers=N/A"
+                )
+        else:
+            try:
+                declared_numbers = [
+                    int(item) for item in row["ExpandedNumbers"].split(";")
+                ]
+            except (TypeError, ValueError):
+                declared_numbers = []
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: ExpandedNumbers "
+                    "must be a semicolon-separated integer sequence"
+                )
+            canonical_expansion = ";".join(
+                str(value) for value in parsed_numbers
+            )
+            if row["ExpandedNumbers"] != canonical_expansion:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: ExpandedNumbers "
+                    f"must equal canonical expansion {canonical_expansion!r}"
+                )
+            if declared_numbers != parsed_numbers:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: numeric expansion "
+                    "does not match Marker"
+                )
+        if index <= len(extracted_candidates):
+            extracted = extracted_candidates[index - 1]
+            if physical_page != extracted["PhysicalPage"]:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: PhysicalPage "
+                    f"{physical_page} != extracted {extracted['PhysicalPage']}"
+                )
+            if marker != extracted["Marker"]:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: Marker {marker!r} "
+                    f"!= extracted {extracted['Marker']!r}"
+                )
+            if parsed_numbers != extracted["Expanded"]:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: expansion does "
+                    "not equal the frozen-PDF extraction"
+                )
+            if normalize_extracted_text(row["AdjacentPDFText"]) != extracted["Adjacent"]:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: AdjacentPDFText "
+                    "does not exactly match the deterministic frozen-PDF window"
+                )
+        classification = row["Classification"].strip().casefold()
+        if classification not in CANDIDATE_CLASSIFICATIONS:
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: invalid "
+                f"Classification {row['Classification']!r}"
+            )
+        evidence = row["ClassificationEvidence"].strip()
+        if len(evidence) < 12 or evidence.casefold() in {
+            "citation", "non-citation", "checked", "verified"
+        }:
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: "
+                "ClassificationEvidence is not a concrete contextual reason"
+            )
+        if index <= len(extracted_candidates):
+            obvious_reason = obvious_non_citation_reason(
+                extracted_candidates[index - 1]
+            )
+            if obvious_reason and classification != "non-citation":
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: obvious "
+                    f"non-citation classified as citation ({obvious_reason})"
+                )
+        mapped = row["MappedOccurrenceID"].strip()
+        if classification == "citation":
+            citation_candidate_count += 1
+            expected_occurrence = f"C{citation_candidate_count:04d}"
+            if parsed_numbers is None:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: citation "
+                    "classification requires a pure integer citation marker"
+                )
+            if mapped != expected_occurrence:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: citation "
+                    f"candidate must map to {expected_occurrence}, got {mapped!r}"
+                )
+            if mapped in candidate_occurrence_numbers:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: duplicate "
+                    f"MappedOccurrenceID {mapped}"
+                )
+            candidate_occurrence_numbers[mapped] = parsed_numbers or []
+            candidate_occurrence_pages[mapped] = physical_page
+            candidate_occurrence_contexts[mapped] = normalize_extracted_text(
+                row["AdjacentPDFText"]
+            )
+        elif classification == "non-citation" and mapped != "N/A":
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: non-citation must "
+                "use MappedOccurrenceID=N/A"
+            )
+
     bib_ledger = read_csv(
         root / "03-bibliography-audit-ledger.csv", BIB_LEDGER_COLUMNS,
         errors, require_rows=True,
     )
     validate_rows_mandatory(
-        bib_inventory, "00-bibliography-inventory.csv",
-        BIB_INVENTORY_COLUMNS, errors,
-    )
-    validate_rows_mandatory(
         bib_ledger, "03-bibliography-audit-ledger.csv",
         BIB_LEDGER_COLUMNS, errors,
         blank_allowed={"EvidenceEndpoint"},
-    )
-    validate_pdf_hash(
-        bib_inventory, "00-bibliography-inventory.csv", expected_hash, errors
     )
     validate_pdf_hash(
         bib_ledger, "03-bibliography-audit-ledger.csv", expected_hash, errors
@@ -1236,6 +2452,13 @@ def main(argv: list[str] | None = None) -> int:
         {"Reference ID", "ReferenceID"},
         "bibliography ledger",
         errors,
+        required_headers={
+            "Reference ID", "Displayed label", "Cited?", "Type", "Title",
+            "Ordered authors", "Year", "Venue", "Publication status",
+            "Volume/issue", "Pages/article no.",
+            "Persistent IDs/URL/access date", "Existence",
+            "Retraction/correction/superseding", "Finding/disposition",
+        },
     )
 
     citation_inventory = read_csv(
@@ -1275,6 +2498,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     current_occurrence = 0
     current_source_ordinal = 0
+    inventory_occurrence_numbers: dict[str, list[int]] = defaultdict(list)
     for line, row in enumerate(citation_inventory, start=2):
         occurrence_match = OCCURRENCE_ID_RE.fullmatch(row["OccurrenceID"])
         pair_match = PAIR_ID_RE.fullmatch(row["PairID"])
@@ -1308,6 +2532,74 @@ def main(argv: list[str] | None = None) -> int:
             errors.append(
                 f"00-citation-inventory.csv:{line}: source ordinals are not "
                 "continuous within the occurrence"
+            )
+        reference_match = REFERENCE_ID_RE.fullmatch(
+            row["DisplayedReferenceID"]
+        )
+        if not reference_match:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: invalid "
+                "DisplayedReferenceID"
+            )
+        else:
+            inventory_occurrence_numbers[row["OccurrenceID"]].append(
+                int(reference_match.group(1))
+            )
+        expected_page = candidate_occurrence_pages.get(row["OccurrenceID"])
+        located_page = parse_physical_page_locator(row["PDFLocation"])
+        if located_page is None:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: PDFLocation must contain "
+                "an explicit physical page"
+            )
+        elif located_page < 1 or (page_count and located_page > page_count):
+            errors.append(
+                f"00-citation-inventory.csv:{line}: physical page "
+                f"{located_page} is outside 1..{page_count}"
+            )
+        elif expected_page is not None and located_page != expected_page:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: PDFLocation page "
+                f"{located_page} != candidate page {expected_page}"
+            )
+        expected_context = candidate_occurrence_contexts.get(row["OccurrenceID"])
+        if (
+            expected_context is not None
+            and normalize_extracted_text(row["AdjacentPDFText"]) != expected_context
+        ):
+            errors.append(
+                f"00-citation-inventory.csv:{line}: AdjacentPDFText does not "
+                "exactly equal the mapped candidate's frozen-PDF context"
+            )
+    compare_sets(
+        "citation candidate-to-inventory occurrence mapping",
+        set(candidate_occurrence_numbers),
+        set(inventory_occurrence_numbers),
+        errors,
+    )
+    for occurrence_id in sorted(
+        set(candidate_occurrence_numbers) & set(inventory_occurrence_numbers)
+    ):
+        if (
+            candidate_occurrence_numbers[occurrence_id]
+            != inventory_occurrence_numbers[occurrence_id]
+        ):
+            errors.append(
+                "citation candidate-to-inventory number mismatch for "
+                f"{occurrence_id}: candidate="
+                f"{candidate_occurrence_numbers[occurrence_id]}, inventory="
+                f"{inventory_occurrence_numbers[occurrence_id]}"
+            )
+    cited_reference_ids = {
+        row["DisplayedReferenceID"] for row in citation_inventory
+        if REFERENCE_ID_RE.fullmatch(row["DisplayedReferenceID"])
+    }
+    for line, row in enumerate(bib_inventory, start=2):
+        expected_cited = "yes" if row["ReferenceID"] in cited_reference_ids else "no"
+        if row["Cited"].strip().casefold() != expected_cited:
+            errors.append(
+                f"00-bibliography-inventory.csv:{line}: Cited must be "
+                f"{expected_cited!r} from the reconciled citation inventory"
             )
     for pair_id in sorted(
         set(citation_inv_by_pair) & set(citation_led_by_pair)
@@ -1371,6 +2663,13 @@ def main(argv: list[str] | None = None) -> int:
         {"Pair ID", "PairID"},
         "citation-claim ledger",
         errors,
+        required_headers={
+            "Pair ID", "Occurrence ID", "PDF location",
+            "Exact attached proposition", "Reference ID", "Displayed label",
+            "Public source/identifier",
+            "Content source opened and exact locator", "Support",
+            "Metadata/status", "Severity/finding", "Disposition/evidence",
+        },
     )
 
     academic_ledger = read_csv(
@@ -1396,6 +2695,10 @@ def main(argv: list[str] | None = None) -> int:
         ai_ledger, "AIFindingID", "91-ai-actionable-ledger.csv", errors
     )
     for line, row in enumerate(academic_ledger, start=2):
+        if not re.fullmatch(r"L\d{2,4}", row["LedgerID"]):
+            errors.append(
+                f"91-revision-ledger.csv:{line}: invalid LedgerID {row['LedgerID']!r}"
+            )
         if row["Severity"].casefold() not in ACADEMIC_SEVERITIES:
             errors.append(
                 f"91-revision-ledger.csv:{line}: invalid Severity "
@@ -1417,6 +2720,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"{row['Status']!r}"
             )
     for line, row in enumerate(ai_ledger, start=2):
+        if not re.fullmatch(r"AI-F\d{2,4}", row["AIFindingID"]):
+            errors.append(
+                f"91-ai-actionable-ledger.csv:{line}: invalid AIFindingID "
+                f"{row['AIFindingID']!r}"
+            )
         if row["Impact"].casefold() not in AI_ACTION_IMPACTS:
             errors.append(
                 f"91-ai-actionable-ledger.csv:{line}: invalid Impact "
@@ -1427,6 +2735,45 @@ def main(argv: list[str] | None = None) -> int:
                 f"91-ai-actionable-ledger.csv:{line}: invalid Status "
                 f"{row['Status']!r}"
             )
+    validate_markdown_id_projection(
+        root / "91-revision-ledger.md",
+        set(academic_by_id),
+        re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])"),
+        {"Ledger ID", "LedgerID"},
+        "chair academic revision ledger",
+        errors,
+        required_headers={
+            "Ledger ID", "Priority", "Chair finding ID",
+            "Source reviewer finding IDs", "Severity", "Remedy",
+            "Exact PDF anchor", "Direct observation", "Minimum edit/evidence",
+            "Dependency", "Owner", "Status", "Verification",
+        },
+    )
+    validate_markdown_id_projection(
+        root / "91-revision-ledger.md",
+        set(ai_by_id),
+        re.compile(r"(?<![A-Za-z0-9])AI-F\d{2,4}(?![A-Za-z0-9])"),
+        {"AI finding ID", "AIFindingID"},
+        "chair AI-actionable ledger",
+        errors,
+        required_headers={
+            "AI finding ID", "Impact (`material` / `local`)",
+            "Exact PDF anchor", "Direct style observation",
+            "Minimum editing action", "Status", "Verification",
+        },
+    )
+    validate_chair_ledger_markdown_values(
+        root / "91-revision-ledger.md",
+        academic_by_id,
+        ai_by_id,
+        errors,
+    )
+    validate_chair_finding_tables(
+        root / "90-chair-synthesis.md",
+        academic_by_id,
+        ai_by_id,
+        errors,
+    )
     open_academic = {
         ledger_id: row for ledger_id, row in academic_by_id.items()
         if row["Status"].casefold() not in CLOSED_STATUSES
@@ -1504,14 +2851,146 @@ def main(argv: list[str] | None = None) -> int:
                     f"AI 91->93 mismatch for {finding_id}/{field}: "
                     f"expected {expected_value!r}, got {summary[field]!r}"
                 )
+    validate_markdown_id_projection(
+        root / "93-user-facing-summary.md",
+        set(open_academic),
+        re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])"),
+        {"Ledger ID", "LedgerID"},
+        "Stage-S current academic summary",
+        errors,
+        required_headers={
+            "Ledger ID", "Current finding ID(s)", "Severity / remedy",
+            "Exact PDF anchor", "Direct PDF-visible observation",
+            "Minimum required action", "Origin reviewer(s)",
+            "Chair disposition",
+        },
+    )
+    validate_markdown_id_projection(
+        root / "93-user-facing-summary.md",
+        set(open_ai),
+        re.compile(r"(?<![A-Za-z0-9])AI-F\d{2,4}(?![A-Za-z0-9])"),
+        {"AI finding ID", "AIFindingID"},
+        "Stage-S current AI summary",
+        errors,
+        required_headers={
+            "AI finding ID", "Impact (`material` / `local`)",
+            "Exact PDF anchor", "Direct style observation",
+            "Minimum editing action", "Chair status",
+        },
+    )
+    validate_summary_markdown_values(
+        root / "93-user-facing-summary.md",
+        academic_summary_by_id,
+        ai_summary_by_id,
+        errors,
+    )
+
+    evidence_path = root / "92-new-evidence-or-experiments.md"
+    if evidence_path.is_file():
+        evidence_text = evidence_path.read_text(encoding="utf-8", errors="replace")
+        for heading in (
+            "No-new-experiment remedies (W/E/P)",
+            "Genuine new experiments or unavailable evidence (N)",
+        ):
+            if not re.search(rf"(?im)^##\s+{re.escape(heading)}\s*$", evidence_text):
+                errors.append(f"{evidence_path.name}: missing required section {heading!r}")
+        experiment_table = parse_markdown_table_by_header(
+            evidence_text, "Item", evidence_path.name, errors
+        )
+        if experiment_table is not None:
+            headers, _rows = experiment_table
+            expected_headers = [
+                "Item", "Claim that depends on it", "Why writing is insufficient",
+                "Minimum viable evidence", "Consequence if unavailable",
+            ]
+            if [value.casefold() for value in headers] != [
+                value.casefold() for value in expected_headers
+            ]:
+                errors.append(f"{evidence_path.name}: N-evidence table schema mismatch")
 
     if expected_hash:
-        validate_declarations(root / "00-manifest.md", expected_hash, errors)
+        manifest_text = validate_declarations(
+            root / "00-manifest.md", expected_hash, errors
+        )
+        if manifest_text:
+            manifest_counts = {
+                "Numeric-bracket candidate rows": len(citation_candidates),
+                "Citation-classified candidate rows": sum(
+                    row["Classification"].strip().casefold() == "citation"
+                    for row in citation_candidates
+                ),
+                "Non-citation-classified candidate rows": sum(
+                    row["Classification"].strip().casefold() == "non-citation"
+                    for row in citation_candidates
+                ),
+                "Unmatched square-bracket glyphs": len(extracted_unmatched_glyphs),
+            }
+            for label, expected_count in manifest_counts.items():
+                observed = parse_count_label(
+                    manifest_text, label, "00-manifest.md", errors
+                )
+                if observed is not None and observed != expected_count:
+                    errors.append(
+                        f"00-manifest.md: {label} {observed} != "
+                        f"validated {expected_count}"
+                    )
+            unmatched_disposition = labeled_value(
+                manifest_text, "Unmatched glyph dispositions"
+            )
+            if (
+                not unmatched_disposition
+                or len(unmatched_disposition) < 12
+                or is_placeholder(unmatched_disposition)
+            ):
+                errors.append(
+                    "00-manifest.md: Unmatched glyph dispositions must "
+                    "record a concrete rendered-context audit result"
+                )
+            elif not extracted_unmatched_glyphs:
+                if not re.search(
+                    r"(?i)(?:\bnone\b|no unmatched|\b0\b)",
+                    unmatched_disposition,
+                ):
+                    errors.append(
+                        "00-manifest.md: zero unmatched glyphs require an "
+                        "explicit none-found disposition"
+                    )
+            elif (
+                re.search(
+                    r"(?i)(?:\bnone\b|no unmatched|none found|\bzero\b)",
+                    unmatched_disposition,
+                )
+                or "00-unmatched-bracket-ledger.csv" not in unmatched_disposition
+                or not re.search(
+                    rf"(?<!\d){len(extracted_unmatched_glyphs)}(?!\d)",
+                    unmatched_disposition,
+                )
+            ):
+                errors.append(
+                    "00-manifest.md: positive unmatched-glyph count requires a "
+                    "non-contradictory count and 00-unmatched-bracket-ledger.csv reference"
+                )
+            manifest_frozen_at = labeled_value(manifest_text, "Frozen at")
+            if manifest_frozen_at != str(process.get("frozen_at", "")):
+                errors.append(
+                    "00-manifest.md: Frozen at must exactly equal process-envelope frozen_at"
+                )
         validate_declarations(root / "01-policy-basis.md", expected_hash, errors)
+        for owned_path in (
+            "02-page-layout-ledger.md",
+            "03-bibliography-audit-ledger.md",
+            "04-citation-claim-audit-ledger.md",
+            "91-revision-ledger.md",
+            "92-new-evidence-or-experiments.md",
+        ):
+            validate_declarations(root / owned_path, expected_hash, errors)
         for index in range(1, reviewer_count + 1):
             validate_reviewer_report(
                 root / f"R{index}-comprehensive-review.md",
-                expected_hash, errors,
+                expected_hash,
+                index,
+                process.get("degree_level") if isinstance(process, dict) else None,
+                errors,
             )
         validate_ai_report(
             root / "05-ai-style-assessment.md", expected_hash, errors
@@ -1524,11 +3003,12 @@ def main(argv: list[str] | None = None) -> int:
                 for row in citation_inventory
                 if row["DisplayedReferenceID"]
             }),
+            reviewer_count,
             errors,
         )
         validate_summary_report(
             root / "93-user-facing-summary.md", expected_hash,
-            len(open_academic), len(open_ai), errors,
+            process, reviewer_count, len(open_academic), len(open_ai), errors,
         )
         validate_helper_bundle(root, expected_hash, errors)
 

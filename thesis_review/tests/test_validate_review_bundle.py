@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import csv
 import hashlib
+import importlib.util
 import json
+import re
 import struct
 import subprocess
 import sys
@@ -12,10 +14,17 @@ import zlib
 from pathlib import Path
 
 from pypdf import PdfWriter
+from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = SKILL_ROOT / "scripts" / "validate_review_bundle.py"
+VALIDATOR_SPEC = importlib.util.spec_from_file_location(
+    "thesis_review_validator_under_test", VALIDATOR
+)
+assert VALIDATOR_SPEC and VALIDATOR_SPEC.loader
+VALIDATOR_MODULE = importlib.util.module_from_spec(VALIDATOR_SPEC)
+VALIDATOR_SPEC.loader.exec_module(VALIDATOR_MODULE)
 PROMPT_HASH = "A" * 64
 
 PAGE_INVENTORY_COLUMNS = [
@@ -34,6 +43,15 @@ BIB_LEDGER_COLUMNS = [
     "ReferenceID", "DisplayedLabel", "Cited", "Field", "RenderedValue",
     "CanonicalValue", "Verdict", "EvidenceEndpoint", "EndpointType",
     "CheckedAt", "EvidenceNote", "FindingDisposition", "PDFSHA256",
+]
+CITATION_CANDIDATE_COLUMNS = [
+    "CandidateID", "PhysicalPage", "Marker", "ExpandedNumbers",
+    "Classification", "ClassificationEvidence", "MappedOccurrenceID",
+    "AdjacentPDFText", "PDFSHA256",
+]
+UNMATCHED_BRACKET_COLUMNS = [
+    "GlyphID", "PhysicalPage", "Glyph", "AdjacentPDFText", "Disposition",
+    "PDFSHA256",
 ]
 CITATION_INVENTORY_COLUMNS = [
     "PairID", "OccurrenceID", "PDFLocation", "DisplayedReferenceID",
@@ -129,38 +147,146 @@ def write_empty_idat_png(path: Path, width: int, height: int) -> None:
     )
 
 
+def add_ascii_text(
+    writer: PdfWriter, page: object, text: str
+) -> None:
+    escaped_lines = [
+        line.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+        for line in text.splitlines() or [""]
+    ]
+    font = DictionaryObject({
+        NameObject("/Type"): NameObject("/Font"),
+        NameObject("/Subtype"): NameObject("/Type1"),
+        NameObject("/BaseFont"): NameObject("/Helvetica"),
+    })
+    font_ref = writer._add_object(font)
+    resources = DictionaryObject({
+        NameObject("/Font"): DictionaryObject({NameObject("/F1"): font_ref})
+    })
+    stream = DecodedStreamObject()
+    commands = ["BT /F1 12 Tf 72 720 Td"]
+    for index, escaped in enumerate(escaped_lines):
+        if index:
+            commands.append("0 -18 Td")
+        commands.append(f"({escaped}) Tj")
+    commands.append("ET")
+    stream.set_data(" ".join(commands).encode("ascii"))
+    page[NameObject("/Resources")] = resources
+    page[NameObject("/Contents")] = writer._add_object(stream)
+
+
 class ValidateReviewBundleTests(unittest.TestCase):
+    def rewrite_pdf_and_rehash(self, root: Path, page_texts: list[str]) -> str:
+        process_path = root / "00-process-parameters.json"
+        process = json.loads(process_path.read_text(encoding="utf-8"))
+        old_digest = process["selected_pdf_sha256"]
+        writer = PdfWriter()
+        for text in page_texts:
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            add_ascii_text(writer, page, text)
+        pdf_path = root / process["frozen_pdf_file"]
+        with pdf_path.open("wb") as handle:
+            writer.write(handle)
+        new_digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest().upper()
+        for path in root.iterdir():
+            if path.is_file() and path.suffix.casefold() in {".md", ".csv", ".json"}:
+                content = path.read_text(encoding="utf-8")
+                path.write_text(content.replace(old_digest, new_digest), encoding="utf-8")
+        return new_digest
+
     def declaration(self, digest: str) -> str:
         return (
-            "- Fresh-context declaration: clean empty context\n"
+            "- Fresh-context declaration: no inherited user/thread/task turns "
+            "beyond system/developer instructions and the exact operational prompt\n"
             "- Input-receipt/access declaration: "
             f"Prompt SHA-256: {PROMPT_HASH}; received operational prompt; "
-            "opened frozen PDF and allowlisted rules only\n"
+            "opened frozen PDF and allowlisted rules only; no unlisted substantive "
+            "assertion was received; no prohibited context/artifact was used; "
+            "neighboring paths were not enumerated\n"
             f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n"
         )
 
-    def reviewer_report(self, digest: str) -> str:
+    def reviewer_report(self, digest: str, index: int) -> str:
+        personas = {
+            1: "technical method and experiment reasoning across the complete thesis",
+            2: "contribution, thesis logic, and cross-chapter narrative coherence",
+            3: "evidence integrity, reproducibility, standards, and whole-thesis traceability",
+        }
         gate_rows = "\n".join(
-            f"| {gate} — gate | baseline | adequate | p.1 | none | high |"
+            f"| {gate} — gate | baseline | adequate | physical p.1, fixture section | none | high |"
             for gate in "ABCDEFGHI"
         )
         return (
-            "# Comprehensive review\n\n"
+            f"# R{index} — Comprehensive whole-thesis review\n\n"
+            + "## Role, scope, and independence\n"
             + self.declaration(digest)
+            + "- Whole-thesis mandate: Gate A--I\n"
+            + f"- Persona emphasis: {personas[index]}\n\n"
+            + "## Verdict\n"
+            + "- Decision regime: skill-default\n"
             + "- Academic grade: B\n"
             + "- Defense recommendation: 小修后可答辩\n\n"
+            + "- Confidence: high\n"
+            + "- One-paragraph whole-thesis rationale: The complete fixture thesis "
+            + "was assessed across policy, argument, literature, methods, data, "
+            + "experiments, reproducibility, writing, and presentation; the visible "
+            + "evidence supports a minor-revision recommendation without a blocker.\n\n"
+            + "## What I inspected\n\nAll frozen pages and all required ledgers.\n\n"
+            + "## Whole-thesis synthesis\n\nThe fixture has one coherent claim and one source.\n\n"
+            + "## Whole-thesis assessment\n\n"
             + "| Gate | Depth | Disposition | Evidence | Findings | Confidence |\n"
             + "|---|---|---|---|---|---|\n"
             + gate_rows
-            + "\n"
+            + "\n\n## Persona-weighted deep review\n\n"
+            + "The assigned emphasis was applied after the complete Gate A--I pass.\n\n"
+            + "## Strongest contributions\n\n1. A bounded fixture contribution.\n\n"
+            + "## Findings\n\nNo additional findings.\n\n"
+            + "## Questions, not findings\n\nnone\n\n"
+            + "## Coverage and limitations\n\nThe synthetic two-page fixture limits semantic depth.\n"
+            + (
+                "\n## Full rendered-page audit\n"
+                "- Physical pages / unchecked pages: 2 / 0\n\n"
+                "## Full bibliography-integrity audit\n"
+                "- Bibliography entries rendered in the frozen PDF: 1\n"
+                "- Bibliography master rows / unchecked rows: 1 / 0\n\n"
+                "## Full citation-claim audit\n"
+                "- Citation--source pairs: 1\n"
+                "- Ledger rows and unchecked rows: 1 / 0\n"
+                if index == 3 else ""
+            )
         )
 
     def chair_report(self, digest: str) -> str:
         return (
             "# Chair synthesis\n\n"
+            + "## Clean-room boundary\n"
             + self.declaration(digest)
+            + "\n## Overall risk and recommendation\n"
             + "- Overall academic grade: B\n"
             + "- Overall defense recommendation: 小修后可答辩\n\n"
+            + "- Confidence: high\n"
+            + "\n## Reviewer coverage validation\n\n"
+            + "| Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| R1 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n"
+            + "| R2 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n"
+            + "| R3 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n\n"
+            + "## Independent verdicts\n\n"
+            + "| Reviewer | Persona | Category/grade | Defense recommendation | Decision regime/source | Confidence | Decisive reason |\n"
+            + "|---|---|---|---|---|---|---|\n"
+            + "| R1 | technical method and experiment | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n"
+            + "| R2 | contribution and thesis logic | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n"
+            + "| R3 | evidence integrity and reproducibility | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n\n"
+            + "## Standalone AI-style judgment\n\n- Signal: moderate\n- Confidence: high\n\n"
+            + "## AI-style actionable findings\n\n"
+            + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Verification | Status |\n"
+            + "|---|---|---|---|---|---|---|\n"
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | reread paragraph | open |\n\n"
+            + "## Contributions that survived review\n\nThe bounded fixture contribution survives.\n\n"
+            + "## Adjudicated findings\n\n"
+            + "| Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| C-F01 | R1-F01 | S2 | W | physical p.1 | visible wording defect | verified | author | correct the wording | reinspect p.1 |\n\n"
             + "## Mandatory citation cross-ledger consistency gate\n\n"
             + "| Rendered reference ID | R4 identity/source | R5 canonical identity | "
             + "Version/record agreement | Affected Pair IDs | Conflict class | "
@@ -175,27 +301,69 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Reclassified Pair IDs: 0\n"
             + "- Unresolved conflicts: 0\n"
             + "- Combined citation gate: pass\n"
+            + "\n## Disagreements and chair decisions\n\nnone\n\n"
+            + "## Thesis-level narrative and chapter logic\n\nCoherent within the fixture.\n\n"
+            + "## Policy and blind-copy status\n\nNo fixture policy blocker.\n"
+            + "\n## Optional suggestions\n\nnone\n\n"
+            + "## Review limitations\n\nnone\n"
         )
 
     def ai_report(self, digest: str) -> str:
         return (
             "# Standalone AI-style prose assessment\n\n"
+            + "## Boundary and independence\n"
             + self.declaration(digest)
             + "- Required disclaimer: This is a prose-style assessment, not a "
             + "determination of AI use, authorship, plagiarism, or misconduct.\n"
+            + "\n## Overall judgment\n"
             + "- AI-style signal: moderate\n"
+            + "- Confidence: high\n"
+            + "- Rationale: The short fixture contains one formulaic transition, "
+            + "but the limited corpus prevents any stronger stylistic inference.\n\n"
+            + "## Coverage and mechanical checks\n\nBoth authored fixture pages were inspected.\n\n"
+            + "## Signal-family summary and counter-evidence\n\nOne local signal; limited evidence.\n\n"
+            + "## Findings\n\n### AI-F01 — formulaic transition\n\nLocal only.\n\n"
+            + "## Limitations\n\nSynthetic corpus.\n\n"
+            + "## Out-of-scope observations for chair verification\n\nnone\n"
         )
 
     def summary_report(
         self, digest: str, academic_count: int = 1, ai_count: int = 1
     ) -> str:
+        allowlist = "; ".join([
+            "00-process-parameters.json", "SKILL.md",
+            "clean-room-orchestration.md", "report-template.md",
+            "R1-comprehensive-review.md", "R2-comprehensive-review.md",
+            "R3-comprehensive-review.md", "05-ai-style-assessment.md",
+            "90-chair-synthesis.md", "91-revision-ledger.md",
+            "91-revision-ledger.csv", "91-ai-actionable-ledger.csv",
+            "92-new-evidence-or-experiments.md",
+        ])
         return (
             "# Current-round user-facing review summary\n\n"
+            + "## Clean-room identity\n"
             + self.declaration(digest)
+            + "- Review round ID: fixture\n"
+            + f"- Frozen PDF path and SHA-256: frozen-thesis.pdf / {digest}\n"
+            + f"- Exact current-round input allowlist: {allowlist}\n\n"
+            + "## Independent and overall conclusions\n\n"
+            + "| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |\n"
+            + "|---|---|---|---|---|---|\n"
+            + "| R1 | technical method and experiment | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
+            + "| R2 | contribution and thesis logic | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
+            + "| R3 | evidence integrity and reproducibility | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
+            + "| AI | standalone style assessor | moderate | N/A | high | One local prose-style signal in the current fixture. |\n"
+            + "| Chair | current-round adjudication | B | 小修后可答辩 | high | Current evidence supports the panel's minor-revision conclusion. |\n\n"
             + "## Current actionable items\n\n"
-            + "See authoritative CSV.\n\n"
+            + "| Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |\n"
+            + "|---|---|---|---|---|---|---|---|\n"
+            + "| L01 | C-F01 | S2/W | physical p.1 | visible wording defect | correct the wording | R1-F01 | open |\n\n"
             + "## Current AI-style actionable items — separate from academic grading\n\n"
-            + "See authoritative CSV.\n\n"
+            + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status |\n"
+            + "|---|---|---|---|---|---|\n"
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open |\n\n"
+            + "## Optional suggestions\n\nnone\n\n"
+            + "## Unresolved questions and review limitations\n\nnone\n\n"
             + "## Reconciliation\n\n"
             + f"- Open required rows in 91-revision-ledger.md: {academic_count}\n"
             + f"- Rows in Current actionable items: {academic_count}\n"
@@ -209,11 +377,20 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "prior-round or author-side information.\n"
         )
 
-    def build_bundle(self, root: Path, page_count: int = 1) -> str:
+    def build_bundle(self, root: Path, page_count: int = 2) -> str:
         pdf = root / "frozen-thesis.pdf"
         writer = PdfWriter()
-        for _ in range(page_count):
-            writer.add_blank_page(width=595.28, height=841.89)
+        for physical_page in range(1, page_count + 1):
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            if physical_page == 1:
+                add_ascii_text(
+                    writer,
+                    page,
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1].",
+                )
+            elif physical_page == page_count:
+                add_ascii_text(writer, page, "References\n[1] Fixture reference.")
         with pdf.open("wb") as handle:
             writer.write(handle)
         digest = hashlib.sha256(pdf.read_bytes()).hexdigest().upper()
@@ -233,6 +410,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "frozen_pdf_file": pdf.name,
             "selected_pdf_sha256": digest,
             "physical_page_count": page_count,
+            "frozen_at": "2026-08-29T12:34:56+08:00",
             "degree_level": "masters",
             "degree_type": "academic",
             "institution": None,
@@ -250,34 +428,70 @@ class ValidateReviewBundleTests(unittest.TestCase):
             json.dumps(process), encoding="utf-8"
         )
         (root / "00-manifest.md").write_text(
-            "# Manifest\n\n" + self.declaration(digest), encoding="utf-8"
+            "# Manifest\n\n"
+            + self.declaration(digest)
+            + "- Numeric-bracket candidate rows: 3\n"
+            + "- Citation-classified candidate rows: 1\n"
+            + "- Non-citation-classified candidate rows: 2\n"
+            + "- Unmatched square-bracket glyphs: 0\n"
+            + "- Unmatched glyph dispositions: No unmatched glyph was found "
+            + "in the rendered fixture page.\n"
+            + "- Frozen at: 2026-08-29T12:34:56+08:00\n",
+            encoding="utf-8",
         )
         (root / "01-policy-basis.md").write_text(
             "# Policy\n\n" + self.declaration(digest), encoding="utf-8"
         )
         (root / "02-page-layout-ledger.md").write_text(
-            "# Page ledger\n\n| Page ID | Disposition |\n|---|---|\n"
+            "# Page ledger\n\n" + self.declaration(digest)
+            + "| Page ID | Physical page | Printed page | Region | Dominant content | Signals | Inspection mode/scale | Render DPI | Render artifact ID/hash | Neighbor pages checked | Disposition | Evidence |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
             + "".join(
-                f"| P{physical_page:04d} | clean |\n"
+                f"| P{physical_page:04d} | {physical_page} |  | "
+                f"{'bibliography' if physical_page == page_count else 'chapter'} | "
+                "text | none | individual 100% | 200 | retained render hash | "
+                "adjacent page checked | clean | full-page render inspected |\n"
                 for physical_page in range(1, page_count + 1)
             ),
             encoding="utf-8",
         )
         (root / "03-bibliography-audit-ledger.md").write_text(
-            "# Bibliography ledger\n\n| ReferenceID | Disposition |\n|---|---|\n"
-            "| REF0001 | verified |\n",
+            "# Bibliography ledger\n\n" + self.declaration(digest)
+            + "| Reference ID | Displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| REF0001 | [1] | yes | fixture | Fixture reference | Author | 2026 | fixture | published | N/A | N/A | DOI fixture | exists | none | verified |\n",
             encoding="utf-8",
         )
         (root / "04-citation-claim-audit-ledger.md").write_text(
-            "# Citation ledger\n\n| PairID | Support |\n|---|---|\n"
-            "| C0001-S01 | direct |\n",
+            "# Citation ledger\n\n" + self.declaration(digest)
+            + "| Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID | Displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| C0001-S01 | C0001 | physical p.1 | fixture proposition | REF0001 | [1] | DOI fixture | official PDF, p.1 | direct | verified | none | supported |\n",
             encoding="utf-8",
         )
-        for filename in ("91-revision-ledger.md", "92-new-evidence-or-experiments.md"):
-            (root / filename).write_text("# Complete\n", encoding="utf-8")
+        (root / "91-revision-ledger.md").write_text(
+            "# Revision ledger\n\n" + self.declaration(digest)
+            + "| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Minimum edit/evidence | Dependency | Owner | Status | Verification |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| L01 | P2 | C-F01 | R1-F01 | S2 | W | physical p.1 | visible wording defect | correct the wording | none | author | open | reinspect p.1 |\n\n"
+            + "## AI-style actionable ledger — separate from academic grading\n\n"
+            + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Status | Verification |\n"
+            + "|---|---|---|---|---|---|---|\n"
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open | reread paragraph |\n",
+            encoding="utf-8",
+        )
+        (root / "92-new-evidence-or-experiments.md").write_text(
+            "# New evidence or experiments\n\n" + self.declaration(digest)
+            + "## No-new-experiment remedies (W/E/P)\n\n"
+            + "- Writing or claim narrowing: correct the wording.\n\n"
+            + "## Genuine new experiments or unavailable evidence (N)\n\n"
+            + "| Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |\n"
+            + "|---|---|---|---|---|\n",
+            encoding="utf-8",
+        )
         for index in range(1, 4):
             (root / f"R{index}-comprehensive-review.md").write_text(
-                self.reviewer_report(digest), encoding="utf-8"
+                self.reviewer_report(digest, index), encoding="utf-8"
             )
         (root / "05-ai-style-assessment.md").write_text(
             self.ai_report(digest), encoding="utf-8"
@@ -295,7 +509,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "PageID": f"P{physical_page:04d}",
                 "PhysicalPage": str(physical_page),
                 "PrintedPage": "",
-                "Region": "front matter",
+                "Region": (
+                    "bibliography" if physical_page == page_count else "chapter"
+                ),
                 "MechanicalSignals": "none",
                 "PDFSHA256": digest,
             } for physical_page in range(1, page_count + 1)],
@@ -307,7 +523,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "PageID": f"P{physical_page:04d}",
                 "PhysicalPage": str(physical_page),
                 "PrintedPage": "",
-                "Region": "front matter",
+                "Region": (
+                    "bibliography" if physical_page == page_count else "chapter"
+                ),
                 "DominantContent": "text",
                 "Signals": "none",
                 "InspectionModeScale": "individual 100%",
@@ -332,6 +550,61 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "Cited": "yes",
                 "PDFSHA256": digest,
             }],
+        )
+        write_csv(
+            root / "00-citation-candidate-ledger.csv",
+            CITATION_CANDIDATE_COLUMNS,
+            [{
+                "CandidateID": "BC0001",
+                "PhysicalPage": "1",
+                "Marker": "[1]",
+                "ExpandedNumbers": "1",
+                "Classification": "citation",
+                "ClassificationEvidence": (
+                    "attached to the named fixture proposition"
+                ),
+                "MappedOccurrenceID": "C0001",
+                "AdjacentPDFText": (
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1]."
+                ),
+                "PDFSHA256": digest,
+            }, {
+                "CandidateID": "BC0002",
+                "PhysicalPage": "1",
+                "Marker": "[3, 8]",
+                "ExpandedNumbers": "3;8",
+                "Classification": "non-citation",
+                "ClassificationEvidence": (
+                    "numeric quantization-level list introduced by levels are"
+                ),
+                "MappedOccurrenceID": "N/A",
+                "AdjacentPDFText": (
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1]."
+                ),
+                "PDFSHA256": digest,
+            }, {
+                "CandidateID": "BC0003",
+                "PhysicalPage": "1",
+                "Marker": "[0.85, 1]",
+                "ExpandedNumbers": "N/A",
+                "Classification": "non-citation",
+                "ClassificationEvidence": (
+                    "decimal scale interval rather than a source marker"
+                ),
+                "MappedOccurrenceID": "N/A",
+                "AdjacentPDFText": (
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1]."
+                ),
+                "PDFSHA256": digest,
+            }],
+        )
+        write_csv(
+            root / "00-unmatched-bracket-ledger.csv",
+            UNMATCHED_BRACKET_COLUMNS,
+            [],
         )
         write_csv(
             root / "03-bibliography-audit-ledger.csv",
@@ -360,7 +633,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "OccurrenceID": "C0001",
                 "PDFLocation": "physical p.1",
                 "DisplayedReferenceID": "REF0001",
-                "AdjacentPDFText": "fixture proposition [1]",
+                "AdjacentPDFText": (
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1]."
+                ),
                 "PDFSHA256": digest,
             }],
         )
@@ -477,7 +753,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             process["selected_pdf_sha256"] = hashlib.sha256(
                 pdf.read_bytes()
             ).hexdigest().upper()
-            process["physical_page_count"] = 2
+            process["physical_page_count"] = 3
             process_path.write_text(json.dumps(process), encoding="utf-8")
             result = self.run_validator(root)
             self.assertNotEqual(result.returncode, 0)
@@ -489,9 +765,43 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             process_path = root / "00-process-parameters.json"
             process = json.loads(process_path.read_text(encoding="utf-8"))
-            process["physical_page_count"] = 2
+            process["physical_page_count"] = 3
             process_path.write_text(json.dumps(process), encoding="utf-8")
-            self.assert_fails(root, "parsed page count 1")
+            self.assert_fails(root, "parsed page count 2")
+
+    def test_frozen_at_requires_iso_datetime_with_timezone(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["frozen_at"] = "2026-08-29T12:34:56"
+            process_path.write_text(
+                json.dumps(process, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "frozen_at must include an explicit timezone")
+
+    def test_printed_roman_page_x_is_not_a_placeholder(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, inventory = read_csv(root / "00-page-inventory.csv")
+            _, ledger = read_csv(root / "02-page-layout-ledger.csv")
+            inventory[0]["PrintedPage"] = "X"
+            ledger[0]["PrintedPage"] = "X"
+            write_csv(
+                root / "00-page-inventory.csv",
+                PAGE_INVENTORY_COLUMNS,
+                inventory,
+            )
+            write_csv(
+                root / "02-page-layout-ledger.csv",
+                PAGE_LEDGER_COLUMNS,
+                ledger,
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_markdown_master_shell_and_missing_ids_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -758,6 +1068,212 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertIn("citation mapping mismatch", result.stdout)
             self.assertIn("unknown ReferenceID", result.stdout)
 
+    def test_citation_candidate_ledger_must_cover_pdf_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "00-citation-candidate-ledger.csv")
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                rows[:1],
+            )
+            self.assert_fails(root, "row count does not equal")
+
+    def test_citation_candidate_order_page_and_marker_are_pdf_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "00-citation-candidate-ledger.csv")
+            rows[0]["CandidateID"] = "BC0002"
+            rows[0]["PhysicalPage"] = "2"
+            rows[0]["Marker"] = "[2]"
+            rows[0]["ExpandedNumbers"] = "2"
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                rows,
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("CandidateID sequence mismatch", result.stdout)
+            self.assertIn("PhysicalPage", result.stdout)
+            self.assertIn("!= extracted", result.stdout)
+
+    def test_obvious_numeric_array_cannot_be_classified_as_citation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "00-citation-candidate-ledger.csv")
+            rows[1]["Classification"] = "citation"
+            rows[1]["MappedOccurrenceID"] = "C0002"
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                rows,
+            )
+            self.assert_fails(root, "obvious non-citation classified as citation")
+
+    def test_candidate_numbers_must_equal_citation_inventory_sources(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "00-citation-candidate-ledger.csv")
+            rows[0]["Marker"] = "[2]"
+            rows[0]["ExpandedNumbers"] = "2"
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                rows,
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("!= extracted", result.stdout)
+            self.assertIn("candidate-to-inventory number mismatch", result.stdout)
+
+    def test_body_page_cannot_disappear_by_claiming_bibliography_region(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, inventory = read_csv(root / "00-page-inventory.csv")
+            _, ledger = read_csv(root / "02-page-layout-ledger.csv")
+            inventory[0]["Region"] = "bibliography"
+            ledger[0]["Region"] = "bibliography"
+            write_csv(root / "00-page-inventory.csv", PAGE_INVENTORY_COLUMNS, inventory)
+            write_csv(root / "02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS, ledger)
+            self.assert_fails(root, "reference Region pages do not equal")
+
+    def test_line_start_numeric_run_without_references_heading_is_not_bibliography(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pdf = Path(directory) / "fake-boundary.pdf"
+            writer = PdfWriter()
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            add_ascii_text(
+                writer, page,
+                "Chapter body with hidden candidate [999].\n[1] not a bibliography entry.",
+            )
+            with pdf.open("wb") as handle:
+                writer.write(handle)
+            errors: list[str] = []
+            derived = VALIDATOR_MODULE.derive_and_validate_reference_pages(
+                pdf,
+                {1},
+                [{"DisplayedLabel": "[1]"}],
+                errors,
+            )
+            self.assertEqual(derived, set())
+            self.assertTrue(any("not anchored" in error for error in errors), errors)
+
+    def test_candidate_and_occurrence_context_are_pdf_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, candidates = read_csv(root / "00-citation-candidate-ledger.csv")
+            candidates[0]["AdjacentPDFText"] = "fabricated neighboring words [1]"
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                candidates,
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("deterministic frozen-PDF window", result.stdout)
+
+    def test_occurrence_physical_page_must_equal_candidate_page(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, inventory = read_csv(root / "00-citation-inventory.csv")
+            _, ledger = read_csv(root / "04-citation-claim-audit-ledger.csv")
+            inventory[0]["PDFLocation"] = "physical p.999"
+            ledger[0]["PDFLocation"] = "physical p.999"
+            write_csv(
+                root / "00-citation-inventory.csv",
+                CITATION_INVENTORY_COLUMNS,
+                inventory,
+            )
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                ledger,
+            )
+            self.assert_fails(root, "outside 1..2")
+
+    def test_positive_unmatched_count_cannot_claim_none_found(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            body = (
+                "fixture proposition [1]; quantization levels are [3, 8]; "
+                "scale interval [0.85, 1]. unmatched ["
+            )
+            digest = self.rewrite_pdf_and_rehash(
+                root, [body, "References\n[1] Fixture reference."]
+            )
+            _, candidates = read_csv(root / "00-citation-candidate-ledger.csv")
+            for row in candidates:
+                row["AdjacentPDFText"] = body
+                row["PDFSHA256"] = digest
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                candidates,
+            )
+            _, occurrences = read_csv(root / "00-citation-inventory.csv")
+            occurrences[0]["AdjacentPDFText"] = body
+            occurrences[0]["PDFSHA256"] = digest
+            write_csv(
+                root / "00-citation-inventory.csv",
+                CITATION_INVENTORY_COLUMNS,
+                occurrences,
+            )
+            write_csv(
+                root / "00-unmatched-bracket-ledger.csv",
+                UNMATCHED_BRACKET_COLUMNS,
+                [{
+                    "GlyphID": "UBG0001",
+                    "PhysicalPage": "1",
+                    "Glyph": "[",
+                    "AdjacentPDFText": body,
+                    "Disposition": "visible unmatched extraction artifact",
+                    "PDFSHA256": digest,
+                }],
+            )
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- Unmatched square-bracket glyphs: 0",
+                    "- Unmatched square-bracket glyphs: 1",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "positive unmatched-glyph count requires")
+
+    def test_four_digit_marker_and_overlong_span_are_not_silently_lost(self) -> None:
+        self.assertEqual(VALIDATOR_MODULE.expand_numeric_marker("[1000]"), [1000])
+        with tempfile.TemporaryDirectory() as directory:
+            pdf = Path(directory) / "long.pdf"
+            writer = PdfWriter()
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            marker = "[1" + ("a" * 600) + "]"
+            add_ascii_text(writer, page, marker)
+            with pdf.open("wb") as handle:
+                writer.write(handle)
+            errors: list[str] = []
+            candidates, unmatched = VALIDATOR_MODULE.extract_numeric_bracket_candidates(
+                pdf, set(), errors
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual(len(candidates), 1)
+            self.assertEqual(unmatched, [])
+
+    def test_duplicate_number_vector_has_deterministic_non_citation_reason(self) -> None:
+        reason = VALIDATOR_MODULE.obvious_non_citation_reason({
+            "Expanded": [1, 1],
+            "Prefix": "tensor shape is ",
+        })
+        self.assertEqual(reason, "duplicate-number vector/array")
+
     def test_documented_unverifiable_rows_allow_missing_endpoints(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -882,6 +1398,18 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "academic 91->93 mismatch")
 
+    def test_chair_markdown_ledger_rows_must_equal_91_csv_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "91-revision-ledger.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "| L01 | P2 | C-F01 | R1-F01 | S2 | W |",
+                "| L01 | P2 | C-F01 | R1-F01 | S3 | W |",
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "Markdown/CSV value mismatch for L01/Severity")
+
     def test_ai_91_93_content_drift_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -908,13 +1436,114 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "operational prompt SHA-256")
 
+    def test_declaration_must_state_complete_clean_room_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "R1-comprehensive-review.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "no prohibited context/artifact was used; ", ""
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "no prohibited context/artifact")
+
+    def test_manifest_frozen_at_must_equal_process_envelope(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "00-manifest.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    "2026-08-29T12:34:56+08:00",
+                    "2026-08-29T12:35:56+08:00",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "Frozen at must exactly equal")
+
+    def test_reviewer_persona_cannot_be_copied_from_another_role(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "R2-comprehensive-review.md"
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(
+                "contribution, thesis logic, and cross-chapter narrative coherence",
+                "technical method and experiment reasoning across the complete thesis",
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "distinct R2 emphasis")
+
+    def test_summary_input_allowlist_must_be_exact_and_current_round_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(
+                "92-new-evidence-or-experiments.md",
+                "92-new-evidence-or-experiments.md; old-review-summary.md",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "Exact current-round input allowlist mismatch")
+
+    def test_summary_must_include_every_independent_actor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8")
+            text = re.sub(r"(?m)^\| R2 \|.*\n", "", text)
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "independent-conclusion actors: missing IDs ['R2']")
+
+    def test_summary_cannot_invent_optional_or_limitation_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "## Optional suggestions\n\nnone",
+                "## Optional suggestions\n\ninvented prior-context suggestion",
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "exact current-round projection of chair section")
+
+    def test_summary_markdown_rows_must_equal_summary_csv_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "| L01 | C-F01 | S2/W | physical p.1 | visible wording defect |",
+                "| L01 | C-F01 | S2/W | physical p.1 | invented different defect |",
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "Markdown/CSV value mismatch for L01/DirectPDFObservation")
+
+    def test_markdown_master_requires_complete_documented_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "03-bibliography-audit-ledger.md"
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(" | Publication status", " | Status", 1)
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "missing required headers")
+
     def test_missing_gate_and_grade_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
             path = root / "R2-comprehensive-review.md"
             text = path.read_text(encoding="utf-8")
-            text = text.replace("| I — gate | baseline | adequate | p.1 | none | high |\n", "")
+            text = text.replace(
+                "| I — gate | baseline | adequate | physical p.1, fixture section | none | high |\n",
+                "",
+            )
             text = text.replace("- Academic grade: B\n", "")
             path.write_text(text, encoding="utf-8")
             result = self.run_validator(root)
