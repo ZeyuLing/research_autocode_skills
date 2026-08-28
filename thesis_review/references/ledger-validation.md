@@ -5,7 +5,10 @@ Use these contracts for every complete review round. Markdown reports contain re
 ## 1. CSV conventions
 
 - UTF-8 with a header row and RFC-4180-style quoting for commas, quotes, or newlines.
-- Stable, case-sensitive IDs assigned in frozen-PDF reading order.
+- Stable, case-sensitive IDs assigned in frozen-PDF reading order: pages are
+  `P0001...`; rendered bibliography entries are `REF0001...`; citation
+  occurrences are `C0001...`; and sources within an occurrence are
+  `C0001-S01...`. Each sequence is continuous with no gaps.
 - Never reuse an ID for a different rendered object or citation pair.
 - `pending`, `unchecked`, placeholder ellipses, and silently blank mandatory verdicts fail completion.
 - Process large ledgers in deterministic ID ranges and checkpoint batches; concatenate only after duplicate/missing/extra validation.
@@ -25,7 +28,7 @@ The Stage-P citation inventory is mechanical. `AdjacentPDFText` is not a semanti
 
 - `02-page-layout-ledger.csv`: `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence,PDFSHA256`
 
-The Page-ID set must exactly equal `00-page-inventory.csv`, and `PhysicalPage` must form `1..N` with no gaps or duplicates. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode.
+The Page-ID set must exactly equal `00-page-inventory.csv`, and `PhysicalPage` must form `1..N` with no gaps or duplicates. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode. `RenderDPI` normally follows the 160--200 dpi audit target; the validator accepts 120--600 only as a mechanical sanity range. `RenderArtifactIDHash` is the exact 64-hex render hash, optionally prefixed by the matching PageID. The Markdown projection must contain exactly the CSV Page-ID set.
 
 ### Bibliography audit
 
@@ -35,13 +38,13 @@ For each `ReferenceID`, the `(ReferenceID,Field)` key is unique and the mandator
 
 `type,title,ordered_authors,year,venue,publication_status,volume,issue,pages_or_article_number,doi,arxiv_id,arxiv_version,url,access_date,isbn_or_other_persistent_id,existence,retraction_withdrawal_correction_superseding`.
 
-`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists.
+`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records an `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. The Markdown projection must contain exactly the CSV Reference-ID set.
 
 ### Citation-claim audit
 
 - `04-citation-claim-audit-ledger.csv`: `PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`
 
-The Pair-ID set must exactly equal `00-citation-inventory.csv`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`. A substantive support verdict other than `unverifiable` requires non-empty `ContentSourceOpened` and `ExactSourceLocator`; publication metadata alone is acceptable only when the attached proposition is publication metadata.
+The Pair-ID set must exactly equal `00-citation-inventory.csv`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`. A substantive support verdict other than `unverifiable` requires an `http(s)` content endpoint in `ContentSourceOpened` and a page/section/table/figure/equation/record-level `ExactSourceLocator`; publication metadata alone is acceptable only when the attached proposition is publication metadata. The Markdown projection must contain exactly the CSV Pair-ID set.
 
 ### Chair and summary reconciliation
 
@@ -66,13 +69,13 @@ Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these to
 
 ## 3. Validation command
 
-Run the bundled standard-library validator after Stage S:
+Run the validator after Stage S in an environment with `pypdf` available (the bundled Codex workspace Python includes it; with `uv`, use `uv run --with pypdf`):
 
 ```text
 python scripts/validate_review_bundle.py <round-directory> --write-report <round-directory>/95-bundle-validation.md
 ```
 
-The validator checks required files by degree type, frozen-PDF checksum, deterministic ID sets, mandatory bibliography fields, allowed verdict/status values, page coverage, current academic/AI action reconciliation, and required clean-room declarations. A nonzero exit code blocks a claim of completion. Review the printed failures; do not edit ledgers mechanically merely to satisfy counts.
+The validator parses the frozen PDF and checks its real physical-page count; checks required files by degree type, deterministic ID sequences, Markdown/CSV ID projections, render-record sanity, mandatory bibliography fields and endpoint/date shape, citation content-endpoint/locator shape, allowed verdict/status values, page coverage, current academic/AI action reconciliation, chair citation counts/gate consistency, and required clean-room declarations. A nonzero exit code blocks a claim of completion. Review the printed failures; do not edit ledgers mechanically merely to satisfy counts.
 
 ## 4. Manual sign-off that validation cannot replace
 

@@ -9,6 +9,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from pypdf import PdfWriter
+
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = SKILL_ROOT / "scripts" / "validate_review_bundle.py"
@@ -120,7 +122,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "Version/record agreement | Affected Pair IDs | Conflict class | "
             + "Reclassification/finding | Resolution |\n"
             + "|---|---|---|---|---|---|---|---|\n"
-            + "| B0001 | verified | verified | agree | C0001-S01 | none | none | closed |\n\n"
+            + "| REF0001 | verified | verified | agree | C0001-S01 | none | none | closed |\n\n"
             + "- Unique cited rendered references joined: 1\n"
             + "- Identity-agreement count: 1\n"
             + "- Version disagreements: 0\n"
@@ -165,7 +167,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
 
     def build_bundle(self, root: Path) -> str:
         pdf = root / "frozen-thesis.pdf"
-        pdf.write_bytes(b"%PDF-1.4\n% synthetic validator fixture\n")
+        writer = PdfWriter()
+        writer.add_blank_page(width=595.28, height=841.89)
+        with pdf.open("wb") as handle:
+            writer.write(handle)
         digest = hashlib.sha256(pdf.read_bytes()).hexdigest().upper()
         process = {
             "round_id": "fixture",
@@ -195,13 +200,21 @@ class ValidateReviewBundleTests(unittest.TestCase):
         (root / "01-policy-basis.md").write_text(
             "# Policy\n\n" + self.declaration(digest), encoding="utf-8"
         )
-        for filename in (
-            "02-page-layout-ledger.md",
-            "03-bibliography-audit-ledger.md",
-            "04-citation-claim-audit-ledger.md",
-            "91-revision-ledger.md",
-            "92-new-evidence-or-experiments.md",
-        ):
+        (root / "02-page-layout-ledger.md").write_text(
+            "# Page ledger\n\n| PageID | Disposition |\n|---|---|\n| P0001 | clean |\n",
+            encoding="utf-8",
+        )
+        (root / "03-bibliography-audit-ledger.md").write_text(
+            "# Bibliography ledger\n\n| ReferenceID | Disposition |\n|---|---|\n"
+            "| REF0001 | verified |\n",
+            encoding="utf-8",
+        )
+        (root / "04-citation-claim-audit-ledger.md").write_text(
+            "# Citation ledger\n\n| PairID | Support |\n|---|---|\n"
+            "| C0001-S01 | direct |\n",
+            encoding="utf-8",
+        )
+        for filename in ("91-revision-ledger.md", "92-new-evidence-or-experiments.md"):
             (root / filename).write_text("# Complete\n", encoding="utf-8")
         for index in range(1, 4):
             (root / f"R{index}-comprehensive-review.md").write_text(
@@ -251,7 +264,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root / "00-bibliography-inventory.csv",
             BIB_INVENTORY_COLUMNS,
             [{
-                "ReferenceID": "B0001",
+                "ReferenceID": "REF0001",
                 "DisplayedLabel": "[1]",
                 "RenderedEntry": "Fixture reference.",
                 "Cited": "yes",
@@ -262,14 +275,14 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root / "03-bibliography-audit-ledger.csv",
             BIB_LEDGER_COLUMNS,
             [{
-                "ReferenceID": "B0001",
+                "ReferenceID": "REF0001",
                 "DisplayedLabel": "[1]",
                 "Cited": "yes",
                 "Field": field,
                 "RenderedValue": "fixture",
                 "CanonicalValue": "fixture",
                 "Verdict": "exact",
-                "EvidenceEndpoint": "https://example.invalid/fixture",
+                "EvidenceEndpoint": "https://doi.org/10.1145/3442188.3445922",
                 "EndpointType": "official fixture",
                 "CheckedAt": "2026-08-29",
                 "EvidenceNote": "fixture official record checked",
@@ -284,7 +297,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "PairID": "C0001-S01",
                 "OccurrenceID": "C0001",
                 "PDFLocation": "physical p.1",
-                "DisplayedReferenceID": "B0001",
+                "DisplayedReferenceID": "REF0001",
                 "AdjacentPDFText": "fixture proposition [1]",
                 "PDFSHA256": digest,
             }],
@@ -297,9 +310,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "OccurrenceID": "C0001",
                 "PDFLocation": "physical p.1",
                 "ExactAttachedProposition": "fixture proposition",
-                "ReferenceID": "B0001",
+                "ReferenceID": "REF0001",
                 "PublicIdentifier": "doi:fixture",
-                "ContentSourceOpened": "fixture full text",
+                "ContentSourceOpened": "https://dl.acm.org/doi/pdf/10.1145/3442188.3445922",
                 "ExactSourceLocator": "p.1",
                 "Support": "direct",
                 "MetadataStatus": "verified",
@@ -391,6 +404,93 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
 
+    def test_invalid_pdf_and_declared_page_count_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            pdf = root / "frozen-thesis.pdf"
+            pdf.write_bytes(b"NOT A PDF")
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["selected_pdf_sha256"] = hashlib.sha256(
+                pdf.read_bytes()
+            ).hexdigest().upper()
+            process["physical_page_count"] = 2
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("invalid PDF header", result.stdout)
+
+    def test_real_pdf_page_count_mismatch_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["physical_page_count"] = 2
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(root, "parsed page count 1")
+
+    def test_markdown_master_shell_and_missing_ids_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "03-bibliography-audit-ledger.md").write_text(
+                "# x\n", encoding="utf-8"
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Markdown master is empty or shell-only", result.stdout)
+            self.assertIn("bibliography ledger Markdown projection", result.stdout)
+
+    def test_fake_endpoint_date_locator_and_render_record_fail(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+            bib_rows[0]["EvidenceEndpoint"] = "claimed endpoint"
+            bib_rows[0]["CheckedAt"] = "sometime"
+            write_csv(
+                root / "03-bibliography-audit-ledger.csv",
+                BIB_LEDGER_COLUMNS,
+                bib_rows,
+            )
+            _, citation_rows = read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            citation_rows[0]["ContentSourceOpened"] = "claimed full text"
+            citation_rows[0]["ExactSourceLocator"] = "somewhere"
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            _, page_rows = read_csv(root / "02-page-layout-ledger.csv")
+            page_rows[0]["RenderDPI"] = "1"
+            page_rows[0]["RenderArtifactIDHash"] = "claimed hash"
+            write_csv(
+                root / "02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS, page_rows
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("EvidenceEndpoint lacks an http(s)", result.stdout)
+            self.assertIn("CheckedAt must be an ISO-8601", result.stdout)
+            self.assertIn("ContentSourceOpened lacks an http(s)", result.stdout)
+            self.assertIn("ExactSourceLocator lacks a page/section", result.stdout)
+            self.assertIn("RenderDPI must be an integer in", result.stdout)
+            self.assertIn("RenderArtifactIDHash must be a 64-hex hash", result.stdout)
+
+    def test_chair_citation_gate_cannot_pass_unresolved_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            chair_path = root / "90-chair-synthesis.md"
+            chair = chair_path.read_text(encoding="utf-8").replace(
+                "- Substantive conflicts: 0", "- Substantive conflicts: 1"
+            )
+            chair_path.write_text(chair, encoding="utf-8")
+            self.assert_fails(root, "Combined citation gate cannot pass")
+
     def test_summary_extra_id_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -459,7 +559,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             _, rows = read_csv(root / "04-citation-claim-audit-ledger.csv")
             rows[0]["OccurrenceID"] = "WRONG"
-            rows[0]["ReferenceID"] = "B9999"
+            rows[0]["ReferenceID"] = "REF9999"
             write_csv(
                 root / "04-citation-claim-audit-ledger.csv",
                 CITATION_LEDGER_COLUMNS,
@@ -469,6 +569,68 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("citation mapping mismatch", result.stdout)
             self.assertIn("unknown ReferenceID", result.stdout)
+
+    def test_documented_unverifiable_rows_allow_missing_endpoints(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+            bib_rows[0]["Verdict"] = "unverifiable"
+            bib_rows[0]["CanonicalValue"] = "not established"
+            bib_rows[0]["EvidenceEndpoint"] = ""
+            bib_rows[0]["EndpointType"] = "official route inaccessible"
+            bib_rows[0]["EvidenceNote"] = (
+                "Attempted the official publisher route on 2026-08-29; "
+                "the record was inaccessible."
+            )
+            write_csv(
+                root / "03-bibliography-audit-ledger.csv",
+                BIB_LEDGER_COLUMNS,
+                bib_rows,
+            )
+            _, citation_rows = read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            citation_rows[0]["ContentSourceOpened"] = ""
+            citation_rows[0]["ExactSourceLocator"] = ""
+            citation_rows[0]["Support"] = "unverifiable"
+            citation_rows[0]["DispositionEvidence"] = (
+                "Official full-text route attempted but inaccessible."
+            )
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_verified_rows_require_endpoint_and_content_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+            bib_rows[0]["EvidenceEndpoint"] = ""
+            write_csv(
+                root / "03-bibliography-audit-ledger.csv",
+                BIB_LEDGER_COLUMNS,
+                bib_rows,
+            )
+            _, citation_rows = read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            citation_rows[0]["ContentSourceOpened"] = ""
+            citation_rows[0]["ExactSourceLocator"] = ""
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("verified verdict lacks authoritative evidence endpoint", result.stdout)
+            self.assertIn("substantive verdict lacks content source", result.stdout)
+            self.assertIn("substantive verdict lacks exact locator", result.stdout)
 
     def test_invalid_academic_enums_and_blank_anchor_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -27,7 +27,7 @@ Record in the relevant ledger:
 
 Reconcile all machine-readable IDs against the neutral Stage-P inventories. Report duplicate, missing, and extra IDs explicitly; `pending=0` is not evidence that a row was never omitted. For a large thesis, process deterministic ID ranges in checkpointed batches, then concatenate and validate the masters before the owning reviewer signs them.
 
-Use stable deterministic rendered-reference IDs in PDF order. In `03-bibliography-audit-ledger.md`, create a human-readable **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
+Use continuous deterministic rendered-reference IDs `REF0001...` in PDF order. In `03-bibliography-audit-ledger.md`, create a human-readable **bibliography master table** with exactly one row per bibliography entry rendered in the PDF:
 
 | Reference ID / displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
@@ -36,14 +36,14 @@ The authoritative machine-readable master is `03-bibliography-audit-ledger.csv` 
 
 `ReferenceID,DisplayedLabel,Cited,Field,RenderedValue,CanonicalValue,Verdict,EvidenceEndpoint,EndpointType,CheckedAt,EvidenceNote,FindingDisposition,PDFSHA256`.
 
-For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
+For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. For a verified verdict, record the exact `http(s)` authoritative endpoint and an ISO-8601 `CheckedAt`; for an inaccessible official route, use `unverifiable`, leave the endpoint blank if necessary, and record the attempted route/query/date and access result in `EvidenceNote`. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
 
 In `04-citation-claim-audit-ledger.md`, create the following human-readable projection with one row per citation--source pair:
 
 | Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID / displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |
 |---|---|---|---|---|---|---|---|---|---|---|
 
-Use stable occurrence IDs in PDF reading order, such as `C0001`. For a citation cluster, repeat the occurrence ID for each displayed reference and assign a unique deterministic Pair ID such as `C0001-S01`, `C0001-S02`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+Use continuous occurrence IDs `C0001...` in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference and assign continuous Pair IDs `C0001-S01`, `C0001-S02...`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
 
 The authoritative CSV schema is exactly the contract in `ledger-validation.md`:
 
@@ -101,8 +101,8 @@ Do not label a paywalled, obscure, future, private, or temporarily inaccessible 
 For every citation--source pair:
 
 1. identify the smallest exact proposition attached to the citation;
-2. open the cited primary source content in the version that matches the bibliography and frozen review date; a publisher metadata page, DOI record, accepted-paper list, or proceedings index verifies identity/status only, not substantive content;
-3. verify the proposition against the source's actual task, assumptions, method, data, protocol, result, and conclusion, and record a source page, section, theorem, table, figure, or equivalent exact locator;
+2. open the cited primary source content in the version that matches the bibliography and frozen review date, and record the exact public `http(s)` content endpoint; a publisher metadata page, DOI record, accepted-paper list, or proceedings index verifies identity/status only, not substantive content;
+3. verify the proposition against the source's actual task, assumptions, method, data, protocol, result, and conclusion, and record a source page, section, theorem, table, figure, equation, record field, or equivalent exact locator;
 4. distinguish what the source directly states from the thesis author's inference;
 5. check that a survey or secondary source is not being used to launder a stronger claim than its primary evidence supports;
 6. for clusters, determine what each source contributes; do not allow one relevant paper to mask unrelated padding;

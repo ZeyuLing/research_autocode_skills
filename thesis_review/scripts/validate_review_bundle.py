@@ -16,12 +16,24 @@ import json
 import re
 import sys
 from collections import Counter, defaultdict
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
 
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
+PUBLIC_URL_RE = re.compile(r"https?://[^\s;,]+", re.IGNORECASE)
+SOURCE_LOCATOR_RE = re.compile(
+    r"(?:\b(?:p{1,2}|pages?|section|sec|abstract|table|figure|equation|"
+    r"theorem|lemma|appendix|supplement|paragraph|heading|lines?|record|"
+    r"metadata|anchor)\b|§|页|节|表|图|式|定理|附录)",
+    re.IGNORECASE,
+)
+PAGE_ID_RE = re.compile(r"^P(\d{4})$")
+REFERENCE_ID_RE = re.compile(r"^REF(\d{4})$")
+OCCURRENCE_ID_RE = re.compile(r"^C(\d{4})$")
+PAIR_ID_RE = re.compile(r"^C(\d{4})-S(\d{2})$")
 
 PAGE_INVENTORY_COLUMNS = [
     "PageID", "PhysicalPage", "PrintedPage", "Region",
@@ -89,7 +101,10 @@ ACADEMIC_SEVERITIES = {"s0", "s1", "s2", "s3"}
 ACADEMIC_REMEDIES = {"w", "e", "n", "p"}
 ACADEMIC_PRIORITIES = {"p0", "p1", "p2", "p3"}
 AI_ACTION_IMPACTS = {"material", "local"}
-PLACEHOLDERS = {"pending", "unchecked", "...", "…", "todo", "tbd"}
+PLACEHOLDERS = {
+    "pending", "unchecked", "...", "…", "todo", "tbd",
+    "placeholder", "not checked", "not verified", "x",
+}
 NON_SIGNAL_VALUES = {
     "none", "clean", "no signal", "no signals", "n/a", "not applicable",
 }
@@ -119,6 +134,66 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def validate_pdf_structure_and_pages(
+    path: Path, declared_pages: int, errors: list[str]
+) -> None:
+    try:
+        with path.open("rb") as handle:
+            if handle.read(5) != b"%PDF-":
+                errors.append(f"{path.name}: invalid PDF header")
+                return
+    except OSError as exc:
+        errors.append(f"{path.name}: cannot read PDF header: {exc}")
+        return
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        errors.append(
+            "validator dependency missing: install pypdf or use the bundled "
+            "workspace Python runtime"
+        )
+        return
+    try:
+        reader = PdfReader(str(path), strict=False)
+        actual_pages = len(reader.pages)
+    except Exception as exc:  # pypdf exposes several parser exception types
+        errors.append(f"{path.name}: cannot parse frozen PDF: {exc}")
+        return
+    if actual_pages < 1:
+        errors.append(f"{path.name}: parsed PDF has no pages")
+    if declared_pages and actual_pages != declared_pages:
+        errors.append(
+            f"{path.name}: parsed page count {actual_pages} != "
+            f"physical_page_count {declared_pages}"
+        )
+
+
+def validate_iso_date(value: str) -> bool:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
+
+
+def validate_markdown_id_projection(
+    path: Path,
+    expected_ids: set[str],
+    id_pattern: re.Pattern[str],
+    label: str,
+    errors: list[str],
+) -> None:
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"{path.name}: cannot read Markdown master: {exc}")
+        return
+    if len(text.strip()) < 32:
+        errors.append(f"{path.name}: Markdown master is empty or shell-only")
+    actual_ids = {match.group(0) for match in id_pattern.finditer(text)}
+    compare_sets(f"{label} Markdown projection", expected_ids, actual_ids, errors)
 
 
 def is_placeholder(value: str) -> bool:
@@ -286,7 +361,10 @@ def labeled_value(text: str, label: str) -> str | None:
 
 
 def validate_chair_report(
-    path: Path, expected_pdf_hash: str, errors: list[str]
+    path: Path,
+    expected_pdf_hash: str,
+    expected_cited_references: int,
+    errors: list[str],
 ) -> None:
     text = validate_declarations(path, expected_pdf_hash, errors)
     if not text:
@@ -295,6 +373,7 @@ def validate_chair_report(
         r"(?im)^##\s+Mandatory citation cross-ledger consistency gate\s*$", text
     ):
         errors.append(f"{path.name}: missing mandatory citation cross-ledger section")
+    counts: dict[str, int] = {}
     for label in (
         "Unique cited rendered references joined",
         "Identity-agreement count",
@@ -304,12 +383,29 @@ def validate_chair_report(
         "Reclassified Pair IDs",
         "Unresolved conflicts",
     ):
-        value = labeled_value(text, label)
-        if value is None or not value or is_placeholder(value):
-            errors.append(f"{path.name}: missing/nonfinal cross-ledger value '{label}'")
+        value = parse_count_label(text, label, path.name, errors)
+        if value is not None:
+            counts[label] = value
+    joined = counts.get("Unique cited rendered references joined")
+    if joined is not None and joined != expected_cited_references:
+        errors.append(
+            f"{path.name}: joined cited-reference count {joined} != "
+            f"citation inventory unique-reference count {expected_cited_references}"
+        )
+    agreements = counts.get("Identity-agreement count")
+    if joined is not None and agreements is not None and agreements > joined:
+        errors.append(f"{path.name}: identity-agreement count exceeds joined references")
     gate = labeled_value(text, "Combined citation gate")
     if gate is None or gate.casefold() not in {"pass", "fail"}:
         errors.append(f"{path.name}: Combined citation gate must be pass or fail")
+    elif gate.casefold() == "pass" and (
+        counts.get("Substantive conflicts", 0) > 0
+        or counts.get("Unresolved conflicts", 0) > 0
+    ):
+        errors.append(
+            f"{path.name}: Combined citation gate cannot pass with substantive "
+            "or unresolved conflicts"
+        )
     if not re.search(
         r"(?im)^\s*-\s*Overall academic grade:\s*(?:A|B|C|D|N/?A)\b", text
     ):
@@ -593,6 +689,8 @@ def validate_process(
         page_count = 0
     else:
         page_count = page_count_raw
+    if frozen_path.is_file():
+        validate_pdf_structure_and_pages(frozen_path, page_count, errors)
     degree = str(process.get("degree_level") or "").casefold()
     if degree not in {"doctorate", "masters"}:
         errors.append("degree_level must be doctorate or masters for a complete panel")
@@ -676,6 +774,13 @@ def main(argv: list[str] | None = None) -> int:
         page_ledger, "PageID", "02-page-layout-ledger.csv", errors
     )
     compare_sets("page ledger", set(page_inv_by_id), set(page_led_by_id), errors)
+    for index, row in enumerate(page_inventory, start=1):
+        expected_page_id = f"P{index:04d}"
+        if row["PageID"] != expected_page_id:
+            errors.append(
+                "00-page-inventory.csv: PageID sequence mismatch at row "
+                f"{index + 1}; expected {expected_page_id}, got {row['PageID']!r}"
+            )
     if page_count and len(page_inventory) != page_count:
         errors.append(
             f"00-page-inventory.csv: row count {len(page_inventory)} "
@@ -730,17 +835,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"{row['Disposition']!r}"
             )
         try:
-            if int(row["RenderDPI"]) <= 0:
+            render_dpi = int(row["RenderDPI"])
+            if render_dpi < 120 or render_dpi > 600:
                 raise ValueError
         except ValueError:
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: RenderDPI must be "
-                "a positive integer"
+                "an integer in the auditable range 120..600"
             )
-        if not HEX64_FIND_RE.search(row["RenderArtifactIDHash"]):
+        render_pattern = re.compile(
+            rf"^(?:{re.escape(row['PageID'])}[:/| -])?[0-9a-fA-F]{{64}}$"
+        )
+        if not render_pattern.fullmatch(row["RenderArtifactIDHash"]):
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: "
-                "RenderArtifactIDHash lacks a 64-hex hash"
+                "RenderArtifactIDHash must be a 64-hex hash, optionally "
+                "prefixed by the matching PageID"
             )
     expected_pages = list(range(1, page_count + 1)) if page_count else []
     if page_count and sorted(physical_inventory) != expected_pages:
@@ -760,6 +870,13 @@ def main(argv: list[str] | None = None) -> int:
                     f"page mapping mismatch for {page_id}: {field} "
                     f"inventory={inv[field]!r}, ledger={led[field]!r}"
                 )
+    validate_markdown_id_projection(
+        root / "02-page-layout-ledger.md",
+        set(page_inv_by_id),
+        re.compile(r"(?<![A-Za-z0-9])P\d{4}(?![A-Za-z0-9])"),
+        "page ledger",
+        errors,
+    )
 
     bib_inventory = read_csv(
         root / "00-bibliography-inventory.csv", BIB_INVENTORY_COLUMNS,
@@ -776,6 +893,7 @@ def main(argv: list[str] | None = None) -> int:
     validate_rows_mandatory(
         bib_ledger, "03-bibliography-audit-ledger.csv",
         BIB_LEDGER_COLUMNS, errors,
+        blank_allowed={"EvidenceEndpoint"},
     )
     validate_pdf_hash(
         bib_inventory, "00-bibliography-inventory.csv", expected_hash, errors
@@ -792,6 +910,14 @@ def main(argv: list[str] | None = None) -> int:
     compare_sets(
         "bibliography ledger", set(bib_inv_by_id), bib_refs_in_ledger, errors
     )
+    for index, row in enumerate(bib_inventory, start=1):
+        expected_ref_id = f"REF{index:04d}"
+        if row["ReferenceID"] != expected_ref_id:
+            errors.append(
+                "00-bibliography-inventory.csv: ReferenceID sequence mismatch "
+                f"at row {index + 1}; expected {expected_ref_id}, "
+                f"got {row['ReferenceID']!r}"
+            )
     fields_by_ref: dict[str, set[str]] = defaultdict(set)
     bib_keys: Counter[tuple[str, str]] = Counter()
     for line, row in enumerate(bib_ledger, start=2):
@@ -804,6 +930,25 @@ def main(argv: list[str] | None = None) -> int:
             errors.append(
                 f"03-bibliography-audit-ledger.csv:{line}: invalid verdict "
                 f"{row['Verdict']!r}"
+            )
+        if verdict != "unverifiable" and not row["EvidenceEndpoint"]:
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{line}: "
+                "verified verdict lacks authoritative evidence endpoint"
+            )
+        if (
+            verdict != "unverifiable"
+            and row["EvidenceEndpoint"]
+            and not PUBLIC_URL_RE.search(row["EvidenceEndpoint"])
+        ):
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{line}: "
+                "EvidenceEndpoint lacks an http(s) authoritative record"
+            )
+        if not validate_iso_date(row["CheckedAt"]):
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{line}: "
+                "CheckedAt must be an ISO-8601 date or datetime"
             )
         if field not in BIB_FIELDS:
             errors.append(
@@ -844,6 +989,13 @@ def main(argv: list[str] | None = None) -> int:
                 f"missing={sorted(BIB_FIELDS-actual_fields)}, "
                 f"extra={sorted(actual_fields-BIB_FIELDS)}"
             )
+    validate_markdown_id_projection(
+        root / "03-bibliography-audit-ledger.md",
+        set(bib_inv_by_id),
+        re.compile(r"(?<![A-Za-z0-9])REF\d{4}(?![A-Za-z0-9])"),
+        "bibliography ledger",
+        errors,
+    )
 
     citation_inventory = read_csv(
         root / "00-citation-inventory.csv", CITATION_INVENTORY_COLUMNS,
@@ -860,6 +1012,7 @@ def main(argv: list[str] | None = None) -> int:
     validate_rows_mandatory(
         citation_ledger, "04-citation-claim-audit-ledger.csv",
         CITATION_LEDGER_COLUMNS, errors,
+        blank_allowed={"ContentSourceOpened", "ExactSourceLocator"},
     )
     validate_pdf_hash(
         citation_inventory, "00-citation-inventory.csv", expected_hash, errors
@@ -879,6 +1032,42 @@ def main(argv: list[str] | None = None) -> int:
         "citation-claim ledger", set(citation_inv_by_pair),
         set(citation_led_by_pair), errors,
     )
+    current_occurrence = 0
+    current_source_ordinal = 0
+    for line, row in enumerate(citation_inventory, start=2):
+        occurrence_match = OCCURRENCE_ID_RE.fullmatch(row["OccurrenceID"])
+        pair_match = PAIR_ID_RE.fullmatch(row["PairID"])
+        if not occurrence_match or not pair_match:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: invalid deterministic "
+                "OccurrenceID/PairID format"
+            )
+            continue
+        occurrence_number = int(occurrence_match.group(1))
+        pair_occurrence = int(pair_match.group(1))
+        source_ordinal = int(pair_match.group(2))
+        if pair_occurrence != occurrence_number:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: PairID occurrence does not "
+                "match OccurrenceID"
+            )
+        if occurrence_number == current_occurrence:
+            current_source_ordinal += 1
+        elif occurrence_number == current_occurrence + 1:
+            current_occurrence = occurrence_number
+            current_source_ordinal = 1
+        else:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: occurrence IDs are not "
+                "continuous in reading order"
+            )
+            current_occurrence = occurrence_number
+            current_source_ordinal = 1
+        if source_ordinal != current_source_ordinal:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: source ordinals are not "
+                "continuous within the occurrence"
+            )
     for pair_id in sorted(
         set(citation_inv_by_pair) & set(citation_led_by_pair)
     ):
@@ -903,21 +1092,44 @@ def main(argv: list[str] | None = None) -> int:
                 f"{row['Support']!r}"
             )
         if support in {"direct", "partial", "context-only", "mismatch"}:
-            if row["ContentSourceOpened"].casefold() in {"n/a", "none"}:
+            if (
+                not row["ContentSourceOpened"]
+                or row["ContentSourceOpened"].casefold() in {"n/a", "none"}
+            ):
                 errors.append(
                     f"04-citation-claim-audit-ledger.csv:{line}: "
                     "substantive verdict lacks content source"
                 )
-            if row["ExactSourceLocator"].casefold() in {"n/a", "none"}:
+            elif not PUBLIC_URL_RE.search(row["ContentSourceOpened"]):
+                errors.append(
+                    f"04-citation-claim-audit-ledger.csv:{line}: "
+                    "ContentSourceOpened lacks an http(s) content endpoint"
+                )
+            if (
+                not row["ExactSourceLocator"]
+                or row["ExactSourceLocator"].casefold() in {"n/a", "none"}
+            ):
                 errors.append(
                     f"04-citation-claim-audit-ledger.csv:{line}: "
                     "substantive verdict lacks exact locator"
+                )
+            elif not SOURCE_LOCATOR_RE.search(row["ExactSourceLocator"]):
+                errors.append(
+                    f"04-citation-claim-audit-ledger.csv:{line}: "
+                    "ExactSourceLocator lacks a page/section/content locator"
                 )
         if row["ReferenceID"] not in bib_inv_by_id:
             errors.append(
                 f"04-citation-claim-audit-ledger.csv:{line}: "
                 f"unknown ReferenceID {row['ReferenceID']!r}"
             )
+    validate_markdown_id_projection(
+        root / "04-citation-claim-audit-ledger.md",
+        set(citation_inv_by_pair),
+        re.compile(r"(?<![A-Za-z0-9])C\d{4}-S\d{2}(?![A-Za-z0-9])"),
+        "citation-claim ledger",
+        errors,
+    )
 
     academic_ledger = read_csv(
         root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS,
@@ -1063,7 +1275,14 @@ def main(argv: list[str] | None = None) -> int:
             root / "05-ai-style-assessment.md", expected_hash, errors
         )
         validate_chair_report(
-            root / "90-chair-synthesis.md", expected_hash, errors
+            root / "90-chair-synthesis.md",
+            expected_hash,
+            len({
+                row["DisplayedReferenceID"]
+                for row in citation_inventory
+                if row["DisplayedReferenceID"]
+            }),
+            errors,
         )
         validate_summary_report(
             root / "93-user-facing-summary.md", expected_hash,
