@@ -27,10 +27,17 @@ review, it is substantive prohibited context and the actor must stop.
 A tool result that the actor deliberately obtains from an exact allowlisted local
 input or permitted public endpoint is evidence already authorized by the operational
 prompt, not a later external message. A system-owned runtime notice is likewise not
-a later substantive message when it contains no task instruction or assertion. A
-new user, task, actor, system, or developer message that adds or changes a task
-instruction, supplies a thesis assertion, identifies unlisted material, or imports
-another context remains a later substantive message and requires stop and quarantine.
+a later substantive message when it contains no task-specific assertion. Generic
+platform policy, safety, tool, transport, or runtime instructions remain permitted
+system/developer instructions under the canonical fresh-context declaration even
+when delivered after actor launch; delivery timing alone is not contamination. A
+new user, task, or actor message that adds or changes an instruction, supplies a
+thesis assertion, identifies unlisted material, or imports another context remains
+a later substantive message. A later system/developer message is contaminating only
+when it imports task-specific substance outside the exact operational prompt, such
+as a thesis assertion, author explanation, prior finding, old-task content, or an
+unlisted identity-bearing path. In either substantive case, stop and quarantine;
+when the content boundary is uncertain, do not assume the exception.
 
 Likewise, transport compaction during the actor's **same current clean turn** is
 not a new input when the compacted state is derived exclusively from the exact
