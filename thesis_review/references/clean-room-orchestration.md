@@ -11,8 +11,9 @@ The operational prompt may provide only the stage role, exact allowlisted input 
 The fresh-context boundary concerns **substantive task input**, not system-owned
 execution metadata. A platform-generated capability or environment envelope that
 contains only tool descriptions, operating-system/current-time metadata, permission
-state, model/runtime availability, recommended-plugin metadata, and a neutral stage
-working directory is infrastructure, not an inherited user/task turn. Current-
+state, model/runtime availability, recommended-plugin metadata, non-substantive
+retry/reconnect/transport/progress/capacity notices, and a neutral stage working
+directory is infrastructure, not an inherited user/task turn. Current-
 directory metadata qualifies only when it names the actor's neutral stage directory
 inside the closed neutral round root and no path segment conveys an author, project,
 laboratory, paper, repository, or thesis identity; Stage O must launch the actor from
@@ -22,6 +23,14 @@ and does not invalidate the canonical fresh-context declaration. This exception 
 closed: if an envelope carries any thesis assertion, author explanation, requested
 interpretation, prior finding, old-task summary, or instruction that changes the
 review, it is substantive prohibited context and the actor must stop.
+
+A tool result that the actor deliberately obtains from an exact allowlisted local
+input or permitted public endpoint is evidence already authorized by the operational
+prompt, not a later external message. A system-owned runtime notice is likewise not
+a later substantive message when it contains no task instruction or assertion. A
+new user, task, actor, system, or developer message that adds or changes a task
+instruction, supplies a thesis assertion, identifies unlisted material, or imports
+another context remains a later substantive message and requires stop and quarantine.
 
 Likewise, transport compaction during the actor's **same current clean turn** is
 not a new input when the compacted state is derived exclusively from the exact
