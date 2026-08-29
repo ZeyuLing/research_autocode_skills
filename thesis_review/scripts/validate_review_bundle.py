@@ -131,6 +131,15 @@ REVIEWER_ASSESSMENT_HEADERS = [
     "Related finding IDs or `none`",
     "Confidence/limitation",
 ]
+OWNED_LEDGER_DECLARATION_LABELS = (
+    "Actor ID",
+    "Review round ID",
+    "Review retry ID",
+    "Fresh-context declaration",
+    "Operational prompt SHA-256",
+    "Input-receipt/access declaration",
+    "Frozen PDF SHA-256 at start and end",
+)
 ACADEMIC_LEDGER_COLUMNS = [
     "LedgerID", "Priority", "ChairFindingID", "SourceReviewerFindingIDs",
     "Severity", "S0Subtype", "Remedy", "ExactPDFAnchor", "DirectObservation",
@@ -1053,6 +1062,65 @@ def parse_markdown_table_by_exact_headers(
     return rows
 
 
+def validate_declarations_before_main_table(
+    text: str,
+    expected_headers: list[str],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Require every owned-ledger declaration above its canonical main table."""
+
+    def parse_row(line: str) -> list[str] | None:
+        stripped = line.strip()
+        if not (stripped.startswith("|") and stripped.endswith("|")):
+            return None
+        return [
+            cell.replace(r"\|", "|").strip()
+            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
+        ]
+
+    visible = markdown_visible_text(text)
+    expected_schema = [value.casefold() for value in expected_headers]
+    table_offset: int | None = None
+    offset = 0
+    for line in visible.splitlines(keepends=True):
+        row = parse_row(line)
+        if row is not None and [value.casefold() for value in row] == expected_schema:
+            table_offset = offset
+            break
+        offset += len(line)
+    if table_offset is None:
+        return
+
+    late_labels: list[str] = []
+    for label in OWNED_LEDGER_DECLARATION_LABELS:
+        if label in {
+            "Fresh-context declaration", "Input-receipt/access declaration",
+        }:
+            pattern = (
+                rf"(?im)^[ ]{{0,3}}-[ \t]+(?:[A-Za-z-]+[ \t]+)?"
+                rf"{re.escape(label)}[ \t]*:[ \t]*(.*?)[ \t]*$"
+            )
+        elif label == "Frozen PDF SHA-256 at start and end":
+            pattern = (
+                rf"(?im)^[ ]{{0,3}}(?:-[ \t]+)?{re.escape(label)}"
+                rf"[ \t]*:[^\r\n]*$"
+            )
+        else:
+            pattern = (
+                rf"(?im)^[ ]{{0,3}}-[ \t]+{re.escape(label)}[ \t]*:"
+                rf"[ \t]*(.*?)[ \t]*$"
+            )
+        matches = list(re.finditer(pattern, visible))
+        if any(match.start() >= table_offset for match in matches):
+            late_labels.append(label)
+    if late_labels:
+        errors.append(
+            f"{filename}: all required declarations must precede the first "
+            f"canonical main table header; late fields {late_labels}"
+        )
+
+
 def count_complete_markdown_pipe_tables(text: str) -> int:
     """Count rendered pipe tables with a header and separator row."""
 
@@ -1606,10 +1674,10 @@ def validate_declarations(
     ))
     if len(fresh_matches) != 1:
         errors.append(f"{path.name}: fresh-context declaration field must occur exactly once")
-    elif required_fresh_boundary not in fresh_matches[0].group(1).casefold():
+    elif fresh_matches[0].group(1).strip() != required_fresh_boundary:
         errors.append(
-            f"{path.name}: fresh-context declaration does not state the "
-            "complete no-inherited-context boundary"
+            f"{path.name}: fresh-context declaration must exactly equal the "
+            "canonical no-inherited-context sentence"
         )
     if "input-receipt/access declaration" not in lower:
         errors.append(f"{path.name}: missing input-receipt/access declaration")
@@ -1893,6 +1961,65 @@ def chair_verdict_projection(text: str) -> dict[str, str]:
     }
 
 
+def closed_list_residual_is_empty(value: str) -> bool:
+    """Accept only punctuation/whitespace and explicit list connectors."""
+
+    normalized = unicodedata.normalize("NFKC", value)
+    normalized = re.sub(r"(?i)(?<![A-Za-z0-9])and(?![A-Za-z0-9])", "", normalized)
+    normalized = re.sub(r"[\s,;、/|+&`()\[\]{}:.及和与]+", "", normalized)
+    return not normalized
+
+
+def parse_secondary_gate_set(value: str) -> tuple[str, ...] | None:
+    """Parse an unordered, non-duplicated A--I set or the exact literal none."""
+
+    stripped = value.strip()
+    if stripped == "none":
+        return ()
+    token_re = re.compile(
+        r"(?i)(?<![A-Za-z0-9])(?:gates?[ \t]+)?([A-I])(?![A-Za-z0-9])"
+    )
+    matches = list(token_re.finditer(unicodedata.normalize("NFKC", stripped)))
+    if not matches:
+        return None
+    residual = token_re.sub("", unicodedata.normalize("NFKC", stripped))
+    if not closed_list_residual_is_empty(residual):
+        return None
+    gates = tuple(match.group(1).upper() for match in matches)
+    if len(set(gates)) != len(gates):
+        return None
+    return gates
+
+
+def parse_related_finding_ids(value: str) -> tuple[str, ...] | None:
+    """Parse a closed list of reviewer/chair/question IDs or exact literal none."""
+
+    stripped = value.strip()
+    if stripped == "none":
+        return ()
+    token_re = re.compile(
+        r"(?i)(?<![A-Za-z0-9])(?:R\d+-(?:F|Q)\d{2,4}|C-F\d{2,4}|AI-F\d{2,4})"
+        r"(?![A-Za-z0-9])"
+    )
+    matches = list(token_re.finditer(unicodedata.normalize("NFKC", stripped)))
+    if not matches:
+        return None
+    residual = token_re.sub("", unicodedata.normalize("NFKC", stripped))
+    if not closed_list_residual_is_empty(residual):
+        return None
+    identifiers = tuple(match.group(0) for match in matches)
+    if len(set(identifiers)) != len(identifiers):
+        return None
+    return identifiers
+
+
+def normalized_duty_value(value: str) -> str:
+    """Normalize a complete duty value without substring-style matching."""
+
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return re.sub(r"[\W_]+", " ", normalized).strip()
+
+
 def parse_reviewer_findings(
     text: str,
     reviewer_index: int,
@@ -1941,6 +2068,11 @@ def parse_reviewer_findings(
         primary_gate = normalized_fields["Primary gate"].upper()
         if primary_gate not in set("ABCDEFGHI"):
             errors.append(f"{filename}: {finding_id} has invalid Primary gate")
+        if parse_secondary_gate_set(normalized_fields["Secondary gates"]) is None:
+            errors.append(
+                f"{filename}: {finding_id} Secondary gates must be exact none or "
+                "a non-duplicated set drawn only from Gate A--I"
+            )
         scope = normalized_fields["Scope"].casefold()
         if scope not in {"thesis-wide", "cross-chapter", "chapter", "local"}:
             errors.append(f"{filename}: {finding_id} has invalid Scope")
@@ -2072,6 +2204,13 @@ def validate_reviewer_report(
     )
     if not text:
         return
+    owns_citation = (
+        degree_level == "doctorate" and reviewer_index == 4
+    ) or (degree_level == "masters" and reviewer_index == 3)
+    owns_page_and_bib = (
+        degree_level == "doctorate" and reviewer_index == 5
+    ) or (degree_level == "masters" and reviewer_index == 3)
+    audit_owner = owns_citation or owns_page_and_bib
     require_unique_level2_headings(text, (
         "Role, scope, and independence",
         "Verdict",
@@ -2084,6 +2223,33 @@ def validate_reviewer_report(
         "Questions, not findings",
         "Coverage and limitations",
     ), path.name, errors)
+    assessment_offsets = level2_heading_offsets(text, "Whole-thesis assessment")
+    deep_review_offsets = level2_heading_offsets(text, "Persona-weighted deep review")
+    if (
+        len(assessment_offsets) == 1
+        and len(deep_review_offsets) == 1
+        and assessment_offsets[0] >= deep_review_offsets[0]
+    ):
+        errors.append(
+            f"{path.name}: Whole-thesis assessment must precede "
+            "Persona-weighted deep review"
+        )
+    coverage_offsets = level2_heading_offsets(text, "Coverage and limitations")
+    owner_headings = (
+        (["Full citation-claim audit"] if owns_citation else [])
+        + ([
+            "Full rendered-page audit",
+            "Full bibliography-integrity audit",
+        ] if owns_page_and_bib else [])
+    )
+    if len(coverage_offsets) == 1:
+        for heading in owner_headings:
+            offsets = level2_heading_offsets(text, heading)
+            if len(offsets) == 1 and offsets[0] <= coverage_offsets[0]:
+                errors.append(
+                    f"{path.name}: conditional owner section {heading!r} must "
+                    "follow the final required base section 'Coverage and limitations'"
+                )
     role_section = markdown_section_body_raw(text, "Role, scope, and independence") or ""
     verdict_section = markdown_section_body_raw(text, "Verdict") or ""
     mandate = labeled_value(role_section, "Whole-thesis mandate")
@@ -2104,6 +2270,14 @@ def validate_reviewer_report(
             errors.append(
                 f"{path.name}: Role section missing or duplicating required field {label!r}"
             )
+    duty_value = labeled_value(role_section, "Separate exhaustive audit duties, if any")
+    if audit_owner and duty_value is not None and normalized_duty_value(duty_value) in {
+        "none", "n a", "na", "not assigned", "no duty", "no duties", "无",
+    }:
+        errors.append(
+            f"{path.name}: assigned audit owner cannot disclaim Separate exhaustive "
+            "audit duties"
+        )
     persona = labeled_value(role_section, "Persona emphasis")
     persona_assignment = labeled_value(role_section, "Persona assignment")
     technical = (
@@ -2211,6 +2385,9 @@ def validate_reviewer_report(
                 f"{path.name}: Whole-thesis synthesis field {label!r} is missing or shell-only"
             )
     assessment_section = markdown_section_body_raw(text, "Whole-thesis assessment") or ""
+    findings = parse_reviewer_findings(
+        text, reviewer_index, path.name, physical_page_count, errors
+    )
     table_count = count_complete_markdown_pipe_tables(assessment_section)
     if table_count != 1:
         errors.append(
@@ -2267,8 +2444,17 @@ def validate_reviewer_report(
             or gate_page > physical_page_count
         ):
             errors.append(f"{path.name}: Gate {gate} lacks decisive anchored evidence")
-        if not cells[4] or not cells[5] or is_placeholder(cells[5]):
-            errors.append(f"{path.name}: Gate {gate} lacks finding/confidence disposition")
+        related_finding_ids = parse_related_finding_ids(cells[4])
+        if (
+            related_finding_ids is None
+            or any(identifier not in findings for identifier in related_finding_ids)
+        ):
+            errors.append(
+                f"{path.name}: Gate {gate} Related finding IDs must be exact none "
+                f"or a non-duplicated list of actual current R{reviewer_index} findings"
+            )
+        if not cells[5] or is_placeholder(cells[5]):
+            errors.append(f"{path.name}: Gate {gate} lacks confidence/limitation")
     if projection["regime"] == "skill-default":
         grade = projection["academic_grade"].upper()
         if grade not in DEFAULT_RECOMMENDATIONS:
@@ -2307,9 +2493,6 @@ def validate_reviewer_report(
             projection["governing_source"], allowed_governing_sources,
             path.name, "Governing source", errors,
         )
-    findings = parse_reviewer_findings(
-        text, reviewer_index, path.name, physical_page_count, errors
-    )
     parse_reviewer_questions(
         text, reviewer_index, path.name, physical_page_count, errors
     )
@@ -2352,6 +2535,7 @@ def validate_reviewer_report(
         count_labels: tuple[str, ...],
         master_filename: str,
         text_labels: tuple[str, ...] = (),
+        exact_text_values: dict[str, str] | None = None,
     ) -> None:
         require_unique_level2_headings(text, (heading,), path.name, errors)
         section = markdown_section_body_raw(text, heading) or ""
@@ -2378,6 +2562,13 @@ def validate_reviewer_report(
             if value is None or len(value) < 4 or is_placeholder(value):
                 errors.append(
                     f"{path.name}: missing concrete {heading!r} field {label!r}"
+                )
+        for label, expected_value in (exact_text_values or {}).items():
+            value = labeled_value(section, label)
+            if value is not None and value != expected_value:
+                errors.append(
+                    f"{path.name}: {heading!r} field {label!r} must exactly equal "
+                    f"{expected_value!r}"
                 )
         master = labeled_value(section, "Machine-readable master")
         master_count_text = (master or "").replace(master_filename, "", 1)
@@ -2418,12 +2609,6 @@ def validate_reviewer_report(
         "Suspected fabricated/nonexistent entries and adjudication status",
         "Metadata/status verified entries",
     )
-    owns_citation = (
-        degree_level == "doctorate" and reviewer_index == 4
-    ) or (degree_level == "masters" and reviewer_index == 3)
-    owns_page_and_bib = (
-        degree_level == "doctorate" and reviewer_index == 5
-    ) or (degree_level == "masters" and reviewer_index == 3)
     if owns_citation:
         check_owner_section(
             "Full citation-claim audit",
@@ -2449,6 +2634,7 @@ def validate_reviewer_report(
             page_count_labels,
             "02-page-layout-ledger.csv",
             ("Neighbor-page verification status", "Source-forcing cause"),
+            {"Source-forcing cause": "not verifiable from the PDF"},
         )
         check_owner_section(
             "Full bibliography-integrity audit",
@@ -2468,16 +2654,23 @@ def labeled_value(text: str, label: str) -> str | None:
     return matches[0].group(1).strip() if len(matches) == 1 else None
 
 
-def level2_heading_count(text: str, heading: str, *, prefix: bool = False) -> int:
+def level2_heading_offsets(
+    text: str, heading: str, *, prefix: bool = False
+) -> list[int]:
     visible = markdown_visible_text(text)
     suffix = r"(?:[ \t]+.*)?" if prefix else ""
-    return len(
-        re.findall(
+    return [
+        match.start()
+        for match in re.finditer(
             rf"(?im)^[ ]{{0,3}}##[ \t]+{re.escape(heading)}{suffix}"
             rf"(?:[ \t]+#+)?[ \t]*$",
             visible,
         )
-    )
+    ]
+
+
+def level2_heading_count(text: str, heading: str, *, prefix: bool = False) -> int:
+    return len(level2_heading_offsets(text, heading, prefix=prefix))
 
 
 def require_unique_level2_headings(
@@ -7378,6 +7571,11 @@ def main(argv: list[str] | None = None) -> int:
             allowed_public_endpoints=rule_public_endpoints,
             required_public_endpoints=rule_public_endpoints,
         )
+        owned_main_table_headers = {
+            "02-page-layout-ledger.md": PAGE_MARKDOWN_HEADERS,
+            "03-bibliography-audit-ledger.md": BIB_MARKDOWN_HEADERS,
+            "04-citation-claim-audit-ledger.md": CITATION_MARKDOWN_HEADERS,
+        }
         for owned_path, actor_id, public_endpoints, required_endpoints in (
             (
                 "02-page-layout-ledger.md", page_bib_owner,
@@ -7407,13 +7605,18 @@ def main(argv: list[str] | None = None) -> int:
                 set(),
             ),
         ):
-            validate_declarations(
+            owned_text = validate_declarations(
                 root / owned_path, expected_hash, errors,
                 process=process, actor_id=actor_id,
                 reviewer_count=reviewer_count,
                 allowed_public_endpoints=public_endpoints,
                 required_public_endpoints=required_endpoints,
             )
+            expected_headers = owned_main_table_headers.get(owned_path)
+            if owned_text and expected_headers is not None:
+                validate_declarations_before_main_table(
+                    owned_text, expected_headers, owned_path, errors
+                )
         for index in range(1, reviewer_count + 1):
             reviewer_public = set(rule_public_endpoints)
             if f"R{index}" == page_bib_owner:

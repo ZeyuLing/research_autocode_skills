@@ -4620,6 +4620,368 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 )
                 self.assert_fails(root, expected)
 
+    def test_fresh_context_declaration_requires_trimmed_exact_canonical_value(
+        self,
+    ) -> None:
+        canonical = (
+            "no inherited user/thread/task turns beyond system/developer "
+            "instructions and the exact operational prompt"
+        )
+        with self.subTest(case="surrounding whitespace"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    f"- Fresh-context declaration: {canonical}\n",
+                    f"- Fresh-context declaration:   {canonical}   \n",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for replacement in (
+            canonical + "; no other context was used",
+            canonical + ".",
+            "No" + canonical[2:],
+        ):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(
+                        f"- Fresh-context declaration: {canonical}",
+                        f"- Fresh-context declaration: {replacement}",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "fresh-context declaration must exactly equal the canonical "
+                    "no-inherited-context sentence",
+                )
+
+    def test_page_owner_source_forcing_cause_requires_exact_literal(self) -> None:
+        for replacement in (
+            "Not verifiable from the PDF",
+            "not verifiable from the PDF; source unavailable",
+            "because it is not verifiable from the PDF",
+        ):
+            with self.subTest(replacement=replacement), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R3-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(
+                        "- Source-forcing cause: not verifiable from the PDF",
+                        f"- Source-forcing cause: {replacement}",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "field 'Source-forcing cause' must exactly equal "
+                    "'not verifiable from the PDF'",
+                )
+
+    def test_actual_audit_owners_cannot_disclaim_separate_duties(self) -> None:
+        original = "assigned ledgers listed below or none"
+        for denial in (
+            "none", "N-A", "NA", "not assigned", "no duty", "no duties", "无",
+        ):
+            with self.subTest(degree="masters", denial=denial), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R3-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(original, denial, 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "assigned audit owner cannot disclaim Separate exhaustive audit duties",
+                )
+
+        for reviewer_index in (4, 5):
+            with self.subTest(degree="doctorate", reviewer=reviewer_index), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                self.convert_bundle_to_doctorate(root)
+                report = root / f"R{reviewer_index}-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(original, "none", 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "assigned audit owner cannot disclaim Separate exhaustive audit duties",
+                )
+
+    def test_nonowner_may_use_exact_none_for_separate_audit_duties(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "assigned ledgers listed below or none", "none", 1
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_gate_related_findings_are_closed_and_current_actor_bound(self) -> None:
+        gate_a_row = (
+            "| A — gate | baseline | adequate | physical p.1, fixture section | "
+            "none | high |"
+        )
+        with self.subTest(case="actual current finding"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    gate_a_row, gate_a_row.replace("| none |", "| R1-F01 |"), 1
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        invalid_values = (
+            "R2-F01",
+            "R1-F99",
+            "R1-Q01",
+            "C-F01",
+            "AI-F01",
+            "R1-F01, R1-F01",
+            "none / R1-F01",
+            "see current finding R1-F01",
+            "None",
+        )
+        for invalid in invalid_values:
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(
+                        gate_a_row,
+                        gate_a_row.replace("| none |", f"| {invalid} |"),
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "Related finding IDs must be exact none or a non-duplicated "
+                    "list of actual current R1 findings",
+                )
+
+    def test_secondary_gates_allow_flexible_sets_but_reject_open_grammar(self) -> None:
+        for valid in ("B", "Gate B / I", "i and b", "Gates B，I"):
+            with self.subTest(valid=valid), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(
+                        "- Secondary gates: none",
+                        f"- Secondary gates: {valid}",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                result = self.run_validator(root)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        for invalid in ("J", "B / B", "none / B", "B because related", "None", "A-I"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(
+                        "- Secondary gates: none",
+                        f"- Secondary gates: {invalid}",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "Secondary gates must be exact none or a non-duplicated set "
+                    "drawn only from Gate A--I",
+                )
+
+    def test_owned_ledger_declarations_must_precede_canonical_main_table(self) -> None:
+        for filename in (
+            "02-page-layout-ledger.md",
+            "03-bibliography-audit-ledger.md",
+            "04-citation-claim-audit-ledger.md",
+        ):
+            for label in (
+                "Actor ID",
+                "Review round ID",
+                "Review retry ID",
+                "Fresh-context declaration",
+                "Operational prompt SHA-256",
+                "Input-receipt/access declaration",
+                "Frozen PDF SHA-256 at start and end",
+            ):
+                with self.subTest(filename=filename, label=label), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    self.build_bundle(root)
+                    ledger = root / filename
+                    text = ledger.read_text(encoding="utf-8")
+                    match = re.search(
+                        rf"(?m)^- {re.escape(label)}:.*\n",
+                        text,
+                    )
+                    self.assertIsNotNone(match)
+                    assert match is not None
+                    moved_line = match.group(0)
+                    text = text[:match.start()] + text[match.end():]
+                    ledger.write_text(
+                        text.rstrip() + "\n\n" + moved_line,
+                        encoding="utf-8",
+                    )
+                    self.assert_fails(
+                        root,
+                        "all required declarations must precede the first canonical "
+                        "main table header",
+                    )
+
+        for label, rendered_label in (
+            (
+                "Fresh-context declaration",
+                "Reviewer Fresh-context declaration",
+            ),
+            (
+                "Input-receipt/access declaration",
+                "Reviewer Input-receipt/access declaration",
+            ),
+            (
+                "Frozen PDF SHA-256 at start and end",
+                "Frozen PDF SHA-256 at start and end",
+            ),
+        ):
+            with self.subTest(alternate_recognized_label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                ledger = root / "02-page-layout-ledger.md"
+                text = ledger.read_text(encoding="utf-8")
+                match = re.search(rf"(?m)^- {re.escape(label)}:.*\n", text)
+                self.assertIsNotNone(match)
+                assert match is not None
+                moved_line = match.group(0).replace(
+                    f"- {label}:",
+                    (
+                        f"- {rendered_label}:"
+                        if label != "Frozen PDF SHA-256 at start and end"
+                        else f"{rendered_label}:"
+                    ),
+                    1,
+                )
+                text = text[:match.start()] + text[match.end():]
+                ledger.write_text(
+                    text.rstrip() + "\n\n" + moved_line,
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "all required declarations must precede the first canonical "
+                    "main table header",
+                )
+
+    def test_reviewer_h2_relative_order_is_enforced_without_full_serialization(
+        self,
+    ) -> None:
+        def move_section_before(text: str, heading: str, before: str) -> str:
+            section = re.search(
+                rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\Z)", text
+            )
+            self.assertIsNotNone(section)
+            assert section is not None
+            body = section.group(0)
+            without = text[:section.start()] + text[section.end():]
+            insertion = without.index(f"## {before}\n")
+            return without[:insertion] + body + without[insertion:]
+
+        with self.subTest(case="assessment after deep review"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8")
+            assessment = re.search(
+                r"(?ms)^## Whole-thesis assessment\n.*?(?=^## Persona-weighted deep review)",
+                text,
+            )
+            deep_review = re.search(
+                r"(?ms)^## Persona-weighted deep review\n.*?(?=^## Strongest contributions)",
+                text,
+            )
+            self.assertIsNotNone(assessment)
+            self.assertIsNotNone(deep_review)
+            assert assessment is not None and deep_review is not None
+            reordered = (
+                text[:assessment.start()]
+                + deep_review.group(0)
+                + assessment.group(0)
+                + text[deep_review.end():]
+            )
+            report.write_text(reordered, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "Whole-thesis assessment must precede Persona-weighted deep review",
+            )
+
+        for heading in (
+            "Full rendered-page audit",
+            "Full bibliography-integrity audit",
+            "Full citation-claim audit",
+        ):
+            with self.subTest(case="owner before base end", heading=heading), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R3-comprehensive-review.md"
+                report.write_text(
+                    move_section_before(
+                        report.read_text(encoding="utf-8"),
+                        heading,
+                        "Coverage and limitations",
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    f"conditional owner section '{heading}' must follow the final "
+                    "required base section 'Coverage and limitations'",
+                )
+
+        with self.subTest(case="extra H2 and reordered owner H2s remain allowed"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R3-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8").replace(
+                "## Coverage and limitations",
+                "## Supplemental reviewer note\n\nA bounded supplemental note.\n\n"
+                "## Coverage and limitations",
+                1,
+            )
+            text = move_section_before(
+                text, "Full citation-claim audit", "Full rendered-page audit"
+            )
+            report.write_text(text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_hardening_closed_round_root_rejects_old_review_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
