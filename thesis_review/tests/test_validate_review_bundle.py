@@ -336,6 +336,26 @@ class ValidateReviewBundleTests(unittest.TestCase):
         self.assertEqual(parse("物理第 52 页"), 52)
         self.assertIsNone(parse("printed p.7"))
 
+    def test_persona_signal_matching_rejects_accidental_latin_substrings(self) -> None:
+        match = VALIDATOR_MODULE.contains_persona_signal
+        for value, signal in (
+            ("Algorithms and representations", "algorithms"),
+            ("chapter progression and cross-chapter terminology", "cross-chapter"),
+            ("参考文献、版面与格式规范", "参考文献"),
+        ):
+            with self.subTest(value=value, signal=signal):
+                self.assertTrue(match(value, signal))
+        for value, signal in (
+            ("glossary review", "loss"),
+            ("geometric reasoning", "metric"),
+            ("composition analysis", "position"),
+            ("transformation design", "format"),
+            ("webpage quality", "page"),
+            ("model architecture and neural design", "thesis architecture"),
+        ):
+            with self.subTest(value=value, signal=signal):
+                self.assertFalse(match(value, signal))
+
     def rewrite_pdf_and_rehash(self, root: Path, page_texts: list[str]) -> str:
         process_path = root / "00-process-parameters.json"
         process = json.loads(process_path.read_text(encoding="utf-8"))
@@ -1310,7 +1330,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "evidence integrity, reproducibility, bibliography, format, and layout standards"
         )
         r3_new_emphasis = (
-            "thesis architecture, narrative, and cross-chapter logic across the complete thesis"
+            "Abstract, introduction, scientific-question, contribution, and roadmap "
+            "alignment; coherent chapter progression; cross-chapter terminology; "
+            "shared infrastructure; conclusions; and thesis synthesis, while still "
+            "judging every Gate A through I."
         )
         r2 = root / "R2-comprehensive-review.md"
         r2.write_text(
@@ -1357,6 +1380,14 @@ class ValidateReviewBundleTests(unittest.TestCase):
         r1_assignment = "R1 technical/methods/experiments"
         r1_emphasis = (
             "technical method and experiment reasoning across the complete thesis"
+        )
+        r1_natural_emphasis = (
+            "Algorithms, representations, losses, training and inference, data splits, "
+            "baselines, metrics, ablations, uncertainty, user studies, resource fairness, "
+            "and reproducibility, while still judging every Gate A through I."
+        )
+        (root / "R1-comprehensive-review.md").write_text(
+            clone.replace(r1_emphasis, r1_natural_emphasis), encoding="utf-8"
         )
         r4_text = (
             clone.replace("# R1 —", "# R4 —", 1)
@@ -1423,6 +1454,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 .replace(r2_old_emphasis, r2_new_emphasis)
                 .replace(r3_old_assignment, r3_new_assignment)
                 .replace(r3_old_emphasis, r3_new_emphasis)
+                .replace(r1_emphasis, r1_natural_emphasis)
                 .replace(old_report_tail, new_report_tail)
             )
             path.write_text(text, encoding="utf-8")
@@ -1515,6 +1547,36 @@ class ValidateReviewBundleTests(unittest.TestCase):
             result = self.run_validator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
+
+    def test_doctoral_r3_model_architecture_only_is_not_thesis_architecture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.convert_bundle_to_doctorate(root)
+            authentic = (
+                "Abstract, introduction, scientific-question, contribution, and roadmap "
+                "alignment; coherent chapter progression; cross-chapter terminology; "
+                "shared infrastructure; conclusions; and thesis synthesis, while still "
+                "judging every Gate A through I."
+            )
+            wrong = (
+                "Model architecture and neural design details across every chapter, "
+                "while still judging every Gate A through I."
+            )
+            for filename in (
+                "R3-comprehensive-review.md",
+                "90-chair-synthesis.md",
+                "93-user-facing-summary.md",
+            ):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(authentic, wrong),
+                    encoding="utf-8",
+                )
+            self.assert_fails(
+                root,
+                "Persona emphasis is missing or does not match the distinct R3 emphasis",
+            )
 
     def test_invalid_pdf_and_declared_page_count_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

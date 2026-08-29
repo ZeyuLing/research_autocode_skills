@@ -769,6 +769,17 @@ def parse_physical_page_locator(value: str) -> int | None:
     return int(next(group for group in match.groups() if group is not None))
 
 
+def contains_persona_signal(value: str, signal: str) -> bool:
+    """Match a role signal without accepting accidental Latin substrings."""
+    if re.search(r"[\u3400-\u9fff]", signal):
+        return signal.casefold() in value.casefold()
+    return bool(re.search(
+        rf"(?<![0-9A-Za-z_]){re.escape(signal)}(?![0-9A-Za-z_])",
+        value,
+        re.I,
+    ))
+
+
 def validate_iso_date(value: str) -> bool:
     try:
         datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -2059,18 +2070,37 @@ def validate_reviewer_report(
             )
     persona = labeled_value(role_section, "Persona emphasis")
     persona_assignment = labeled_value(role_section, "Persona assignment")
-    technical = ("technical", "method", "experiment", "技术", "方法", "实验")
-    contribution = ("contribution", "novel", "position", "贡献", "创新", "定位")
+    technical = (
+        "technical", "method", "methods", "experiment", "experiments",
+        "algorithm", "algorithms", "representation", "representations",
+        "loss", "losses", "training", "inference", "data split", "data splits",
+        "baseline", "baselines", "metric", "metrics", "ablation", "ablations",
+        "uncertainty", "user study", "user studies", "resource fairness",
+        "reproducibility", "reproducible", "技术", "方法", "实验", "算法", "表示", "损失",
+        "训练", "推理", "数据划分", "基线", "指标", "消融", "不确定性",
+        "用户研究", "资源公平", "复现",
+    )
+    contribution = (
+        "contribution", "contributions", "novelty", "positioning",
+        "field positioning", "贡献", "创新", "定位",
+    )
     architecture = (
-        "architecture", "thesis logic", "narrative", "架构", "主线", "逻辑"
+        "thesis architecture", "chapter architecture", "thesis logic",
+        "thesis narrative", "cross-chapter narrative", "abstract, introduction",
+        "abstract/introduction", "scientific question", "scientific-question",
+        "roadmap alignment", "chapter roadmap", "chapter progression",
+        "cross-chapter", "chapter mapping", "shared infrastructure",
+        "thesis synthesis", "论文架构", "论文主线", "论文逻辑", "全文主线",
+        "摘要与绪论", "科学问题", "章节路线", "章节推进", "跨章",
+        "章节映射", "共享基础", "全文综合",
     )
     evidence = (
-        "evidence", "reproduc", "integrity", "citation", "证据", "复现",
-        "完整性", "引用",
+        "evidence", "reproducibility", "reproducible", "integrity", "citation",
+        "citations", "证据", "复现", "完整性", "引用",
     )
     standards = (
-        "format", "bibliograph", "layout", "page", "standard", "格式",
-        "参考文献", "版面", "规范",
+        "format", "formatting", "bibliography", "bibliographic", "layout",
+        "page", "pages", "standard", "standards", "格式", "参考文献", "版面", "规范",
     )
     persona_requirements = {
         "doctorate": {
@@ -2098,7 +2128,7 @@ def validate_reviewer_report(
         or len(persona) < 12
         or not expected_families
         or not all(
-            any(term.casefold() in persona.casefold() for term in family)
+            any(contains_persona_signal(persona, term) for term in family)
             for family in expected_families
         )
     ):
