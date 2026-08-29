@@ -327,6 +327,15 @@ def add_ascii_text(
 
 
 class ValidateReviewBundleTests(unittest.TestCase):
+    def test_physical_page_locator_accepts_english_and_chinese_forms(self) -> None:
+        parse = VALIDATOR_MODULE.parse_physical_page_locator
+        self.assertEqual(parse("physical p.7, section"), 7)
+        self.assertEqual(parse("physical page 008"), 8)
+        self.assertEqual(parse("物理页 34--35"), 34)
+        self.assertEqual(parse("物理页面：041"), 41)
+        self.assertEqual(parse("物理第 52 页"), 52)
+        self.assertIsNone(parse("printed p.7"))
+
     def rewrite_pdf_and_rehash(self, root: Path, page_texts: list[str]) -> str:
         process_path = root / "00-process-parameters.json"
         process = json.loads(process_path.read_text(encoding="utf-8"))
@@ -471,7 +480,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Overall integrity and submission fitness: No integrity blocker is visible; one minor revision remains.\n"
             + "- Most consequential conclusion outside the persona emphasis, or evidence that no material concern was found there: The complete Gate A--I pass found no additional material concern outside the assigned emphasis.\n\n"
             + "## Whole-thesis assessment\n\n"
-            + "| Gate | Depth | Disposition | Evidence | Findings | Confidence |\n"
+            + "| Gate | Review depth (`baseline` / `emphasized` / `primary`) | Disposition (`adequate` / `concern` / `unverifiable` / `N/A`) | Decisive evidence and exact locations | Related finding IDs or `none` | Confidence/limitation |\n"
             + "|---|---|---|---|---|---|\n"
             + gate_rows
             + "\n\n## Persona-weighted deep review\n\n"
@@ -3236,7 +3245,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "R2-comprehensive-review.md"
             text = path.read_text(encoding="utf-8").replace(
-                "| Gate | Depth | Disposition | Evidence | Findings | Confidence |",
+                "| Gate | Review depth (`baseline` / `emphasized` / `primary`) | Disposition (`adequate` / `concern` / `unverifiable` / `N/A`) | Decisive evidence and exact locations | Related finding IDs or `none` | Confidence/limitation |",
                 "| Gate | Review depth | Disposition | Evidence | Findings | Confidence |",
                 1,
             )
@@ -3244,8 +3253,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assert_fails(
                 root,
                 "expected exactly one Markdown table with schema "
-                "['Gate', 'Depth', 'Disposition', 'Evidence', 'Findings', "
-                "'Confidence']",
+                "['Gate', 'Review depth (`baseline` / `emphasized` / `primary`)', "
+                "'Disposition (`adequate` / `concern` / `unverifiable` / `N/A`)', "
+                "'Decisive evidence and exact locations', "
+                "'Related finding IDs or `none`', 'Confidence/limitation']",
             )
 
     def test_reviewer_assessment_rejects_a_second_table(self) -> None:

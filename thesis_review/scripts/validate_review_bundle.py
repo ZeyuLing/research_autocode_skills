@@ -116,7 +116,12 @@ CITATION_MARKDOWN_HEADERS = [
     "Disposition/evidence",
 ]
 REVIEWER_ASSESSMENT_HEADERS = [
-    "Gate", "Depth", "Disposition", "Evidence", "Findings", "Confidence",
+    "Gate",
+    "Review depth (`baseline` / `emphasized` / `primary`)",
+    "Disposition (`adequate` / `concern` / `unverifiable` / `N/A`)",
+    "Decisive evidence and exact locations",
+    "Related finding IDs or `none`",
+    "Confidence/limitation",
 ]
 ACADEMIC_LEDGER_COLUMNS = [
     "LedgerID", "Priority", "ChairFindingID", "SourceReviewerFindingIDs",
@@ -754,9 +759,14 @@ def derive_and_validate_reference_pages(
 
 def parse_physical_page_locator(value: str) -> int | None:
     match = re.search(
-        r"(?i)\bphysical\s+(?:page\s*)?p?\.?0*(\d+)\b", value
+        r"(?i)(?:\bphysical\s+(?:page\s*)?p?\.?\s*0*(\d+)\b"
+        r"|物理(?:页面|页)\s*[:：]?\s*0*(\d+)"
+        r"|物理第\s*0*(\d+)\s*页)",
+        value,
     )
-    return int(match.group(1)) if match else None
+    if match is None:
+        return None
+    return int(next(group for group in match.groups() if group is not None))
 
 
 def validate_iso_date(value: str) -> bool:
