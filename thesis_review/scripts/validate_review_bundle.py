@@ -2020,14 +2020,22 @@ def parse_reviewer_questions(
     return result
 
 
-def parse_nonnegative_integer_vector(value: str) -> tuple[int, ...]:
-    """Extract counts while treating standard thousands separators atomically."""
+def parse_count_integer_vector(value: str) -> tuple[int, ...] | None:
+    """Extract signed count tokens, rejecting uncovered numeric material."""
 
-    tokens = re.findall(
-        r"(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?![A-Za-z0-9])",
-        value,
+    token_re = re.compile(
+        r"(?<![A-Za-z0-9.,])[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)"
+        r"(?![A-Za-z0-9.,])"
     )
-    return tuple(int(token.replace(",", "")) for token in tokens)
+    matches = list(token_re.finditer(value))
+    residual = list(value)
+    for match in matches:
+        residual[match.start():match.end()] = " " * (match.end() - match.start())
+    if re.search(r"\d", "".join(residual)):
+        return None
+    return tuple(
+        int(match.group(0).replace(",", "")) for match in matches
+    )
 
 
 def validate_reviewer_report(
@@ -2041,7 +2049,9 @@ def validate_reviewer_report(
     degree_level: str | None,
     decision_regime_status: str | None,
     allowed_governing_sources: set[str],
-    owner_expected_vectors: dict[str, dict[str, tuple[int, ...]]],
+    owner_expected_vectors: dict[
+        str, dict[str, tuple[int, ...] | tuple[str, ...]]
+    ],
     physical_page_count: int,
     errors: list[str],
 ) -> None:
@@ -2340,10 +2350,15 @@ def validate_reviewer_report(
         for label in count_labels:
             value = labeled_value(section, label)
             expected_vector = owner_expected_vectors.get(heading, {}).get(label)
-            observed_vector = parse_nonnegative_integer_vector(value or "")
+            observed_vector = parse_count_integer_vector(value or "")
             if value is None or expected_vector is None:
                 errors.append(
                     f"{path.name}: missing concrete {heading!r} count {label!r}"
+                )
+            elif observed_vector is None:
+                errors.append(
+                    f"{path.name}: {heading!r} count {label!r} contains "
+                    "malformed or identifier-bound numeric material"
                 )
             elif observed_vector != expected_vector:
                 errors.append(
@@ -2357,7 +2372,8 @@ def validate_reviewer_report(
                     f"{path.name}: missing concrete {heading!r} field {label!r}"
                 )
         master = labeled_value(section, "Machine-readable master")
-        master_counts = parse_nonnegative_integer_vector(master or "")[-3:]
+        master_count_text = (master or "").replace(master_filename, "", 1)
+        master_counts = parse_count_integer_vector(master_count_text)
         if (
             master is None or master_filename not in master
             or master_counts != (0, 0, 0)
@@ -2407,6 +2423,19 @@ def validate_reviewer_report(
             "04-citation-claim-audit-ledger.csv",
         )
     if owns_page_and_bib:
+        expected_layout_finding_ids = set(
+            owner_expected_vectors.get("Full rendered-page audit", {}).get(
+                "Actionable layout finding IDs", ()
+            )
+        )
+        unknown_layout_finding_ids = sorted(
+            expected_layout_finding_ids - set(findings)
+        )
+        if unknown_layout_finding_ids:
+            errors.append(
+                f"{path.name}: page-ledger layout dispositions reference "
+                f"unknown current-review finding IDs {unknown_layout_finding_ids}"
+            )
         check_owner_section(
             "Full rendered-page audit",
             page_count_labels,
@@ -5735,6 +5764,22 @@ def validate_rows_mandatory(
             )
 
 
+def page_layout_finding_ids(
+    page_ledger: list[dict[str, str]],
+) -> set[str]:
+    """Return distinct finding IDs from exact final page-disposition values."""
+
+    result: set[str] = set()
+    for row in page_ledger:
+        match = re.fullmatch(
+            r"(?i)finding[ \t]+([A-Z][A-Z0-9]*-F\d{2,4})",
+            row.get("Disposition", "").strip(),
+        )
+        if match is not None:
+            result.add(match.group(1).upper())
+    return result
+
+
 def build_owner_expected_vectors(
     page_inventory: list[dict[str, str]],
     page_ledger: list[dict[str, str]],
@@ -5742,11 +5787,11 @@ def build_owner_expected_vectors(
     bibliography_ledger: list[dict[str, str]],
     citation_inventory: list[dict[str, str]],
     citation_ledger: list[dict[str, str]],
-) -> dict[str, dict[str, tuple[int, ...]]]:
+) -> dict[str, dict[str, tuple[int, ...] | tuple[str, ...]]]:
     """Derive every owner-report count from its authoritative CSV rows."""
     suspect_pages = 0
     unresolved_pages = 0
-    actionable_layout_finding_ids: set[str] = set()
+    actionable_layout_finding_ids = page_layout_finding_ids(page_ledger)
     page_inventory_by_id = {
         row.get("PageID", ""): row for row in page_inventory
     }
@@ -5765,14 +5810,6 @@ def build_owner_expected_vectors(
             for token in ("pending", "unchecked", "recheck", "open", "unresolved")
         ):
             unresolved_pages += 1
-        actionable_layout_finding_ids.update(
-            match.upper()
-            for match in re.findall(
-                r"(?i)(?<![A-Za-z0-9])finding[ \t]+"
-                r"([A-Z][A-Z0-9]*-F\d{2,4})(?![A-Za-z0-9])",
-                row.get("Disposition", ""),
-            )
-        )
 
     def bib_counts(fields: tuple[str, ...], include_na: bool) -> tuple[int, ...]:
         rows = [row for row in bibliography_ledger if row.get("Field") in fields]
@@ -5834,6 +5871,9 @@ def build_owner_expected_vectors(
             # treated as layout findings unless a page disposition links them.
             "Actionable layout findings": (
                 len(actionable_layout_finding_ids),
+            ),
+            "Actionable layout finding IDs": tuple(
+                sorted(actionable_layout_finding_ids)
             ),
         },
         "Full bibliography-integrity audit": {
@@ -6107,7 +6147,24 @@ def main(argv: list[str] | None = None) -> int:
                 f"02-page-layout-ledger.csv:{line}: suspect page "
                 f"{row['PageID']} was not inspected full-scale"
             )
-        disposition = row["Disposition"].casefold()
+        disposition_value = row["Disposition"].strip()
+        disposition = disposition_value.casefold()
+        page_owner_id = (
+            "R5" if process.get("degree_level") == "doctorate" else "R3"
+        )
+        valid_layout_finding = re.fullmatch(
+            rf"(?i)finding[ \t]+{page_owner_id}-F\d{{2,4}}",
+            disposition_value,
+        )
+        if (
+            disposition not in {"clean", "intentional", "recheck after edit"}
+            and valid_layout_finding is None
+        ):
+            errors.append(
+                f"02-page-layout-ledger.csv:{line}: Disposition must be exactly "
+                f"clean, intentional, recheck after edit, or finding "
+                f"{page_owner_id}-Fxx"
+            )
         if any(token in disposition for token in ("pending", "unchecked", "recheck")):
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: unresolved disposition "

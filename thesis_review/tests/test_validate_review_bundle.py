@@ -2572,6 +2572,94 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
 
+    def test_page_layout_finding_dispositions_are_deduplicated_and_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            csv_path = root / "02-page-layout-ledger.csv"
+            csv_path.write_text(
+                csv_path.read_text(encoding="utf-8").replace(
+                    ",clean,", ",finding R3-F01,"
+                ),
+                encoding="utf-8",
+            )
+            markdown_path = root / "02-page-layout-ledger.md"
+            markdown_path.write_text(
+                markdown_path.read_text(encoding="utf-8").replace(
+                    "| clean |", "| finding R3-F01 |"
+                ),
+                encoding="utf-8",
+            )
+            report = root / "R3-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Actionable layout findings: 0",
+                    "- Actionable layout findings: 1",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("**PASS**", result.stdout)
+
+    def test_page_layout_disposition_rejects_unknown_finding_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            csv_path = root / "02-page-layout-ledger.csv"
+            csv_path.write_text(
+                csv_path.read_text(encoding="utf-8").replace(
+                    ",clean,", ",finding R3-F99,", 1
+                ),
+                encoding="utf-8",
+            )
+            markdown_path = root / "02-page-layout-ledger.md"
+            markdown_path.write_text(
+                markdown_path.read_text(encoding="utf-8").replace(
+                    "| clean |", "| finding R3-F99 |", 1
+                ),
+                encoding="utf-8",
+            )
+            report = root / "R3-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Actionable layout findings: 0",
+                    "- Actionable layout findings: 1",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "page-ledger layout dispositions reference unknown "
+                "current-review finding IDs ['R3-F99']",
+            )
+
+    def test_page_layout_disposition_uses_closed_final_grammar(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            csv_path = root / "02-page-layout-ledger.csv"
+            csv_path.write_text(
+                csv_path.read_text(encoding="utf-8").replace(
+                    ",clean,", ",no finding R3-F01,", 1
+                ),
+                encoding="utf-8",
+            )
+            markdown_path = root / "02-page-layout-ledger.md"
+            markdown_path.write_text(
+                markdown_path.read_text(encoding="utf-8").replace(
+                    "| clean |", "| no finding R3-F01 |", 1
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "Disposition must be exactly clean, intentional, recheck after "
+                "edit, or finding R3-Fxx",
+            )
+
     def test_reviewer_persona_cannot_be_copied_from_another_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4370,9 +4458,38 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 self.assertEqual(errors, expected_errors)
 
     def test_count_vector_accepts_standard_thousands_separators(self) -> None:
-        parse = VALIDATOR_MODULE.parse_nonnegative_integer_vector
+        parse = VALIDATOR_MODULE.parse_count_integer_vector
         self.assertEqual(parse("3,264 / 0"), (3264, 0))
         self.assertEqual(parse("90 / 0 / 74; reference [144]"), (90, 0, 74, 144))
+        self.assertEqual(parse("-1 / +2"), (-1, 2))
+        for malformed in ("1.0", "1.0 / 0", "1,00 / 0", "1e3 / 0"):
+            with self.subTest(malformed=malformed):
+                self.assertIsNone(parse(malformed))
+
+    def test_owner_count_vectors_reject_negative_and_hidden_master_counts(self) -> None:
+        mutations = (
+            (
+                "- Metadata/status verified entries: 1",
+                "- Metadata/status verified entries: -1",
+                "Metadata/status verified entries",
+            ),
+            (
+                "duplicate/missing/extra page IDs: 0 / 0 / 0",
+                "hidden 999.0; duplicate/missing/extra page IDs: 0 / 0 / 0",
+                "must name 02-page-layout-ledger.csv and report "
+                "duplicate/missing/extra counts",
+            ),
+        )
+        for old, new, expected in mutations:
+            with self.subTest(new=new), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R3-comprehensive-review.md"
+                report.write_text(
+                    report.read_text(encoding="utf-8").replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, expected)
 
     def test_hardening_closed_round_root_rejects_old_review_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
