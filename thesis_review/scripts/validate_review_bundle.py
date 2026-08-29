@@ -1179,6 +1179,9 @@ def validate_chair_report(
         r"(?im)^\s*-\s*Overall defense recommendation:\s*\S", text
     ):
         errors.append(f"{path.name}: missing overall defense recommendation")
+    chair_rationale = labeled_value(text, "Whole-thesis rationale")
+    if chair_rationale is None or len(chair_rationale) < 60:
+        errors.append(f"{path.name}: chair whole-thesis rationale is absent or shell-only")
     for heading in ("Optional suggestions", "Review limitations"):
         body = markdown_section_body(text, heading)
         if body is None or not body:
@@ -1539,7 +1542,17 @@ def validate_summary_report(
                 expected_grade = labeled_value(report, "Academic grade") or ""
                 expected_rec = labeled_value(report, "Defense recommendation") or ""
                 expected_conf = labeled_value(report, "Confidence") or ""
-                if row[2] != expected_grade or row[3] != expected_rec or row[4] != expected_conf:
+                expected_persona = labeled_value(report, "Persona emphasis") or ""
+                expected_basis = (
+                    labeled_value(report, "One-paragraph whole-thesis rationale") or ""
+                )
+                if (
+                    row[1] != expected_persona
+                    or row[2] != expected_grade
+                    or row[3] != expected_rec
+                    or row[4] != expected_conf
+                    or row[5] != expected_basis
+                ):
                     errors.append(
                         f"{path.name}: {actor} conclusion does not exactly copy "
                         "its independent current-round verdict"
@@ -1551,10 +1564,13 @@ def validate_summary_report(
         if ai_row:
             expected_signal = labeled_value(ai_text, "AI-style signal") or ""
             expected_conf = labeled_value(ai_text, "Confidence") or ""
+            expected_basis = labeled_value(ai_text, "Rationale") or ""
             if (
-                ai_row[2] != expected_signal
+                ai_row[1] != "standalone AI-style assessment"
+                or ai_row[2] != expected_signal
                 or ai_row[3].casefold() != "n/a"
                 or ai_row[4] != expected_conf
+                or ai_row[5] != expected_basis
             ):
                 errors.append(
                     f"{path.name}: AI conclusion does not exactly copy the "
@@ -1567,10 +1583,13 @@ def validate_summary_report(
             expected_grade = labeled_value(chair_text, "Overall academic grade") or ""
             expected_rec = labeled_value(chair_text, "Overall defense recommendation") or ""
             expected_conf = labeled_value(chair_text, "Confidence") or ""
+            expected_basis = labeled_value(chair_text, "Whole-thesis rationale") or ""
             if (
-                chair_row[2] != expected_grade
+                chair_row[1] != "chair adjudication"
+                or chair_row[2] != expected_grade
                 or chair_row[3] != expected_rec
                 or chair_row[4] != expected_conf
+                or chair_row[5] != expected_basis
             ):
                 errors.append(
                     f"{path.name}: Chair conclusion does not exactly copy the "

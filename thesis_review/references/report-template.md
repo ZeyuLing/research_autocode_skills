@@ -454,6 +454,8 @@ Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer
 
 Keep the AI-style row visibly separate from R1--R5/R1--R3 and the chair; it has no defense category.
 
+The actor table is an exact projection, including its prose basis; Stage S does not write a new rationale. For each `Rn`, `Persona/status = Rn.Persona emphasis`, category/recommendation/confidence copy the corresponding reviewer verdict fields byte-for-byte after trimming, and `Decisive current-round basis = Rn.One-paragraph whole-thesis rationale`. For `AI`, use `Persona/status = standalone AI-style assessment`, category = its exact `AI-style signal`, recommendation = `N/A`, confidence = its exact confidence, and basis = its exact `Rationale`. For `Chair`, use `Persona/status = chair adjudication`, copy its overall category/recommendation/confidence, and basis = its exact `Whole-thesis rationale`. Any paraphrase, extra context, old-round statement, author explanation, or repository fact in this table invalidates Stage S.
+
 ## Current actionable items
 | Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |
 |---|---|---|---|---|---|---|---|

@@ -82,7 +82,7 @@ The summary must:
 5. keep optional `S4` suggestions and unresolved questions/limitations in separate clearly labeled sections;
 6. reconcile exactly with `91-revision-ledger.md`: every open required row appears once, no closed/old item is imported, and no new issue is invented;
 7. reconcile the separate AI-actionable rows exactly with `91-ai-actionable-ledger.csv`, without assigning academic severity or defense consequences;
-8. copy every R verdict, the independent AI-style label, and the chair verdict exactly into one actor table; copy the chair's `Optional suggestions` and `Review limitations` sections exactly after whitespace normalization;
+8. copy every R verdict, persona emphasis, and whole-thesis rationale, the independent AI-style label/confidence/rationale, and the chair verdict/rationale exactly into one actor table with no newly written basis text; copy the chair's `Optional suggestions` and `Review limitations` sections exactly after whitespace normalization;
 9. record the exact expanded semicolon-separated current-round input basename set and trace every thesis statement to a current-round finding or exact PDF anchor; use only neutral compression, never a new technical inference;
 10. state the row counts used for reconciliation and list any inconsistency as a synthesis failure requiring the chair or summary stage to be rerun.
 

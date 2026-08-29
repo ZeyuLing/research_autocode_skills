@@ -265,6 +265,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Overall academic grade: B\n"
             + "- Overall defense recommendation: 小修后可答辩\n\n"
             + "- Confidence: high\n"
+            + "- Whole-thesis rationale: The current panel evidence covers all "
+            + "nine gates and the assigned citation, bibliography, page, and style "
+            + "duties; one bounded wording revision remains, while no foundational "
+            + "or integrity blocker is visible.\n"
             + "\n## Reviewer coverage validation\n\n"
             + "| Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |\n"
             + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
@@ -349,11 +353,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "## Independent and overall conclusions\n\n"
             + "| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |\n"
             + "|---|---|---|---|---|---|\n"
-            + "| R1 | technical method and experiment | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
-            + "| R2 | contribution and thesis logic | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
-            + "| R3 | evidence integrity and reproducibility | B | 小修后可答辩 | high | Complete Gate A--I assessment supports minor revision. |\n"
-            + "| AI | standalone style assessor | moderate | N/A | high | One local prose-style signal in the current fixture. |\n"
-            + "| Chair | current-round adjudication | B | 小修后可答辩 | high | Current evidence supports the panel's minor-revision conclusion. |\n\n"
+            + "| R1 | technical method and experiment reasoning across the complete thesis | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R2 | contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R3 | evidence integrity, reproducibility, standards, and whole-thesis traceability | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| AI | standalone AI-style assessment | moderate | N/A | high | The short fixture contains one formulaic transition, but the limited corpus prevents any stronger stylistic inference. |\n"
+            + "| Chair | chair adjudication | B | 小修后可答辩 | high | The current panel evidence covers all nine gates and the assigned citation, bibliography, page, and style duties; one bounded wording revision remains, while no foundational or integrity blocker is visible. |\n\n"
             + "## Current actionable items\n\n"
             + "| Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |\n"
             + "|---|---|---|---|---|---|---|---|\n"
@@ -1499,6 +1503,27 @@ class ValidateReviewBundleTests(unittest.TestCase):
             text = re.sub(r"(?m)^\| R2 \|.*\n", "", text)
             path.write_text(text, encoding="utf-8")
             self.assert_fails(root, "independent-conclusion actors: missing IDs ['R2']")
+
+    def test_summary_actor_basis_cannot_introduce_prior_or_author_side_context(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(
+                "The complete fixture thesis was assessed across policy, argument, "
+                "literature, methods, data, experiments, reproducibility, writing, "
+                "and presentation; the visible evidence supports a minor-revision "
+                "recommendation without a blocker.",
+                "A prior-round issue was resolved after the author explained "
+                "repository implementation details that are not in the current PDF.",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "R1 conclusion does not exactly copy its independent current-round verdict",
+            )
 
     def test_summary_cannot_invent_optional_or_limitation_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
