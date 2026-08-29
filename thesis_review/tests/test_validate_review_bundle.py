@@ -4,6 +4,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import re
 import struct
 import subprocess
@@ -25,7 +26,21 @@ VALIDATOR_SPEC = importlib.util.spec_from_file_location(
 assert VALIDATOR_SPEC and VALIDATOR_SPEC.loader
 VALIDATOR_MODULE = importlib.util.module_from_spec(VALIDATOR_SPEC)
 VALIDATOR_SPEC.loader.exec_module(VALIDATOR_MODULE)
-PROMPT_HASH = "A" * 64
+ACTOR_PROMPT_HASHES = {
+    "P": "1" * 64,
+    "R1": "2" * 64,
+    "R2": "3" * 64,
+    "R3": "4" * 64,
+    "R4": "5" * 64,
+    "R5": "6" * 64,
+    "AI": "7" * 64,
+    "C": "8" * 64,
+    "S": "9" * 64,
+    "V": "A" * 64,
+}
+PROMPT_HASH = ACTOR_PROMPT_HASHES["P"]
+BIB_ENDPOINT = "https://doi.org/10.1145/3442188.3445922"
+CITATION_ENDPOINT = "https://dl.acm.org/doi/pdf/10.1145/3442188.3445922"
 
 PAGE_INVENTORY_COLUMNS = [
     "PageID", "PhysicalPage", "PrintedPage", "Region",
@@ -65,21 +80,24 @@ CITATION_LEDGER_COLUMNS = [
 ]
 ACADEMIC_LEDGER_COLUMNS = [
     "LedgerID", "Priority", "ChairFindingID", "SourceReviewerFindingIDs",
-    "Severity", "Remedy", "ExactPDFAnchor", "DirectObservation",
-    "MinimumEditEvidence", "Dependency", "Owner", "Status", "Verification",
+    "Severity", "S0Subtype", "Remedy", "ExactPDFAnchor", "DirectObservation",
+    "EvidenceStatus", "MinimumEditEvidence", "Dependency", "Owner", "Status",
+    "Verification",
 ]
 AI_LEDGER_COLUMNS = [
     "AIFindingID", "Impact", "ExactPDFAnchor", "DirectStyleObservation",
     "MinimumEditingAction", "Status", "Verification",
 ]
-ACADEMIC_SUMMARY_COLUMNS = [
-    "LedgerID", "CurrentFindingIDs", "SeverityRemedy", "ExactPDFAnchor",
-    "DirectPDFObservation", "MinimumRequiredAction", "OriginReviewers",
-    "ChairDisposition",
+ACADEMIC_SUMMARY_COLUMNS = list(ACADEMIC_LEDGER_COLUMNS)
+AI_SUMMARY_COLUMNS = list(AI_LEDGER_COLUMNS)
+EVIDENCE_ITEM_COLUMNS = [
+    "EvidenceItemID", "LedgerID", "ChairFindingID", "Remedy", "Item",
+    "ClaimThatDependsOnIt", "WhyWritingIsInsufficient",
+    "MinimumViableEvidence", "ConsequenceIfUnavailable",
 ]
-AI_SUMMARY_COLUMNS = [
-    "AIFindingID", "Impact", "ExactPDFAnchor", "DirectStyleObservation",
-    "MinimumEditingAction", "ChairStatus",
+PRIOR_ISSUES_COLUMNS = [
+    "PriorFindingID", "PriorPDFSHA256", "PriorPDFAnchor", "Finding",
+    "RequiredClosureEvidence",
 ]
 BIB_FIELDS = [
     "type", "title", "ordered_authors", "year", "venue",
@@ -88,6 +106,139 @@ BIB_FIELDS = [
     "isbn_or_other_persistent_id", "existence",
     "retraction_withdrawal_correction_superseding",
 ]
+PAGE_MARKDOWN_HEADERS = [
+    "Page ID", "Physical page", "Printed page", "Region",
+    "Dominant content", "Signals", "Inspection mode/scale", "Render DPI",
+    "Render artifact ID/hash", "Neighbor pages checked", "Disposition",
+    "Evidence",
+]
+PAGE_MARKDOWN_FIELDS = [
+    "PageID", "PhysicalPage", "PrintedPage", "Region", "DominantContent",
+    "Signals", "InspectionModeScale", "RenderDPI", "RenderArtifactIDHash",
+    "NeighborPagesChecked", "Disposition", "Evidence",
+]
+BIB_MARKDOWN_HEADERS = [
+    "Reference ID", "Displayed label", "Cited?", "Type", "Title",
+    "Ordered authors", "Year", "Venue", "Publication status",
+    "Volume/issue", "Pages/article no.",
+    "Persistent IDs/URL/access date", "Existence",
+    "Retraction/correction/superseding", "Finding/disposition",
+]
+BIB_MARKDOWN_FIELD_GROUPS = [
+    ["type"], ["title"], ["ordered_authors"], ["year"], ["venue"],
+    ["publication_status"], ["volume", "issue"],
+    ["pages_or_article_number"],
+    [
+        "doi", "arxiv_id", "arxiv_version", "url", "access_date",
+        "isbn_or_other_persistent_id",
+    ],
+    ["existence"], ["retraction_withdrawal_correction_superseding"],
+]
+CITATION_MARKDOWN_HEADERS = [
+    "Pair ID", "Occurrence ID", "PDF location",
+    "Exact attached proposition", "Reference ID", "Displayed label",
+    "Public source/identifier", "Content source opened and exact locator",
+    "Support", "Metadata/status", "Severity/finding",
+    "Disposition/evidence",
+]
+
+
+def markdown_projection_scalar(value: str) -> str:
+    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
+    return json.dumps(normalized, ensure_ascii=False)[1:-1]
+
+
+def markdown_table(headers: list[str], rows: list[list[str]]) -> str:
+    def source_cell(value: str) -> str:
+        return value.replace("|", r"\|")
+
+    header = "| " + " | ".join(source_cell(value) for value in headers) + " |\n"
+    separator = "|" + "|".join("---" for _ in headers) + "|\n"
+    body = "".join(
+        "| " + " | ".join(source_cell(value) for value in row) + " |\n"
+        for row in rows
+    )
+    return header + separator + body
+
+
+def bibliography_markdown_rows(
+    inventory: list[dict[str, str]],
+    ledger: list[dict[str, str]],
+) -> list[list[str]]:
+    by_key = {
+        (row["ReferenceID"], row["Field"]): row
+        for row in ledger
+    }
+
+    def payload(reference_id: str, field: str) -> dict[str, str]:
+        row = by_key[(reference_id, field)]
+        return {
+            "field": field,
+            "rendered": row["RenderedValue"],
+            "canonical": row["CanonicalValue"],
+            "verdict": row["Verdict"],
+            "evidence_endpoint": row["EvidenceEndpoint"],
+            "endpoint_type": row["EndpointType"],
+            "checked_at": row["CheckedAt"],
+            "evidence_note": row["EvidenceNote"],
+        }
+
+    projected: list[list[str]] = []
+    for inventory_row in sorted(inventory, key=lambda row: row["ReferenceID"]):
+        reference_id = inventory_row["ReferenceID"]
+        cells = [
+            markdown_projection_scalar(reference_id),
+            markdown_projection_scalar(inventory_row["DisplayedLabel"]),
+            markdown_projection_scalar(inventory_row["Cited"]),
+        ]
+        for fields in BIB_MARKDOWN_FIELD_GROUPS:
+            values = [payload(reference_id, field) for field in fields]
+            cells.append(json.dumps(
+                values[0] if len(values) == 1 else values,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ))
+        cells.append(json.dumps([
+            {
+                "field": field,
+                "finding_disposition": by_key[
+                    (reference_id, field)
+                ]["FindingDisposition"],
+            }
+            for field in BIB_FIELDS
+        ], ensure_ascii=False, separators=(",", ":")))
+        projected.append(cells)
+    return projected
+
+
+def citation_markdown_rows(
+    ledger: list[dict[str, str]],
+    bibliography_inventory: list[dict[str, str]],
+) -> list[list[str]]:
+    labels = {
+        row["ReferenceID"]: row["DisplayedLabel"]
+        for row in bibliography_inventory
+    }
+    projected: list[list[str]] = []
+    for row in sorted(ledger, key=lambda item: item["PairID"]):
+        projected.append([
+            markdown_projection_scalar(row["PairID"]),
+            markdown_projection_scalar(row["OccurrenceID"]),
+            markdown_projection_scalar(row["PDFLocation"]),
+            markdown_projection_scalar(row["ExactAttachedProposition"]),
+            markdown_projection_scalar(row["ReferenceID"]),
+            markdown_projection_scalar(labels[row["ReferenceID"]]),
+            markdown_projection_scalar(row["PublicIdentifier"]),
+            json.dumps({
+                "content_source_opened": row["ContentSourceOpened"],
+                "exact_source_locator": row["ExactSourceLocator"],
+            }, ensure_ascii=False, separators=(",", ":")),
+            markdown_projection_scalar(row["Support"]),
+            markdown_projection_scalar(row["MetadataStatus"]),
+            markdown_projection_scalar(row["SeverityFinding"]),
+            markdown_projection_scalar(row["DispositionEvidence"]),
+        ])
+    return projected
 
 
 def write_csv(
@@ -194,36 +345,115 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 path.write_text(content.replace(old_digest, new_digest), encoding="utf-8")
         return new_digest
 
-    def declaration(self, digest: str) -> str:
+    def declaration(
+        self,
+        digest: str,
+        process: dict[str, object],
+        actor_id: str,
+        public_endpoints: list[str] | None = None,
+    ) -> str:
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                process, reviewer_count, actor_id
+            )
+        )
+        public = "; ".join(public_endpoints or []) or "none"
         return (
+            f"- Actor ID: {actor_id}\n"
+            f"- Review round ID: {process['round_id']}\n"
+            f"- Review retry ID: {process['retry_id']}\n"
             "- Fresh-context declaration: no inherited user/thread/task turns "
             "beyond system/developer instructions and the exact operational prompt\n"
-            "- Input-receipt/access declaration: "
-            f"Prompt SHA-256: {PROMPT_HASH}; received operational prompt; "
-            "opened frozen PDF and allowlisted rules only; no unlisted substantive "
+            f"- Operational prompt SHA-256: {process['actor_prompt_sha256'][actor_id]}\n"
+            "- Input-receipt/access declaration: received=[operational prompt]; "
+            f"opened=[{opened}]; public_endpoints=[{public}]; "
+            "no unlisted substantive "
             "assertion was received; no prohibited context/artifact was used; "
             "neighboring paths were not enumerated\n"
             f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n"
         )
 
-    def reviewer_report(self, digest: str, index: int) -> str:
+    def install_helper_fixture(
+        self,
+        root: Path,
+        digest: str,
+        *,
+        receipt: str | None = None,
+        recipients: list[str] | None = None,
+    ) -> None:
+        helpers = root / "helpers"
+        helpers.mkdir()
+        sidecar = helpers / "H01-pages.txt"
+        sidecar.write_text("mechanical output", encoding="utf-8")
+        sidecar_hash = hashlib.sha256(sidecar.read_bytes()).hexdigest().upper()
+        provenance = {
+            "actor_id": "H01",
+            "round_id": "fixture",
+            "retry_id": "r1",
+            "prompt_sha256": "B" * 64,
+            "fresh_context_declaration": (
+                "no inherited user/thread/task turns beyond system/developer "
+                "instructions and the exact operational prompt"
+            ),
+            "input_receipt_access_declaration": receipt or (
+                "received=[operational prompt]; opened=[frozen-thesis.pdf]; "
+                "no unlisted substantive assertion was received; no prohibited "
+                "context/artifact was used; neighboring paths were not enumerated"
+            ),
+            "received_blocks": ["operational prompt"],
+            "opened_inputs": ["frozen-thesis.pdf"],
+            "tool": "fixture",
+            "version": "1",
+            "command_or_query": "fixture --read-only",
+            "pdf_sha256_start": digest,
+            "pdf_sha256_end": digest,
+            "outputs": [{"file": sidecar.name, "sha256": sidecar_hash}],
+            "limitations": [],
+            "recipient_stages": recipients or ["R3"],
+        }
+        (helpers / "H01-provenance.json").write_text(
+            json.dumps(provenance), encoding="utf-8"
+        )
+
+    def reviewer_report(
+        self, digest: str, index: int, process: dict[str, object]
+    ) -> str:
         personas = {
             1: "technical method and experiment reasoning across the complete thesis",
             2: "contribution, thesis logic, and cross-chapter narrative coherence",
-            3: "evidence integrity, reproducibility, standards, and whole-thesis traceability",
+            3: "evidence integrity, reproducibility, bibliography, format, and layout standards",
+        }
+        assignments = {
+            1: "R1 technical/methods/experiments",
+            2: "R2 contribution/positioning + thesis architecture/narrative",
+            3: "R3 evidence/integrity/citation + format/bibliography/layout",
         }
         gate_rows = "\n".join(
             f"| {gate} — gate | baseline | adequate | physical p.1, fixture section | none | high |"
             for gate in "ABCDEFGHI"
         )
+        reviewer_public = (
+            [BIB_ENDPOINT, CITATION_ENDPOINT]
+            if process["degree_level"] == "masters" and index == 3
+            else []
+        )
         return (
             f"# R{index} — Comprehensive whole-thesis review\n\n"
             + "## Role, scope, and independence\n"
-            + self.declaration(digest)
+            + self.declaration(
+                digest, process, f"R{index}", reviewer_public
+            )
             + "- Whole-thesis mandate: Gate A--I\n"
+            + f"- Persona assignment: {assignments[index]}\n"
             + f"- Persona emphasis: {personas[index]}\n\n"
+            + "- Separate exhaustive audit duties, if any: assigned ledgers listed below or none\n"
+            + "- Independence declaration: completed independently without another reviewer report\n\n"
             + "## Verdict\n"
             + "- Decision regime: skill-default\n"
+            + "- Official category: N/A\n"
+            + "- Official defense recommendation: N/A\n"
+            + "- Governing source: N/A\n"
             + "- Academic grade: B\n"
             + "- Defense recommendation: 小修后可答辩\n\n"
             + "- Confidence: high\n"
@@ -232,7 +462,14 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "experiments, reproducibility, writing, and presentation; the visible "
             + "evidence supports a minor-revision recommendation without a blocker.\n\n"
             + "## What I inspected\n\nAll frozen pages and all required ledgers.\n\n"
-            + "## Whole-thesis synthesis\n\nThe fixture has one coherent claim and one source.\n\n"
+            + "## Whole-thesis synthesis\n"
+            + "- Central thesis problem and overall answer: The fixture states one bounded problem and supplies one bounded answer.\n"
+            + "- Degree-level contribution judgment: The bounded contribution is sufficient for this synthetic validation fixture.\n"
+            + "- Strongest claim--evidence chain: The visible proposition and cited source form the strongest bounded chain.\n"
+            + "- Weakest claim--evidence chain: The wording defect is the weakest local link and requires correction.\n"
+            + "- Cross-chapter coherence: The two-page fixture has a consistent beginning-to-end narrative for validation.\n"
+            + "- Overall integrity and submission fitness: No integrity blocker is visible; one minor revision remains.\n"
+            + "- Most consequential conclusion outside the persona emphasis, or evidence that no material concern was found there: The complete Gate A--I pass found no additional material concern outside the assigned emphasis.\n\n"
             + "## Whole-thesis assessment\n\n"
             + "| Gate | Depth | Disposition | Evidence | Findings | Confidence |\n"
             + "|---|---|---|---|---|---|\n"
@@ -240,28 +477,92 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "\n\n## Persona-weighted deep review\n\n"
             + "The assigned emphasis was applied after the complete Gate A--I pass.\n\n"
             + "## Strongest contributions\n\n1. A bounded fixture contribution.\n\n"
-            + "## Findings\n\nNo additional findings.\n\n"
-            + "## Questions, not findings\n\nnone\n\n"
+            + "## Findings\n\n"
+            + f"### R{index}-F01 — bounded fixture wording issue\n"
+            + "- Primary gate: H\n"
+            + "- Secondary gates: none\n"
+            + "- Scope: local\n"
+            + "- Severity: S2\n"
+            + "- S0 subtype: N/A\n"
+            + "- Remedy: W\n"
+            + "- Required for the current defense conclusion: yes; bounded revision\n"
+            + "- Location: physical p.1, fixture section\n"
+            + "- Observation: The fixture exposes one bounded wording defect for validation.\n"
+            + "- Why it matters: The wording must remain precise for a defensible local claim.\n"
+            + "- Evidence: The visible fixture sentence contains the designated wording defect.\n"
+            + "- Required action: Correct only the bounded wording without changing the claim.\n"
+            + "- Verification: Reinspect physical p.1 and confirm the corrected sentence.\n"
+            + "- Confidence: high\n\n"
+            + "## Questions, not findings\n\n"
+            + "| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |\n"
+            + "|---|---|---|---|---|\n\n"
             + "## Coverage and limitations\n\nThe synthetic two-page fixture limits semantic depth.\n"
             + (
                 "\n## Full rendered-page audit\n"
                 "- Physical pages / unchecked pages: 2 / 0\n\n"
+                "- Suspect-page signals / resolved / unresolved: 0 / 0 / 0\n"
+                "- Actionable layout findings: 0\n"
+                "- Neighbor-page verification status: all 2 pages checked\n"
+                "- Machine-readable master: 02-page-layout-ledger.csv; duplicate/missing/extra page IDs: 0 / 0 / 0\n"
+                "- Source-forcing cause: not verifiable from the PDF\n\n"
                 "## Full bibliography-integrity audit\n"
                 "- Bibliography entries rendered in the frozen PDF: 1\n"
-                "- Bibliography master rows / unchecked rows: 1 / 0\n\n"
+                "- Bibliography master rows / unchecked rows: 17 / 0\n\n"
+                "- Title fields verified / mismatched / unverifiable: 1 / 0 / 0\n"
+                "- Ordered-author fields verified / mismatched / unverifiable: 1 / 0 / 0\n"
+                "- Year fields verified / mismatched / unverifiable: 1 / 0 / 0\n"
+                "- Venue fields verified / mismatched / unverifiable: 1 / 0 / 0\n"
+                "- Publication/acceptance-status fields verified / mismatched / unverifiable: 1 / 0 / 0\n"
+                "- Volume/issue fields verified / mismatched / legitimate N/A / unverifiable: 0 / 0 / 2 / 0\n"
+                "- Page-range or article-number fields verified / mismatched / legitimate N/A / unverifiable: 0 / 0 / 1 / 0\n"
+                "- DOI/arXiv/version/URL/access-date fields verified / mismatched / legitimate N/A / unverifiable: 1 / 0 / 4 / 0\n"
+                "- ISBN/other-persistent-ID fields verified / mismatched / legitimate N/A / unverifiable: 0 / 0 / 1 / 0\n"
+                "- Retraction/withdrawal/correction/superseding-status fields verified / mismatched / legitimate N/A / unverifiable: 1 / 0 / 0 / 0\n"
+                "- Suspected fabricated/nonexistent entries and adjudication status: 0 suspected, 0 unresolved\n"
+                "- Metadata/status verified entries: 1\n"
+                "- Machine-readable master: 03-bibliography-audit-ledger.csv; duplicate/missing/extra reference IDs: 0 / 0 / 0\n\n"
                 "## Full citation-claim audit\n"
+                "- Active citation occurrences: 1\n"
                 "- Citation--source pairs: 1\n"
+                "- Unique cited keys: 1\n"
+                "- Semantically verified pairs: 1\n"
+                "- Partial-support pairs: 0\n"
+                "- Context-only pairs: 0\n"
+                "- Mismatch pairs: 0\n"
+                "- Inaccessible/unverifiable pairs: 0\n"
                 "- Ledger rows and unchecked rows: 1 / 0\n"
+                "- Machine-readable master: 04-citation-claim-audit-ledger.csv; duplicate/missing/extra Pair IDs: 0 / 0 / 0\n"
                 if index == 3 else ""
             )
         )
 
-    def chair_report(self, digest: str) -> str:
+    def chair_report(
+        self, digest: str, process: dict[str, object]
+    ) -> str:
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        chair_allowlist = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                process, reviewer_count, "C"
+            )
+        )
         return (
             "# Chair synthesis\n\n"
             + "## Clean-room boundary\n"
-            + self.declaration(digest)
+            + "- Actor ID: C\n"
+            + f"- Review round ID: {process['round_id']}\n"
+            + f"- Review retry ID: {process['retry_id']}\n"
+            + "- Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt\n"
+            + f"- Exact current-round input allowlist: {chair_allowlist}\n"
+            + f"- Operational prompt SHA-256: {process['actor_prompt_sha256']['C']}\n"
+            + "- Chair input-receipt/access declaration: received=[operational prompt]; "
+            + f"opened=[{chair_allowlist}]; public_endpoints=[none]; "
+            + "no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated\n"
+            + f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n"
             + "\n## Overall risk and recommendation\n"
+            + "- Decision regime: skill-default\n"
+            + "- Overall official category: N/A\n"
+            + "- Overall official defense recommendation: N/A\n"
+            + "- Overall governing source: N/A\n"
             + "- Overall academic grade: B\n"
             + "- Overall defense recommendation: 小修后可答辩\n\n"
             + "- Confidence: high\n"
@@ -272,31 +573,37 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "\n## Reviewer coverage validation\n\n"
             + "| Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |\n"
             + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| R1 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n"
-            + "| R2 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n"
-            + "| R3 | pass | pass | pass | pass | pass | pass | pass | pass | pass | complete | yes | yes |\n\n"
+            + "| R1 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
+            + "| R2 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
+            + "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |\n\n"
             + "## Independent verdicts\n\n"
             + "| Reviewer | Persona | Category/grade | Defense recommendation | Decision regime/source | Confidence | Decisive reason |\n"
             + "|---|---|---|---|---|---|---|\n"
-            + "| R1 | technical method and experiment | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n"
-            + "| R2 | contribution and thesis logic | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n"
-            + "| R3 | evidence integrity and reproducibility | B | 小修后可答辩 | skill-default | high | Complete current-round Gate A--I evidence supports minor revision. |\n\n"
+            + "| R1 | R1 technical/methods/experiments — technical method and experiment reasoning across the complete thesis | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R2 | R2 contribution/positioning + thesis architecture/narrative — contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R3 | R3 evidence/integrity/citation + format/bibliography/layout — evidence integrity, reproducibility, bibliography, format, and layout standards | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n\n"
+            + "- Category distribution: B=3\n"
+            + "- Modal/severe-minority departure explanation: No departure exists because all three independent reviewers and the chair use category B.\n\n"
             + "## Standalone AI-style judgment\n\n- Signal: moderate\n- Confidence: high\n\n"
+            + "- Material/local/optional findings: material=0 ; local=1 ; optional=0\n"
+            + "- Separation statement: AI-style observations remain separate from academic grading and are projected only through their dedicated ledger.\n\n"
             + "## AI-style actionable findings\n\n"
             + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Verification | Status |\n"
             + "|---|---|---|---|---|---|---|\n"
-            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | reread paragraph | open |\n\n"
-            + "## Contributions that survived review\n\nThe bounded fixture contribution survives.\n\n"
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | reread paragraph after the targeted revision | open |\n\n"
+            + "## Contributions that survived review\n\nThe bounded fixture contribution survives the complete independent panel review and remains supported by the visible frozen-PDF evidence.\n\n"
             + "## Adjudicated findings\n\n"
-            + "| Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |\n"
-            + "|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| C-F01 | R1-F01 | S2 | W | physical p.1 | visible wording defect | verified | author | correct the wording | reinspect p.1 |\n\n"
+            + "| Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | visible wording defect | verified | author | correct the wording | reinspect p.1 |\n\n"
             + "## Mandatory citation cross-ledger consistency gate\n\n"
-            + "| Rendered reference ID | R4 identity/source | R5 canonical identity | "
-            + "Version/record agreement | Affected Pair IDs | Conflict class | "
-            + "Reclassification/finding | Resolution |\n"
-            + "|---|---|---|---|---|---|---|---|\n"
-            + "| REF0001 | verified | verified | agree | C0001-S01 | none | none | closed |\n\n"
+            + "| Rendered reference ID | Displayed label | Affected Pair IDs | Citation-ledger identity/source projection | Bibliography-ledger canonical identity projection | "
+            + "Version/record agreement (`agree` / `disagree` / `not verifiable`) | Conflict class (`none` / `local` / `substantive`) | "
+            + "Chair finding ID(s) | Resolution (`closed` / `open`) |\n"
+            + "|---|---|---|---|---|---|---|---|---|\n"
+            + "| REF0001 | [1] | C0001-S01 | C0001-S01=>doi:fixture @ https://dl.acm.org/doi/pdf/10.1145/3442188.3445922 | "
+            + "title=fixture ; ordered_authors=fixture ; year=fixture ; venue=fixture ; publication_status=fixture ; doi=fixture ; arxiv_id=N/A ; arxiv_version=N/A ; url=N/A ; isbn_or_other_persistent_id=N/A ; existence=fixture | "
+            + "agree | none | none | closed |\n\n"
             + "- Unique cited rendered references joined: 1\n"
             + "- Identity-agreement count: 1\n"
             + "- Version disagreements: 0\n"
@@ -305,18 +612,26 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Reclassified Pair IDs: 0\n"
             + "- Unresolved conflicts: 0\n"
             + "- Combined citation gate: pass\n"
-            + "\n## Disagreements and chair decisions\n\nnone\n\n"
-            + "## Thesis-level narrative and chapter logic\n\nCoherent within the fixture.\n\n"
-            + "## Policy and blind-copy status\n\nNo fixture policy blocker.\n"
+            + "\n## Disagreements and chair decisions\n\n"
+            + "| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |\n"
+            + "|---|---|---|---|---|---|---|\n\n"
+            + "## Thesis-level narrative and chapter logic\n\nThe fixture presents a coherent thesis-level progression, with its stated problem, bounded evidence, conclusion, and chapter logic aligned across the complete rendered artifact.\n\n"
+            + "## Policy and blind-copy status\n\nThe frozen fixture raises no visible policy or blind-copy blocker within the declared skill-default decision regime and current-round evidence boundary.\n"
             + "\n## Optional suggestions\n\nnone\n\n"
             + "## Review limitations\n\nnone\n"
         )
 
-    def ai_report(self, digest: str) -> str:
+    def ai_report(
+        self, digest: str, process: dict[str, object]
+    ) -> str:
         return (
             "# Standalone AI-style prose assessment\n\n"
             + "## Boundary and independence\n"
-            + self.declaration(digest)
+            + self.declaration(digest, process, "AI")
+            + f"- Frozen artifact: frozen-thesis.pdf / {digest}\n"
+            + "- Reviewer-visible inputs: frozen PDF and the exact AI-style rule packet\n"
+            + "- Excluded material: reviewer reports, chair outputs, old rounds, and author-side records\n"
+            + "- Independence declaration: assessed in a separate fresh context\n"
             + "- Required disclaimer: This is a prose-style assessment, not a "
             + "determination of AI use, authorship, plagiarism, or misconduct.\n"
             + "\n## Overall judgment\n"
@@ -324,61 +639,220 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Confidence: high\n"
             + "- Rationale: The short fixture contains one formulaic transition, "
             + "but the limited corpus prevents any stronger stylistic inference.\n\n"
-            + "## Coverage and mechanical checks\n\nBoth authored fixture pages were inspected.\n\n"
-            + "## Signal-family summary and counter-evidence\n\nOne local signal; limited evidence.\n\n"
-            + "## Findings\n\n### AI-F01 — formulaic transition\n\nLocal only.\n\n"
-            + "## Limitations\n\nSynthetic corpus.\n\n"
+            + "## Coverage and mechanical checks\n"
+            + "- Physical pages inspected: 2 / 2\n"
+            + "- Authored sections inspected: all authored fixture prose outside the bibliography\n"
+            + "- Recurrent-pattern queries/statistics: transitions and repeated sentence frames were checked\n"
+            + "- Corpus exclusions: bibliography strings and page furniture were excluded\n\n"
+            + "## Signal-family summary and counter-evidence\n\nOne local formulaic transition is visible, while the remaining short corpus supplies counter-evidence against a thesis-wide style conclusion.\n\n"
+            + "## Findings\n\n### AI-F01 — formulaic transition\n"
+            + "- Impact: local\n"
+            + "- Location: physical p.1\n"
+            + "- Recurrent evidence: formulaic transition\n"
+            + "- Reader impact: The repeated transition makes the local prose mechanical.\n"
+            + "- Minimum safe editing strategy: replace the transition\n"
+            + "- Closure test: reread paragraph after the targeted revision\n\n"
+            + "## Limitations\n\nThe synthetic two-page corpus limits the strength and breadth of any style inference.\n\n"
             + "## Out-of-scope observations for chair verification\n\nnone\n"
         )
 
     def summary_report(
-        self, digest: str, academic_count: int = 1, ai_count: int = 1
+        self,
+        digest: str,
+        process: dict[str, object],
+        academic_count: int = 1,
+        ai_count: int = 1,
+        evidence_count: int = 0,
     ) -> str:
-        allowlist = "; ".join([
-            "00-process-parameters.json", "SKILL.md",
-            "clean-room-orchestration.md", "report-template.md",
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        allowlist = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                process, reviewer_count, "S"
+            )
+        )
+        return (
+            "# Current-round user-facing review summary\n\n"
+            + "## Clean-room identity\n"
+            + "- Actor ID: S\n"
+            + f"- Review round ID: {process['round_id']}\n"
+            + f"- Review retry ID: {process['retry_id']}\n"
+            + f"- Frozen PDF path and SHA-256: file={process['frozen_pdf_file']} ; sha256={digest}\n"
+            + "- Summary fresh-context declaration: no inherited user/thread/task turns "
+            + "beyond system/developer instructions and the exact operational prompt\n"
+            + f"- Exact current-round input allowlist: {allowlist}\n"
+            + f"- Operational prompt SHA-256: {process['actor_prompt_sha256']['S']}\n"
+            + "- Summary input-receipt/access declaration: received=[operational prompt]; "
+            + f"opened=[{allowlist}]; "
+            + "public_endpoints=[none]; no unlisted substantive "
+            + "assertion was received; no prohibited context/artifact was used; neighboring "
+            + "paths were not enumerated\n"
+            + f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n\n"
+            + "## Independent and overall conclusions\n\n"
+            + "| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Decision regime/source | Confidence | Decisive current-round basis |\n"
+            + "|---|---|---|---|---|---|---|\n"
+            + "| R1 | R1 technical/methods/experiments — technical method and experiment reasoning across the complete thesis | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R2 | R2 contribution/positioning + thesis architecture/narrative — contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| R3 | R3 evidence/integrity/citation + format/bibliography/layout — evidence integrity, reproducibility, bibliography, format, and layout standards | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
+            + "| AI | standalone AI-style assessment | moderate | N/A | N/A | high | The short fixture contains one formulaic transition, but the limited corpus prevents any stronger stylistic inference. |\n"
+            + "| Chair | chair adjudication | B | 小修后可答辩 | skill-default | high | The current panel evidence covers all nine gates and the assigned citation, bibliography, page, and style duties; one bounded wording revision remains, while no foundational or integrity blocker is visible. |\n\n"
+            + "## Current actionable items\n\n"
+            + "| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct PDF-visible observation | Evidence status | Minimum required action | Dependency | Owner | Chair disposition | Verification |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | visible wording defect | verified | correct the wording | none | author | open | reinspect p.1 |\n\n"
+            + "## Current AI-style actionable items — separate from academic grading\n\n"
+            + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status | Verification |\n"
+            + "|---|---|---|---|---|---|---|\n"
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open | reread paragraph after the targeted revision |\n\n"
+            + "## Current new evidence or experiments (N)\n\n"
+            + "| Evidence item ID | Ledger ID | Chair finding ID | Remedy | Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |\n"
+            + "|---|---|---|---|---|---|---|---|---|\n\n"
+            + "## Optional suggestions\n\nnone\n\n"
+            + "## Unresolved questions\n\n"
+            + "| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |\n"
+            + "|---|---|---|---|---|---|---|\n\n"
+            + "## Review limitations\n\nnone\n\n"
+            + "## Reconciliation\n\n"
+            + f"- Open required rows in 91-revision-ledger.csv: {academic_count}\n"
+            + f"- Rows in 93-current-actionable-items.csv: {academic_count}\n"
+            + f"- Rows in Current actionable items Markdown table: {academic_count}\n"
+            + "- Missing ledger IDs: none\n"
+            + "- Extra summary IDs: none\n"
+            + "- Duplicate IDs: none\n"
+            + f"- Open AI rows in 91-ai-actionable-ledger.csv: {ai_count}\n"
+            + f"- Rows in 93-current-ai-actionable-items.csv: {ai_count}\n"
+            + f"- Rows in Current AI-style actionable items Markdown table: {ai_count}\n"
+            + "- Missing/extra/duplicate AI finding IDs: none\n"
+            + f"- Rows in 92-new-evidence-or-experiments.csv: {evidence_count}\n"
+            + f"- Rows in Current new evidence or experiments Markdown table: {evidence_count}\n"
+            + "- Missing/extra/duplicate evidence item IDs: none\n"
+            + "- Statement: This summary introduces no new finding and uses no "
+            + "prior-round or author-side information.\n"
+        )
+
+    def enable_fresh_rereview(self, root: Path) -> dict[str, object]:
+        process_path = root / "00-process-parameters.json"
+        process = json.loads(process_path.read_text(encoding="utf-8"))
+        process["review_mode"] = "fresh-rereview"
+        process["actor_prompt_sha256"]["V"] = ACTOR_PROMPT_HASHES["V"]
+        process_path.write_text(json.dumps(process), encoding="utf-8")
+        process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        manifest = root / "00-manifest.md"
+        text = manifest.read_text(encoding="utf-8")
+        text = re.sub(
+            r"(?m)^- Process-parameter file and SHA-256: .*$",
+            "- Process-parameter file and SHA-256: "
+            f"00-process-parameters.json / {process_digest}",
+            text,
+        ).replace("review_mode=initial", "review_mode=fresh-rereview")
+        manifest.write_text(text, encoding="utf-8")
+        return process
+
+    def write_prior_issues_input(self, root: Path) -> str:
+        input_dir = root / "stage-v-inputs"
+        input_dir.mkdir(exist_ok=True)
+        path = input_dir / "round-previous-prior-issues.csv"
+        write_csv(
+            path,
+            PRIOR_ISSUES_COLUMNS,
+            [{
+                "PriorFindingID": "OLD-F01",
+                "PriorPDFSHA256": "B" * 64,
+                "PriorPDFAnchor": "physical p.1",
+                "Finding": "the prior PDF contained the fixture wording defect",
+                "RequiredClosureEvidence": (
+                    "the current frozen PDF visibly contains corrected wording"
+                ),
+            }],
+        )
+        digest = hashlib.sha256(path.read_bytes()).hexdigest().upper()
+        return f"{path.name}@{digest}"
+
+    def stage_v_report(self, root: Path, digest: str) -> str:
+        process = json.loads(
+            (root / "00-process-parameters.json").read_text(encoding="utf-8")
+        )
+        prior_issues_identity = self.write_prior_issues_input(root)
+        prompt_map = process.get("actor_prompt_sha256", {})
+        stage_v_prompt_hash = str(
+            prompt_map.get("V", PROMPT_HASH)
+            if isinstance(prompt_map, dict) else PROMPT_HASH
+        )
+        current_files = [
+            "00-page-inventory.csv", "00-bibliography-inventory.csv",
+            "00-citation-inventory.csv", "02-page-layout-ledger.csv",
+            "03-bibliography-audit-ledger.csv",
+            "04-citation-claim-audit-ledger.csv",
             "R1-comprehensive-review.md", "R2-comprehensive-review.md",
             "R3-comprehensive-review.md", "05-ai-style-assessment.md",
             "90-chair-synthesis.md", "91-revision-ledger.md",
             "91-revision-ledger.csv", "91-ai-actionable-ledger.csv",
             "92-new-evidence-or-experiments.md",
+            *(
+                ["92-new-evidence-or-experiments.csv"]
+                if (root / "92-new-evidence-or-experiments.csv").is_file()
+                else []
+            ),
+            "93-user-facing-summary.md",
+            "93-current-actionable-items.csv",
+            "93-current-ai-actionable-items.csv",
+        ]
+        current_identities = " ; ".join(
+            f"{name}@{hashlib.sha256((root / name).read_bytes()).hexdigest().upper()}"
+            for name in current_files
+        )
+        prior_issues_name = prior_issues_identity.split("@", 1)[0]
+        opened = "; ".join([
+            "00-process-parameters.json", "SKILL.md",
+            "clean-room-orchestration.md", "grading-and-verdicts.md",
+            "report-template.md", "ai-style-audit.md", "ledger-validation.md",
+            process["frozen_pdf_file"], *current_files, prior_issues_name,
         ])
         return (
-            "# Current-round user-facing review summary\n\n"
-            + "## Clean-room identity\n"
-            + self.declaration(digest)
-            + "- Review round ID: fixture\n"
-            + f"- Frozen PDF path and SHA-256: frozen-thesis.pdf / {digest}\n"
-            + f"- Exact current-round input allowlist: {allowlist}\n\n"
-            + "## Independent and overall conclusions\n\n"
-            + "| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |\n"
-            + "|---|---|---|---|---|---|\n"
-            + "| R1 | technical method and experiment reasoning across the complete thesis | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
-            + "| R2 | contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
-            + "| R3 | evidence integrity, reproducibility, standards, and whole-thesis traceability | B | 小修后可答辩 | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |\n"
-            + "| AI | standalone AI-style assessment | moderate | N/A | high | The short fixture contains one formulaic transition, but the limited corpus prevents any stronger stylistic inference. |\n"
-            + "| Chair | chair adjudication | B | 小修后可答辩 | high | The current panel evidence covers all nine gates and the assigned citation, bibliography, page, and style duties; one bounded wording revision remains, while no foundational or integrity blocker is visible. |\n\n"
-            + "## Current actionable items\n\n"
-            + "| Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |\n"
-            + "|---|---|---|---|---|---|---|---|\n"
-            + "| L01 | C-F01 | S2/W | physical p.1 | visible wording defect | correct the wording | R1-F01 | open |\n\n"
-            + "## Current AI-style actionable items — separate from academic grading\n\n"
-            + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status |\n"
-            + "|---|---|---|---|---|---|\n"
-            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open |\n\n"
-            + "## Optional suggestions\n\nnone\n\n"
-            + "## Unresolved questions and review limitations\n\nnone\n\n"
-            + "## Reconciliation\n\n"
-            + f"- Open required rows in 91-revision-ledger.md: {academic_count}\n"
-            + f"- Rows in Current actionable items: {academic_count}\n"
-            + "- Missing ledger IDs: none\n"
-            + "- Extra summary IDs: none\n"
-            + "- Duplicate IDs: none\n"
-            + f"- Open AI rows in 91-ai-actionable-ledger.csv: {ai_count}\n"
-            + f"- Rows in Current AI-style actionable items: {ai_count}\n"
-            + "- Missing/extra/duplicate AI finding IDs: none\n"
-            + "- Statement: This summary introduces no new finding and uses no "
-            + "prior-round or author-side information.\n"
+            "# Post-freeze prior-issue closure verification\n\n"
+            + "## Boundary and frozen-current-round identity\n"
+            + "- Actor ID: V\n"
+            + f"- Review round ID: {process['round_id']}\n"
+            + f"- Review retry ID: {process['retry_id']}\n"
+            + f"- Current frozen PDF and round: round_id={process['round_id']} ; retry_id={process['retry_id']} ; file={process['frozen_pdf_file']} ; sha256={digest}\n"
+            + f"- Current fresh reports/chair/summary already frozen: {current_identities}\n"
+            + f"- Hash-bound prior-issues CSV: {prior_issues_identity}\n"
+            + "- Additional allowlisted prior artifacts: none\n"
+            + "- Prior frozen AI-style report identity/hash, only if longitudinal style comparison requested: not run\n"
+            + "- Full regression baseline: not run\n"
+            + "- Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt\n"
+            + f"- Operational prompt SHA-256: {stage_v_prompt_hash}\n"
+            + "- Input-receipt/access declaration: received=[operational prompt]; "
+            + f"opened=[{opened}]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated\n"
+            + f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n\n"
+            + "## Prior-issue closure\n\n"
+            + "| Prior finding | Status | Evidence in revised PDF | Regression check | Current-round related finding, if any |\n"
+            + "|---|---|---|---|---|\n"
+            + "| OLD-F01 | resolved | physical p.1 visibly contains the corrected fixture wording | not assessed | none |\n\n"
+            + "## Longitudinal AI-style comparison — non-review\n"
+            + "- Status: not run\n"
+            + "- Prior AI report identity/hash: N/A\n"
+            + "- Current AI report identity/hash: N/A\n"
+            + "- Prior open material/local AI-F IDs: N/A\n"
+            + "- Current corresponding evidence/status: N/A\n"
+            + "- New current AI-F IDs: N/A\n"
+            + "- Limitations: longitudinal comparison was not requested and no prior AI-style report was opened\n"
+            + "- Separation statement: this comparison does not alter the current chair decision, grade, current AI report, 91 ledgers, or 93 summary.\n\n"
+            + "## Full longitudinal regression audit — non-review\n"
+            + "- Status: not run\n"
+            + f"- Prior/current PDF identities and hashes: prior=N/A ; current={process['frozen_pdf_file']}@{digest}\n"
+            + "- Prior/current page, bibliography, citation inventory/ledger identities and hashes: prior=N/A ; current=current-round frozen ledgers listed above\n"
+            + "- Demonstrated regressions on comparable objects: none assessed\n"
+            + "- Current fresh findings whose introduction time is not verifiable: all current fresh findings\n"
+            + "- Limitations: global regression not assessed because the complete prior baseline was not opened\n\n"
+            + "## Iterative completion checklist\n"
+            + f"- Final page-ledger re-entry: inventory_rows={process['physical_page_count']} ; ledger_rows={process['physical_page_count']} ; expected={process['physical_page_count']} ; missing_or_extra_page_ids=0 ; unchecked_or_unresolved=0\n"
+            + "- Final page and affected-neighbor recheck: rows_missing_neighbor_record=0\n"
+            + "- Final bibliography/citation re-entry and re-verification: bibliography_inventory_rows=1 ; bibliography_audit_rows=17 ; bibliography_missing_or_extra_ids=0 ; bibliography_mismatch=0 ; bibliography_unverifiable=0 ; citation_inventory_rows=1 ; citation_audit_rows=1 ; citation_missing_or_extra_ids=0 ; citation_support_mismatch=0 ; citation_support_unverifiable=0 ; citation_metadata_mismatch=0 ; citation_metadata_unverifiable=0\n"
+            + "- Empty S0--S3 status across all current reviewers: no ; reviewer_s0_s3=3 ; open_academic_rows=1\n"
+            + "- Fresh isolated AI assessment status/signal/material remainder: run ; signal=moderate ; open_material_or_local_rows=1\n"
+            + "- Remaining S4 suggestions or review limitations: none in this fixture\n"
+            + "- Prior unresolved or not-verifiable findings: count=0\n"
+            + "- Iterative-loop completion gate: fail\n"
         )
 
     def build_bundle(self, root: Path, page_count: int = 2) -> str:
@@ -408,6 +882,77 @@ class ValidateReviewBundleTests(unittest.TestCase):
             render_digests[page_id] = hashlib.sha256(
                 render_path.read_bytes()
             ).hexdigest().upper()
+        page_ledger_rows = [{
+            "PageID": f"P{physical_page:04d}",
+            "PhysicalPage": str(physical_page),
+            "PrintedPage": "",
+            "Region": (
+                "bibliography" if physical_page == page_count else "chapter"
+            ),
+            "DominantContent": "text",
+            "Signals": "none",
+            "InspectionModeScale": "individual 100%",
+            "RenderDPI": "200",
+            "RenderArtifactIDHash": (
+                f"P{physical_page:04d}:"
+                f"{render_digests[f'P{physical_page:04d}']}"
+            ),
+            "NeighborPagesChecked": "boundary page; none",
+            "Disposition": "clean",
+            "Evidence": "full-page render inspected",
+            "PDFSHA256": digest,
+        } for physical_page in range(1, page_count + 1)]
+        bibliography_inventory_rows = [{
+            "ReferenceID": "REF0001",
+            "DisplayedLabel": "[1]",
+            "RenderedEntry": "Fixture reference.",
+            "Cited": "yes",
+            "PDFSHA256": digest,
+        }]
+        bibliography_ledger_rows = [{
+            "ReferenceID": "REF0001",
+            "DisplayedLabel": "[1]",
+            "Cited": "yes",
+            "Field": field,
+            "RenderedValue": "fixture",
+            "CanonicalValue": (
+                "N/A" if field in {
+                    "volume", "issue", "pages_or_article_number", "arxiv_id",
+                    "arxiv_version", "url", "access_date",
+                    "isbn_or_other_persistent_id",
+                } else "fixture"
+            ),
+            "Verdict": (
+                "legitimate N/A" if field in {
+                    "volume", "issue", "pages_or_article_number", "arxiv_id",
+                    "arxiv_version", "url", "access_date",
+                    "isbn_or_other_persistent_id",
+                } else "exact"
+            ),
+            "EvidenceEndpoint": "https://doi.org/10.1145/3442188.3445922",
+            "EndpointType": "official fixture",
+            "CheckedAt": "2026-08-29",
+            "EvidenceNote": "fixture official record checked",
+            "FindingDisposition": "no finding",
+            "PDFSHA256": digest,
+        } for field in BIB_FIELDS]
+        citation_ledger_rows = [{
+            "PairID": "C0001-S01",
+            "OccurrenceID": "C0001",
+            "PDFLocation": "physical p.1",
+            "ExactAttachedProposition": "fixture proposition",
+            "ReferenceID": "REF0001",
+            "PublicIdentifier": "doi:fixture",
+            "ContentSourceOpened": (
+                "https://dl.acm.org/doi/pdf/10.1145/3442188.3445922"
+            ),
+            "ExactSourceLocator": "p.1",
+            "Support": "direct",
+            "MetadataStatus": "verified",
+            "SeverityFinding": "none",
+            "DispositionEvidence": "supported",
+            "PDFSHA256": digest,
+        }]
         process = {
             "round_id": "fixture",
             "retry_id": "r1",
@@ -427,84 +972,119 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "governing_rule_urls": [],
             "governing_local_files": [],
             "decision_regime_status": "skill-default",
+            "actor_prompt_sha256": {
+                actor: ACTOR_PROMPT_HASHES[actor]
+                for actor in ("P", "R1", "R2", "R3", "AI", "C", "S")
+            },
         }
-        (root / "00-process-parameters.json").write_text(
-            json.dumps(process), encoding="utf-8"
+        process_path = root / "00-process-parameters.json"
+        process_path.write_text(json.dumps(process), encoding="utf-8")
+        process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        packet_opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "P")
         )
         (root / "00-manifest.md").write_text(
-            "# Manifest\n\n"
-            + self.declaration(digest)
+            "# Frozen evidence manifest\n\n"
+            + f"- Process-parameter file and SHA-256: 00-process-parameters.json / {process_digest}\n"
+            + "- Actor ID: P\n"
+            + f"- Review round ID: {process['round_id']}\n"
+            + f"- Review retry ID: {process['retry_id']}\n"
+            + "- Packet-builder fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt\n"
+            + f"- Packet-builder input-receipt/access declaration: received=[operational prompt]; opened=[{packet_opened}]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated\n"
+            + f"- Operational prompt SHA-256: {process['actor_prompt_sha256']['P']}\n"
+            + f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n"
+            + "- Frozen at: 2026-08-29T12:34:56+08:00\n"
+            + "- Degree/institution/discipline: degree_level=masters ; degree_type=academic ; institution=null ; school_or_department=null ; discipline=computer science ; expected_submission_year=2026\n"
+            + "- Review round and purpose: round_id=fixture ; retry_id=r1 ; review_mode=initial ; artifact_type=author-copy ; output_language=zh-CN\n"
+            + f"- Frozen PDF path, SHA-256, frozen_at timestamp, and pages: file=frozen-thesis.pdf ; sha256={digest} ; frozen_at=2026-08-29T12:34:56+08:00 ; pages={page_count}\n"
+            + "- Governing template/rules: template=thesis-review/SKILL.md ; decision_regime_status=skill-default ; sources=none\n"
+            + "- Reviewer-visible artifact: exactly one frozen thesis PDF: frozen-thesis.pdf\n"
+            + "- Permitted public citation-verification sources: authoritative publisher, DOI, proceedings, and official full-text http(s) endpoints only\n"
+            + "- Prohibited context and artifacts: conversation/memory summaries, user explanations, earlier assistant outputs, other actors' messages, thesis source, .bib, build/auxiliary files, Git history, sibling repositories, local papers, code/config/logs, old rounds, source/provenance audits, and author-side records\n"
+            + "- Items explicitly out of scope: source-side implementation assertions and any prior-round material not visible in the frozen PDF\n\n"
+            + "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n"
+            + "## Thesis-stated questions and contributions — neutral navigation only\n\nThe fixture proposition appears on physical p.1; this line records its location without evaluating the claim.\n\n"
+            + "## Objective inventories and locations\n\nThe closed inventories are 00-page-inventory.csv, 00-bibliography-inventory.csv, 00-citation-candidate-ledger.csv, 00-citation-inventory.csv, and 00-unmatched-bracket-ledger.csv.\n\n"
             + "- Numeric-bracket candidate rows: 3\n"
             + "- Citation-classified candidate rows: 1\n"
             + "- Non-citation-classified candidate rows: 2\n"
             + "- Unmatched square-bracket glyphs: 0\n"
             + "- Unmatched glyph dispositions: No unmatched glyph was found "
-            + "in the rendered fixture page.\n"
-            + "- Frozen at: 2026-08-29T12:34:56+08:00\n",
+            + "in the rendered fixture page.\n",
             encoding="utf-8",
         )
         (root / "01-policy-basis.md").write_text(
-            "# Policy\n\n" + self.declaration(digest), encoding="utf-8"
+            "# Policy\n\n" + self.declaration(digest, process, "P"),
+            encoding="utf-8",
         )
         (root / "02-page-layout-ledger.md").write_text(
-            "# Page ledger\n\n" + self.declaration(digest)
-            + "| Page ID | Physical page | Printed page | Region | Dominant content | Signals | Inspection mode/scale | Render DPI | Render artifact ID/hash | Neighbor pages checked | Disposition | Evidence |\n"
-            + "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "".join(
-                f"| P{physical_page:04d} | {physical_page} |  | "
-                f"{'bibliography' if physical_page == page_count else 'chapter'} | "
-                "text | none | individual 100% | 200 | retained render hash | "
-                "adjacent page checked | clean | full-page render inspected |\n"
-                for physical_page in range(1, page_count + 1)
+            "# Page ledger\n\n" + self.declaration(digest, process, "R3")
+            + markdown_table(
+                PAGE_MARKDOWN_HEADERS,
+                [[
+                    markdown_projection_scalar(row[field])
+                    for field in PAGE_MARKDOWN_FIELDS
+                ] for row in page_ledger_rows],
             ),
             encoding="utf-8",
         )
         (root / "03-bibliography-audit-ledger.md").write_text(
-            "# Bibliography ledger\n\n" + self.declaration(digest)
-            + "| Reference ID | Displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |\n"
-            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| REF0001 | [1] | yes | fixture | Fixture reference | Author | 2026 | fixture | published | N/A | N/A | DOI fixture | exists | none | verified |\n",
+            "# Bibliography ledger\n\n"
+            + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+            + markdown_table(
+                BIB_MARKDOWN_HEADERS,
+                bibliography_markdown_rows(
+                    bibliography_inventory_rows, bibliography_ledger_rows
+                ),
+            ),
             encoding="utf-8",
         )
         (root / "04-citation-claim-audit-ledger.md").write_text(
-            "# Citation ledger\n\n" + self.declaration(digest)
-            + "| Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID | Displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |\n"
-            + "|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| C0001-S01 | C0001 | physical p.1 | fixture proposition | REF0001 | [1] | DOI fixture | official PDF, p.1 | direct | verified | none | supported |\n",
+            "# Citation ledger\n\n"
+            + self.declaration(digest, process, "R3", [CITATION_ENDPOINT])
+            + markdown_table(
+                CITATION_MARKDOWN_HEADERS,
+                citation_markdown_rows(
+                    citation_ledger_rows, bibliography_inventory_rows
+                ),
+            ),
             encoding="utf-8",
         )
         (root / "91-revision-ledger.md").write_text(
-            "# Revision ledger\n\n" + self.declaration(digest)
-            + "| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Minimum edit/evidence | Dependency | Owner | Status | Verification |\n"
-            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| L01 | P2 | C-F01 | R1-F01 | S2 | W | physical p.1 | visible wording defect | correct the wording | none | author | open | reinspect p.1 |\n\n"
+            "# Revision ledger\n\n" + self.declaration(digest, process, "C")
+            + "| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Minimum edit/evidence | Dependency | Owner | Status | Verification |\n"
+            + "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
+            + "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | visible wording defect | verified | correct the wording | none | author | open | reinspect p.1 |\n\n"
             + "## AI-style actionable ledger — separate from academic grading\n\n"
             + "| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Status | Verification |\n"
             + "|---|---|---|---|---|---|---|\n"
-            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open | reread paragraph |\n",
+            + "| AI-F01 | local | physical p.1 | formulaic transition | replace the transition | open | reread paragraph after the targeted revision |\n",
             encoding="utf-8",
         )
         (root / "92-new-evidence-or-experiments.md").write_text(
-            "# New evidence or experiments\n\n" + self.declaration(digest)
+            "# New evidence or experiments\n\n"
+            + self.declaration(digest, process, "C")
             + "## No-new-experiment remedies (W/E/P)\n\n"
-            + "- Writing or claim narrowing: correct the wording.\n\n"
+            + "| Ledger ID | Remedy | Exact PDF anchor | Minimum edit/evidence | Verification |\n"
+            + "|---|---|---|---|---|\n"
+            + "| L01 | W | physical p.1 | correct the wording | reinspect p.1 |\n\n"
             + "## Genuine new experiments or unavailable evidence (N)\n\n"
-            + "| Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |\n"
-            + "|---|---|---|---|---|\n",
+            + "| Evidence item ID | Ledger ID | Chair finding ID | Remedy | Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |\n"
+            + "|---|---|---|---|---|---|---|---|---|\n",
             encoding="utf-8",
         )
         for index in range(1, 4):
             (root / f"R{index}-comprehensive-review.md").write_text(
-                self.reviewer_report(digest, index), encoding="utf-8"
+                self.reviewer_report(digest, index, process), encoding="utf-8"
             )
         (root / "05-ai-style-assessment.md").write_text(
-            self.ai_report(digest), encoding="utf-8"
+            self.ai_report(digest, process), encoding="utf-8"
         )
         (root / "90-chair-synthesis.md").write_text(
-            self.chair_report(digest), encoding="utf-8"
+            self.chair_report(digest, process), encoding="utf-8"
         )
         (root / "93-user-facing-summary.md").write_text(
-            self.summary_report(digest), encoding="utf-8"
+            self.summary_report(digest, process), encoding="utf-8"
         )
         write_csv(
             root / "00-page-inventory.csv",
@@ -523,37 +1103,12 @@ class ValidateReviewBundleTests(unittest.TestCase):
         write_csv(
             root / "02-page-layout-ledger.csv",
             PAGE_LEDGER_COLUMNS,
-            [{
-                "PageID": f"P{physical_page:04d}",
-                "PhysicalPage": str(physical_page),
-                "PrintedPage": "",
-                "Region": (
-                    "bibliography" if physical_page == page_count else "chapter"
-                ),
-                "DominantContent": "text",
-                "Signals": "none",
-                "InspectionModeScale": "individual 100%",
-                "RenderDPI": "200",
-                "RenderArtifactIDHash": (
-                    f"P{physical_page:04d}:"
-                    f"{render_digests[f'P{physical_page:04d}']}"
-                ),
-                "NeighborPagesChecked": "boundary page; none",
-                "Disposition": "clean",
-                "Evidence": "full-page render inspected",
-                "PDFSHA256": digest,
-            } for physical_page in range(1, page_count + 1)],
+            page_ledger_rows,
         )
         write_csv(
             root / "00-bibliography-inventory.csv",
             BIB_INVENTORY_COLUMNS,
-            [{
-                "ReferenceID": "REF0001",
-                "DisplayedLabel": "[1]",
-                "RenderedEntry": "Fixture reference.",
-                "Cited": "yes",
-                "PDFSHA256": digest,
-            }],
+            bibliography_inventory_rows,
         )
         write_csv(
             root / "00-citation-candidate-ledger.csv",
@@ -613,21 +1168,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
         write_csv(
             root / "03-bibliography-audit-ledger.csv",
             BIB_LEDGER_COLUMNS,
-            [{
-                "ReferenceID": "REF0001",
-                "DisplayedLabel": "[1]",
-                "Cited": "yes",
-                "Field": field,
-                "RenderedValue": "fixture",
-                "CanonicalValue": "fixture",
-                "Verdict": "exact",
-                "EvidenceEndpoint": "https://doi.org/10.1145/3442188.3445922",
-                "EndpointType": "official fixture",
-                "CheckedAt": "2026-08-29",
-                "EvidenceNote": "fixture official record checked",
-                "FindingDisposition": "no finding",
-                "PDFSHA256": digest,
-            } for field in BIB_FIELDS],
+            bibliography_ledger_rows,
         )
         write_csv(
             root / "00-citation-inventory.csv",
@@ -647,21 +1188,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
         write_csv(
             root / "04-citation-claim-audit-ledger.csv",
             CITATION_LEDGER_COLUMNS,
-            [{
-                "PairID": "C0001-S01",
-                "OccurrenceID": "C0001",
-                "PDFLocation": "physical p.1",
-                "ExactAttachedProposition": "fixture proposition",
-                "ReferenceID": "REF0001",
-                "PublicIdentifier": "doi:fixture",
-                "ContentSourceOpened": "https://dl.acm.org/doi/pdf/10.1145/3442188.3445922",
-                "ExactSourceLocator": "p.1",
-                "Support": "direct",
-                "MetadataStatus": "verified",
-                "SeverityFinding": "none",
-                "DispositionEvidence": "supported",
-                "PDFSHA256": digest,
-            }],
+            citation_ledger_rows,
         )
         write_csv(
             root / "91-revision-ledger.csv",
@@ -670,11 +1197,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "LedgerID": "L01",
                 "Priority": "P2",
                 "ChairFindingID": "C-F01",
-                "SourceReviewerFindingIDs": "R1-F01",
+                "SourceReviewerFindingIDs": "R1-F01, R2-F01, R3-F01",
                 "Severity": "S2",
+                "S0Subtype": "N/A",
                 "Remedy": "W",
                 "ExactPDFAnchor": "physical p.1",
                 "DirectObservation": "visible wording defect",
+                "EvidenceStatus": "verified",
                 "MinimumEditEvidence": "correct the wording",
                 "Dependency": "none",
                 "Owner": "author",
@@ -687,13 +1216,20 @@ class ValidateReviewBundleTests(unittest.TestCase):
             ACADEMIC_SUMMARY_COLUMNS,
             [{
                 "LedgerID": "L01",
-                "CurrentFindingIDs": "C-F01",
-                "SeverityRemedy": "S2/W",
+                "Priority": "P2",
+                "ChairFindingID": "C-F01",
+                "SourceReviewerFindingIDs": "R1-F01, R2-F01, R3-F01",
+                "Severity": "S2",
+                "S0Subtype": "N/A",
+                "Remedy": "W",
                 "ExactPDFAnchor": "physical p.1",
-                "DirectPDFObservation": "visible wording defect",
-                "MinimumRequiredAction": "correct the wording",
-                "OriginReviewers": "R1-F01",
-                "ChairDisposition": "open",
+                "DirectObservation": "visible wording defect",
+                "EvidenceStatus": "verified",
+                "MinimumEditEvidence": "correct the wording",
+                "Dependency": "none",
+                "Owner": "author",
+                "Status": "open",
+                "Verification": "reinspect p.1",
             }],
         )
         write_csv(
@@ -706,7 +1242,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "DirectStyleObservation": "formulaic transition",
                 "MinimumEditingAction": "replace the transition",
                 "Status": "open",
-                "Verification": "reread paragraph",
+                "Verification": "reread paragraph after the targeted revision",
             }],
         )
         write_csv(
@@ -718,10 +1254,226 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "ExactPDFAnchor": "physical p.1",
                 "DirectStyleObservation": "formulaic transition",
                 "MinimumEditingAction": "replace the transition",
-                "ChairStatus": "open",
+                "Status": "open",
+                "Verification": "reread paragraph after the targeted revision",
             }],
         )
+        write_csv(
+            root / "92-new-evidence-or-experiments.csv",
+            EVIDENCE_ITEM_COLUMNS,
+            [],
+        )
         return digest
+
+    def convert_bundle_to_doctorate(self, root: Path) -> None:
+        process_path = root / "00-process-parameters.json"
+        process = json.loads(process_path.read_text(encoding="utf-8"))
+        process["degree_level"] = "doctorate"
+        process["actor_prompt_sha256"]["R4"] = ACTOR_PROMPT_HASHES["R4"]
+        process["actor_prompt_sha256"]["R5"] = ACTOR_PROMPT_HASHES["R5"]
+        process_path.write_text(json.dumps(process), encoding="utf-8")
+        process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        manifest = root / "00-manifest.md"
+        manifest_text = manifest.read_text(encoding="utf-8")
+        manifest_text = re.sub(
+            r"(?m)^- Process-parameter file and SHA-256: .*$",
+            "- Process-parameter file and SHA-256: "
+            f"00-process-parameters.json / {process_digest}",
+            manifest_text,
+        ).replace("degree_level=masters", "degree_level=doctorate")
+        manifest.write_text(manifest_text, encoding="utf-8")
+
+        r2_old_assignment = (
+            "R2 contribution/positioning + thesis architecture/narrative"
+        )
+        r2_new_assignment = "R2 contribution/novelty/positioning"
+        r2_old_emphasis = (
+            "contribution, thesis logic, and cross-chapter narrative coherence"
+        )
+        r2_new_emphasis = (
+            "contribution, novelty, and positioning across the complete thesis"
+        )
+        r3_old_assignment = (
+            "R3 evidence/integrity/citation + format/bibliography/layout"
+        )
+        r3_new_assignment = "R3 thesis architecture/narrative"
+        r3_old_emphasis = (
+            "evidence integrity, reproducibility, bibliography, format, and layout standards"
+        )
+        r3_new_emphasis = (
+            "thesis architecture, narrative, and cross-chapter logic across the complete thesis"
+        )
+        r2 = root / "R2-comprehensive-review.md"
+        r2.write_text(
+            r2.read_text(encoding="utf-8")
+            .replace(r2_old_assignment, r2_new_assignment)
+            .replace(r2_old_emphasis, r2_new_emphasis),
+            encoding="utf-8",
+        )
+        r3 = root / "R3-comprehensive-review.md"
+        original_r3 = r3.read_text(encoding="utf-8")
+        page_section = re.search(
+            r"(?ms)^## Full rendered-page audit\n.*?(?=^## Full bibliography-integrity audit)",
+            original_r3,
+        )
+        bib_section = re.search(
+            r"(?ms)^## Full bibliography-integrity audit\n.*?(?=^## Full citation-claim audit)",
+            original_r3,
+        )
+        citation_section = re.search(
+            r"(?ms)^## Full citation-claim audit\n.*\Z", original_r3
+        )
+        self.assertIsNotNone(page_section)
+        self.assertIsNotNone(bib_section)
+        self.assertIsNotNone(citation_section)
+        r3_text = re.sub(
+            r"(?ms)\n## Full rendered-page audit\n.*\Z", "", original_r3
+        ).replace(r3_old_assignment, r3_new_assignment).replace(
+            r3_old_emphasis, r3_new_emphasis
+        ).replace(
+            f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
+            "public_endpoints=[none]",
+        )
+        r3.write_text(r3_text, encoding="utf-8")
+
+        clone = (root / "R1-comprehensive-review.md").read_text(encoding="utf-8")
+        r4_assignment = "R4 evidence/reproducibility/integrity/citation"
+        r4_emphasis = (
+            "evidence integrity, reproducibility, and citation support across the complete thesis"
+        )
+        r5_assignment = "R5 format/bibliography/layout"
+        r5_emphasis = (
+            "format, bibliography, layout, page presentation, and standards across the complete thesis"
+        )
+        r1_assignment = "R1 technical/methods/experiments"
+        r1_emphasis = (
+            "technical method and experiment reasoning across the complete thesis"
+        )
+        r4_text = (
+            clone.replace("# R1 —", "# R4 —", 1)
+            .replace("R1-F01", "R4-F01")
+            .replace("- Actor ID: R1", "- Actor ID: R4")
+            .replace(ACTOR_PROMPT_HASHES["R1"], ACTOR_PROMPT_HASHES["R4"])
+            .replace("public_endpoints=[none]", f"public_endpoints=[{CITATION_ENDPOINT}]")
+            .replace(r1_assignment, r4_assignment)
+            .replace(r1_emphasis, r4_emphasis)
+            + "\n\n"
+            + (citation_section.group(0).strip() if citation_section else "")
+            + "\n"
+        )
+        r5_text = (
+            clone.replace("# R1 —", "# R5 —", 1)
+            .replace("R1-F01", "R5-F01")
+            .replace("- Actor ID: R1", "- Actor ID: R5")
+            .replace(ACTOR_PROMPT_HASHES["R1"], ACTOR_PROMPT_HASHES["R5"])
+            .replace("public_endpoints=[none]", f"public_endpoints=[{BIB_ENDPOINT}]")
+            .replace(r1_assignment, r5_assignment)
+            .replace(r1_emphasis, r5_emphasis)
+            + "\n\n"
+            + (page_section.group(0).strip() if page_section else "")
+            + "\n\n"
+            + (bib_section.group(0).strip() if bib_section else "")
+            + "\n"
+        )
+        (root / "R4-comprehensive-review.md").write_text(r4_text, encoding="utf-8")
+        (root / "R5-comprehensive-review.md").write_text(r5_text, encoding="utf-8")
+
+        for filename, old_actor, new_actor in (
+            ("02-page-layout-ledger.md", "R3", "R5"),
+            ("03-bibliography-audit-ledger.md", "R3", "R5"),
+            ("04-citation-claim-audit-ledger.md", "R3", "R4"),
+        ):
+            path = root / filename
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(
+                f"- Actor ID: {old_actor}", f"- Actor ID: {new_actor}", 1
+            ).replace(
+                ACTOR_PROMPT_HASHES[old_actor],
+                ACTOR_PROMPT_HASHES[new_actor],
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+
+        old_sources = "R1-F01, R2-F01, R3-F01"
+        new_sources = "R1-F01, R2-F01, R3-F01, R4-F01, R5-F01"
+        old_report_tail = "R3-comprehensive-review.md; 05-ai-style-assessment.md"
+        new_report_tail = (
+            "R3-comprehensive-review.md; R4-comprehensive-review.md; "
+            "R5-comprehensive-review.md; 05-ai-style-assessment.md"
+        )
+        for filename in (
+            "91-revision-ledger.md", "92-new-evidence-or-experiments.md",
+            "90-chair-synthesis.md",
+            "93-user-facing-summary.md",
+        ):
+            path = root / filename
+            text = (
+                path.read_text(encoding="utf-8")
+                .replace(old_sources, new_sources)
+                .replace(r2_old_assignment, r2_new_assignment)
+                .replace(r2_old_emphasis, r2_new_emphasis)
+                .replace(r3_old_assignment, r3_new_assignment)
+                .replace(r3_old_emphasis, r3_new_emphasis)
+                .replace(old_report_tail, new_report_tail)
+            )
+            path.write_text(text, encoding="utf-8")
+        _headers, academic_rows = read_csv(root / "91-revision-ledger.csv")
+        academic_rows[0]["SourceReviewerFindingIDs"] = new_sources
+        write_csv(
+            root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, academic_rows
+        )
+        _headers, summary_rows = read_csv(root / "93-current-actionable-items.csv")
+        summary_rows[0]["SourceReviewerFindingIDs"] = new_sources
+        write_csv(
+            root / "93-current-actionable-items.csv",
+            ACADEMIC_SUMMARY_COLUMNS,
+            summary_rows,
+        )
+
+        rationale = (
+            "The complete fixture thesis was assessed across policy, argument, "
+            "literature, methods, data, experiments, reproducibility, writing, "
+            "and presentation; the visible evidence supports a minor-revision "
+            "recommendation without a blocker."
+        )
+        chair = root / "90-chair-synthesis.md"
+        chair_text = chair.read_text(encoding="utf-8")
+        chair_text = chair_text.replace(
+            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |",
+            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
+            "| R4 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |\n"
+            "| R5 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |",
+            1,
+        )
+        r4_verdict = (
+            f"| R4 | {r4_assignment} — {r4_emphasis} | B | 小修后可答辩 | "
+            f"skill-default | high | {rationale} |"
+        )
+        r5_verdict = (
+            f"| R5 | {r5_assignment} — {r5_emphasis} | B | 小修后可答辩 | "
+            f"skill-default | high | {rationale} |"
+        )
+        r3_verdict_prefix = f"| R3 | {r3_new_assignment} — {r3_new_emphasis}"
+        r3_line = next(
+            line for line in chair_text.splitlines() if line.startswith(r3_verdict_prefix)
+        )
+        chair_text = chair_text.replace(
+            r3_line, r3_line + "\n" + r4_verdict + "\n" + r5_verdict, 1
+        ).replace("- Category distribution: B=3", "- Category distribution: B=5")
+        chair.write_text(chair_text, encoding="utf-8")
+
+        summary = root / "93-user-facing-summary.md"
+        summary_text = summary.read_text(encoding="utf-8")
+        summary_r3_line = next(
+            line for line in summary_text.splitlines()
+            if line.startswith(r3_verdict_prefix)
+        )
+        summary_text = summary_text.replace(
+            summary_r3_line,
+            summary_r3_line + "\n" + r4_verdict + "\n" + r5_verdict,
+            1,
+        )
+        summary.write_text(summary_text, encoding="utf-8")
 
     def run_validator(
         self, root: Path, report: Path | None = None
@@ -742,6 +1494,15 @@ class ValidateReviewBundleTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("**PASS**", result.stdout)
+
+    def test_complete_doctoral_five_reviewer_fixture_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.convert_bundle_to_doctorate(root)
             result = self.run_validator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
@@ -804,6 +1565,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 PAGE_LEDGER_COLUMNS,
                 ledger,
             )
+            markdown_path = root / "02-page-layout-ledger.md"
+            markdown_path.write_text(
+                markdown_path.read_text(encoding="utf-8").replace(
+                    "| P0001 | 1 |  |", "| P0001 | 1 | X |", 1
+                ),
+                encoding="utf-8",
+            )
             result = self.run_validator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -852,6 +1620,80 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 encoding="utf-8",
             )
             self.assert_fails(root, "IDs outside the target Markdown table")
+
+    def test_page_markdown_non_id_field_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "02-page-layout-ledger.md"
+            text = path.read_text(encoding="utf-8").replace(
+                " | clean | full-page render inspected |",
+                " | finding invented | page was not inspected |",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root, "Markdown/CSV value mismatch for P0001/Disposition"
+            )
+
+    def test_page_markdown_row_order_must_be_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "02-page-layout-ledger.md"
+            lines = path.read_text(encoding="utf-8").splitlines()
+            first = next(i for i, line in enumerate(lines) if line.startswith("| P0001 |"))
+            second = next(i for i, line in enumerate(lines) if line.startswith("| P0002 |"))
+            lines[first], lines[second] = lines[second], lines[first]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assert_fails(root, "deterministic row order mismatch")
+
+    def test_bibliography_markdown_serialized_field_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "03-bibliography-audit-ledger.md"
+            text = path.read_text(encoding="utf-8").replace(
+                '"canonical":"fixture"',
+                '"canonical":"invented different value"',
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root, "Markdown/CSV value mismatch for REF0001/Type"
+            )
+
+    def test_citation_markdown_non_id_field_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "04-citation-claim-audit-ledger.md"
+            text = path.read_text(encoding="utf-8").replace(
+                " | direct | verified |",
+                " | mismatch | mismatch |",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root, "Markdown/CSV value mismatch for C0001-S01/Support"
+            )
+
+    def test_citation_markdown_combined_source_serialization_drift_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "04-citation-claim-audit-ledger.md"
+            text = path.read_text(encoding="utf-8").replace(
+                '"exact_source_locator":"p.1"',
+                '"exact_source_locator":"p.2"',
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "Markdown/CSV value mismatch for C0001-S01/"
+                "Content source opened and exact locator",
+            )
 
     def test_missing_or_hash_mismatched_render_file_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -987,11 +1829,50 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root = Path(directory)
             self.build_bundle(root)
             chair_path = root / "90-chair-synthesis.md"
-            chair = chair_path.read_text(encoding="utf-8").replace(
-                "- Substantive conflicts: 0", "- Substantive conflicts: 1"
+            chair = chair_path.read_text(encoding="utf-8")
+            chair = chair.replace(
+                "agree | none | none | closed |",
+                "agree | substantive | C-F01 | open |",
             )
+            chair = chair.replace("- Substantive conflicts: 0", "- Substantive conflicts: 1")
+            chair = chair.replace("- Reclassified Pair IDs: 0", "- Reclassified Pair IDs: 1")
+            chair = chair.replace("- Unresolved conflicts: 0", "- Unresolved conflicts: 1")
             chair_path.write_text(chair, encoding="utf-8")
             self.assert_fails(root, "Combined citation gate cannot pass")
+
+    def test_chair_cross_ledger_must_join_exact_reference_and_pair_ids(self) -> None:
+        mutations = (
+            (
+                "| REF0001 | [1] |",
+                "| REF9999 | [1] |",
+                "chair citation cross-ledger reference IDs",
+            ),
+            (
+                "| REF0001 | [1] | C0001-S01 |",
+                "| REF0001 | [1] | C9999-S01 |",
+                "Affected Pair IDs do not exactly project",
+            ),
+            (
+                "- Unique cited rendered references joined: 1",
+                "- Unique cited rendered references joined: 999",
+                "joined cited-reference count 999",
+            ),
+            (
+                "agree | none | none | closed |",
+                "agree | local | none | closed |",
+                "conflict row requires a canonical",
+            ),
+        )
+        for old, new, needle in mutations:
+            with self.subTest(needle=needle), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / "90-chair-synthesis.md"
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, needle)
 
     def test_summary_extra_id_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1002,13 +1883,20 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ACADEMIC_SUMMARY_COLUMNS,
                 [{
                     "LedgerID": "OLD-X",
-                    "CurrentFindingIDs": "OLD",
-                    "SeverityRemedy": "S2/W",
+                    "Priority": "P2",
+                    "ChairFindingID": "C-F99",
+                    "SourceReviewerFindingIDs": "R1-F01",
+                    "Severity": "S2",
+                    "S0Subtype": "N/A",
+                    "Remedy": "W",
                     "ExactPDFAnchor": "p.1",
-                    "DirectPDFObservation": "old",
-                    "MinimumRequiredAction": "old",
-                    "OriginReviewers": "old",
-                    "ChairDisposition": "open",
+                    "DirectObservation": "old visible observation",
+                    "EvidenceStatus": "verified",
+                    "MinimumEditEvidence": "old minimum action",
+                    "Dependency": "none",
+                    "Owner": "author",
+                    "Status": "open",
+                    "Verification": "old verification action",
                 }],
             )
             self.assert_fails(root, "current academic summary")
@@ -1281,13 +2169,17 @@ class ValidateReviewBundleTests(unittest.TestCase):
     def test_documented_unverifiable_rows_allow_missing_endpoints(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            self.build_bundle(root)
+            digest = self.build_bundle(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
             _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
-            bib_rows[0]["Verdict"] = "unverifiable"
-            bib_rows[0]["CanonicalValue"] = "not established"
-            bib_rows[0]["EvidenceEndpoint"] = ""
-            bib_rows[0]["EndpointType"] = "official route inaccessible"
-            bib_rows[0]["EvidenceNote"] = (
+            bib_row = next(row for row in bib_rows if row["Field"] == "type")
+            bib_row["Verdict"] = "unverifiable"
+            bib_row["CanonicalValue"] = "not established"
+            bib_row["EvidenceEndpoint"] = ""
+            bib_row["EndpointType"] = "official route inaccessible"
+            bib_row["EvidenceNote"] = (
                 "Attempted the official publisher route on 2026-08-29; "
                 "the record was inaccessible."
             )
@@ -1296,20 +2188,70 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 BIB_LEDGER_COLUMNS,
                 bib_rows,
             )
+            _, bibliography_inventory_rows = read_csv(
+                root / "00-bibliography-inventory.csv"
+            )
+            (root / "03-bibliography-audit-ledger.md").write_text(
+                "# Bibliography ledger\n\n"
+                + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+                + markdown_table(
+                    BIB_MARKDOWN_HEADERS,
+                    bibliography_markdown_rows(
+                        bibliography_inventory_rows, bib_rows
+                    ),
+                ),
+                encoding="utf-8",
+            )
             _, citation_rows = read_csv(
                 root / "04-citation-claim-audit-ledger.csv"
             )
             citation_rows[0]["ContentSourceOpened"] = ""
             citation_rows[0]["ExactSourceLocator"] = ""
             citation_rows[0]["Support"] = "unverifiable"
+            citation_rows[0]["MetadataStatus"] = "unverifiable"
             citation_rows[0]["DispositionEvidence"] = (
-                "Official full-text route attempted but inaccessible."
+                "reasoned non-finding: Official full-text route was attempted "
+                "but remained inaccessible; the uncertainty is disclosed."
             )
             write_csv(
                 root / "04-citation-claim-audit-ledger.csv",
                 CITATION_LEDGER_COLUMNS,
                 citation_rows,
             )
+            (root / "04-citation-claim-audit-ledger.md").write_text(
+                "# Citation ledger\n\n"
+                + self.declaration(digest, process, "R3")
+                + markdown_table(
+                    CITATION_MARKDOWN_HEADERS,
+                    citation_markdown_rows(
+                        citation_rows, bibliography_inventory_rows
+                    ),
+                ),
+                encoding="utf-8",
+            )
+            reviewer = root / "R3-comprehensive-review.md"
+            reviewer_text = reviewer.read_text(encoding="utf-8")
+            reviewer_text = reviewer_text.replace(
+                "- Semantically verified pairs: 1", "- Semantically verified pairs: 0"
+            ).replace(
+                "- Inaccessible/unverifiable pairs: 0",
+                "- Inaccessible/unverifiable pairs: 1",
+            ).replace(
+                f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
+                f"public_endpoints=[{BIB_ENDPOINT}]",
+            )
+            reviewer.write_text(reviewer_text, encoding="utf-8")
+            chair = root / "90-chair-synthesis.md"
+            chair_text = chair.read_text(encoding="utf-8").replace(
+                "C0001-S01=>doi:fixture @ https://dl.acm.org/doi/pdf/10.1145/3442188.3445922",
+                "C0001-S01=>doi:fixture @ N/A",
+            ).replace(
+                "| agree | none | none | closed |",
+                "| not verifiable | none | none | closed |",
+            ).replace(
+                "- Identity-agreement count: 1", "- Identity-agreement count: 0"
+            )
+            chair.write_text(chair_text, encoding="utf-8")
             result = self.run_validator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
@@ -1391,10 +2333,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root = Path(directory)
             self.build_bundle(root)
             _, rows = read_csv(root / "93-current-actionable-items.csv")
-            rows[0]["CurrentFindingIDs"] = "DIFFERENT"
-            rows[0]["SeverityRemedy"] = "S0/N"
+            rows[0]["ChairFindingID"] = "C-F99"
+            rows[0]["Severity"] = "S0"
+            rows[0]["Remedy"] = "N"
             rows[0]["ExactPDFAnchor"] = "p.999"
-            rows[0]["ChairDisposition"] = "closed"
+            rows[0]["Status"] = "closed"
             write_csv(
                 root / "93-current-actionable-items.csv",
                 ACADEMIC_SUMMARY_COLUMNS,
@@ -1408,8 +2351,8 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "91-revision-ledger.md"
             text = path.read_text(encoding="utf-8").replace(
-                "| L01 | P2 | C-F01 | R1-F01 | S2 | W |",
-                "| L01 | P2 | C-F01 | R1-F01 | S3 | W |",
+                "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W |",
+                "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S3 | N/A | W |",
             )
             path.write_text(text, encoding="utf-8")
             self.assert_fails(root, "Markdown/CSV value mismatch for L01/Severity")
@@ -1421,7 +2364,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             _, rows = read_csv(root / "93-current-ai-actionable-items.csv")
             rows[0]["Impact"] = "material"
             rows[0]["ExactPDFAnchor"] = "p.999"
-            rows[0]["ChairStatus"] = "closed"
+            rows[0]["Status"] = "closed"
             write_csv(
                 root / "93-current-ai-actionable-items.csv",
                 AI_SUMMARY_COLUMNS,
@@ -1435,10 +2378,12 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "R1-comprehensive-review.md"
             path.write_text(
-                path.read_text(encoding="utf-8").replace(PROMPT_HASH, "short"),
+                path.read_text(encoding="utf-8").replace(
+                    ACTOR_PROMPT_HASHES["R1"], "short"
+                ),
                 encoding="utf-8",
             )
-            self.assert_fails(root, "operational prompt SHA-256")
+            self.assert_fails(root, "Operational prompt SHA-256")
 
     def test_declaration_must_state_complete_clean_room_boundary(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1467,6 +2412,78 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "Frozen at must exactly equal")
 
+    def test_manifest_must_bind_process_hash_and_complete_neutral_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "00-manifest.md"
+            text = path.read_text(encoding="utf-8")
+            text = text.replace(
+                "- Process-parameter file and SHA-256: 00-process-parameters.json / ",
+                "- Process-parameter file and SHA-256: 00-process-parameters.json / "
+                + "F" * 64
+                + " # ",
+                1,
+            ).replace(
+                "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n",
+                "",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Process-parameter file and SHA-256", result.stdout)
+            self.assertIn("canonical manifest sequence", result.stdout)
+
+    def test_round_rejects_a_second_reviewer_visible_pdf(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "old-submission.pdf").write_bytes(
+                (root / "frozen-thesis.pdf").read_bytes()
+            )
+            self.assert_fails(root, "exactly the one process-selected reviewer-visible thesis PDF")
+
+    def test_degree_level_casing_cannot_bypass_owner_routing(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["degree_level"] = "Masters"
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            report = root / "R3-comprehensive-review.md"
+            text = re.sub(
+                r"(?ms)^## Full rendered-page audit\n.*\Z", "", report.read_text(encoding="utf-8")
+            )
+            report.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "degree_level must be doctorate or masters")
+
+    def test_owner_summary_counts_must_equal_machine_readable_masters(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R3-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8").replace(
+                "- Physical pages / unchecked pages: 2 / 0",
+                "- Physical pages / unchecked pages: 999 / 777",
+                1,
+            ).replace(
+                "- Bibliography entries rendered in the frozen PDF: 1",
+                "- Bibliography entries rendered in the frozen PDF: 999",
+                1,
+            ).replace(
+                "- Active citation occurrences: 1",
+                "- Active citation occurrences: 999",
+                1,
+            )
+            report.write_text(text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Physical pages / unchecked pages", result.stdout)
+            self.assertIn("Bibliography entries rendered", result.stdout)
+            self.assertIn("Active citation occurrences", result.stdout)
+
     def test_reviewer_persona_cannot_be_copied_from_another_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1479,6 +2496,35 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             path.write_text(text, encoding="utf-8")
             self.assert_fails(root, "distinct R2 emphasis")
+
+    def test_panel_rejects_an_identical_omnibus_persona_for_two_reviewers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            omnibus = (
+                "technical method experiment contribution novelty positioning "
+                "thesis logic narrative architecture across the complete thesis"
+            )
+            for index, old in (
+                (1, "technical method and experiment reasoning across the complete thesis"),
+                (2, "contribution, thesis logic, and cross-chapter narrative coherence"),
+            ):
+                path = root / f"R{index}-comprehensive-review.md"
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(old, omnibus),
+                    encoding="utf-8",
+                )
+                chair = root / "90-chair-synthesis.md"
+                chair.write_text(
+                    chair.read_text(encoding="utf-8").replace(old, omnibus),
+                    encoding="utf-8",
+                )
+                summary = root / "93-user-facing-summary.md"
+                summary.write_text(
+                    summary.read_text(encoding="utf-8").replace(old, omnibus),
+                    encoding="utf-8",
+                )
+            self.assert_fails(root, "role-specific and distinct across the panel")
 
     def test_summary_input_allowlist_must_be_exact_and_current_round_only(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1493,6 +2539,83 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             path.write_text(text, encoding="utf-8")
             self.assert_fails(root, "Exact current-round input allowlist mismatch")
+
+    def test_summary_allowlist_rejects_duplicates_and_reordering(self) -> None:
+        for mutation in ("duplicate", "reorder"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / "93-user-facing-summary.md"
+                text = path.read_text(encoding="utf-8")
+                if mutation == "duplicate":
+                    text = text.replace(
+                        "00-process-parameters.json; SKILL.md",
+                        "00-process-parameters.json; 00-process-parameters.json; SKILL.md",
+                        1,
+                    )
+                else:
+                    text = text.replace(
+                        "00-process-parameters.json; SKILL.md",
+                        "SKILL.md; 00-process-parameters.json",
+                        1,
+                    )
+                path.write_text(text, encoding="utf-8")
+                self.assert_fails(root, "canonical order with each basename exactly once")
+
+    def test_summary_receipt_cannot_open_an_unlisted_or_prior_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "93-user-facing-summary.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "opened=[00-process-parameters.json;",
+                "opened=[old-review.md; 00-process-parameters.json;",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "Summary opened receipt must exactly equal")
+
+    def test_chair_receipt_and_allowlist_are_current_round_only(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "90-chair-synthesis.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "05-ai-style-assessment.md]",
+                "05-ai-style-assessment.md; old-chair-summary.md]",
+                1,
+            ).replace(
+                "public_endpoints=[none]",
+                "public_endpoints=[https://example.com/private-repository]",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Chair opened receipt must exactly equal", result.stdout)
+            self.assertIn("Chair public_endpoints must be", result.stdout)
+
+    def test_summary_rejects_extra_prose_and_extra_h2_sections(self) -> None:
+        for insertion in (
+            "\nA private repository and prior round prove the implementation.\n",
+            "\n## Prior-round repository proof\n\nA private repository proves it.\n",
+        ):
+            with self.subTest(insertion=insertion[:20]), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / "93-user-facing-summary.md"
+                path.write_text(
+                    path.read_text(encoding="utf-8") + insertion,
+                    encoding="utf-8",
+                )
+                result = self.run_validator(root)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(
+                    "canonical Stage-S section sequence" in result.stdout
+                    or "prose outside the canonical Stage-S sections" in result.stdout
+                    or "Reconciliation must contain only" in result.stdout,
+                    result.stdout,
+                )
 
     def test_summary_must_include_every_independent_actor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1525,6 +2648,537 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "R1 conclusion does not exactly copy its independent current-round verdict",
             )
 
+    def test_out_of_section_duplicate_labels_cannot_redirect_actor_projection(self) -> None:
+        cases = (
+            (
+                "R1-comprehensive-review.md",
+                "# R1 — Comprehensive whole-thesis review\n\n",
+                "# R1 — Comprehensive whole-thesis review\n\n"
+                "- Persona emphasis: prior-round author explanation\n\n",
+                "technical method and experiment reasoning across the complete thesis",
+                "prior-round author explanation",
+                "R1 conclusion does not exactly copy",
+            ),
+            (
+                "R2-comprehensive-review.md",
+                "# R2 — Comprehensive whole-thesis review\n\n",
+                "# R2 — Comprehensive whole-thesis review\n\n"
+                "- One-paragraph whole-thesis rationale: author-side repository fact\n\n",
+                "| R2 | R2 contribution/positioning + thesis architecture/narrative — contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | skill-default | high | The complete fixture thesis was assessed across policy, argument, literature, methods, data, experiments, reproducibility, writing, and presentation; the visible evidence supports a minor-revision recommendation without a blocker. |",
+                "| R2 | R2 contribution/positioning + thesis architecture/narrative — contribution, thesis logic, and cross-chapter narrative coherence | B | 小修后可答辩 | skill-default | high | author-side repository fact |",
+                "R2 conclusion does not exactly copy",
+            ),
+            (
+                "05-ai-style-assessment.md",
+                "# Standalone AI-style prose assessment\n\n",
+                "# Standalone AI-style prose assessment\n\n"
+                "- Rationale: repository and private-log facts\n\n",
+                "The short fixture contains one formulaic transition, but the "
+                "limited corpus prevents any stronger stylistic inference.",
+                "repository and private-log facts",
+                "AI conclusion does not exactly copy",
+            ),
+            (
+                "90-chair-synthesis.md",
+                "# Chair synthesis\n\n",
+                "# Chair synthesis\n\n"
+                "- Whole-thesis rationale: unrelated prior-round adjudication\n\n",
+                "The current panel evidence covers all nine gates and the assigned "
+                "citation, bibliography, page, and style duties; one bounded wording "
+                "revision remains, while no foundational or integrity blocker is visible.",
+                "unrelated prior-round adjudication",
+                "Chair conclusion does not exactly copy",
+            ),
+        )
+        for source_name, anchor, inserted, old_summary, fake_summary, needle in cases:
+            with self.subTest(source=source_name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                source = root / source_name
+                source.write_text(
+                    source.read_text(encoding="utf-8").replace(anchor, inserted, 1),
+                    encoding="utf-8",
+                )
+                summary = root / "93-user-facing-summary.md"
+                summary.write_text(
+                    summary.read_text(encoding="utf-8").replace(
+                        old_summary, fake_summary, 1
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, needle)
+
+    def test_duplicate_authoritative_label_or_section_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R2-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8").replace(
+                "- One-paragraph whole-thesis rationale: The complete fixture thesis",
+                "- One-paragraph whole-thesis rationale: duplicate injected rationale\n"
+                "- One-paragraph whole-thesis rationale: The complete fixture thesis",
+                1,
+            )
+            report.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "whole-thesis rationale is absent or shell-only")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            ai = root / "05-ai-style-assessment.md"
+            text = ai.read_text(encoding="utf-8")
+            text += (
+                "\n## Overall judgment\n"
+                "- AI-style signal: low\n"
+                "- Confidence: high\n"
+                "- Rationale: duplicate authoritative section must fail validation.\n"
+            )
+            ai.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "missing allowed AI-style signal")
+
+    def test_r4_r5_persona_projection_is_bound_to_authoritative_section(self) -> None:
+        for actor, authentic in (
+            ("R4", "evidence integrity, reproducibility, and citation support"),
+            ("R5", "format, bibliography, layout, and page presentation"),
+        ):
+            with self.subTest(actor=actor):
+                text = (
+                    f"# {actor} — report\n\n"
+                    "- Persona emphasis: prior-round repository explanation\n\n"
+                    "## Role, scope, and independence\n"
+                    f"- Persona emphasis: {authentic}\n\n"
+                    "## Verdict\n- Academic grade: B\n"
+                )
+                section = VALIDATOR_MODULE.markdown_section_body_raw(
+                    text, "Role, scope, and independence"
+                )
+                self.assertIsNotNone(section)
+                self.assertEqual(
+                    VALIDATOR_MODULE.labeled_value(section or "", "Persona emphasis"),
+                    authentic,
+                )
+
+    def test_duplicate_verdict_values_cannot_collapse_to_blank_projection(self) -> None:
+        mutations = (
+            ("Academic grade", "C", "| R1 | technical method and experiment reasoning across the complete thesis | B |", "| R1 | technical method and experiment reasoning across the complete thesis |  |"),
+            ("Defense recommendation", "同意答辩", "| B | 小修后可答辩 | high |", "| B |  | high |"),
+        )
+        for label, contradictory, chair_old, chair_new in mutations:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                text = report.read_text(encoding="utf-8")
+                anchor = f"- {label}: "
+                line = next(line for line in text.splitlines() if line.startswith(anchor))
+                text = text.replace(line, line + f"\n- {label}: {contradictory}", 1)
+                report.write_text(text, encoding="utf-8")
+                chair = root / "90-chair-synthesis.md"
+                chair.write_text(
+                    chair.read_text(encoding="utf-8").replace(chair_old, chair_new, 1),
+                    encoding="utf-8",
+                )
+                summary = root / "93-user-facing-summary.md"
+                summary_text = summary.read_text(encoding="utf-8")
+                if label == "Academic grade":
+                    summary_text = summary_text.replace(
+                        "| R1 | technical method and experiment reasoning across the complete thesis | B |",
+                        "| R1 | technical method and experiment reasoning across the complete thesis |  |",
+                        1,
+                    )
+                else:
+                    summary_text = summary_text.replace(
+                        "| R1 | technical method and experiment reasoning across the complete thesis | B | 小修后可答辩 |",
+                        "| R1 | technical method and experiment reasoning across the complete thesis | B |  |",
+                        1,
+                    )
+                summary.write_text(summary_text, encoding="utf-8")
+                self.assert_fails(root, "ambiguous or incomplete")
+
+    def test_duplicate_chair_overall_verdict_cannot_project_blank(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            chair = root / "90-chair-synthesis.md"
+            text = chair.read_text(encoding="utf-8").replace(
+                "- Overall academic grade: B",
+                "- Overall academic grade: B\n- Overall academic grade: C",
+                1,
+            )
+            chair.write_text(text, encoding="utf-8")
+            summary = root / "93-user-facing-summary.md"
+            summary.write_text(
+                summary.read_text(encoding="utf-8").replace(
+                    "| Chair | chair adjudication | B |",
+                    "| Chair | chair adjudication |  |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "Chair source verdict is ambiguous or incomplete")
+
+    def test_required_sections_are_unique_and_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8")
+                + "\n## What I inspected\n\ncontradictory duplicate section\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "must occur exactly once")
+
+    def test_required_report_sections_cannot_be_shells(self) -> None:
+        mutations = (
+            (
+                "R1-comprehensive-review.md",
+                "All frozen pages and all required ledgers.",
+                "none",
+                "section 'What I inspected' is empty or shell-only",
+            ),
+            (
+                "R2-comprehensive-review.md",
+                "- Cross-chapter coherence: The two-page fixture has a consistent beginning-to-end narrative for validation.\n",
+                "",
+                "Whole-thesis synthesis field 'Cross-chapter coherence'",
+            ),
+            (
+                "05-ai-style-assessment.md",
+                "- Physical pages inspected: 2 / 2\n",
+                "",
+                "Physical pages inspected must exactly equal",
+            ),
+            (
+                "90-chair-synthesis.md",
+                "- Category distribution: B=3\n",
+                "",
+                "Category distribution must equal",
+            ),
+        )
+        for filename, old, new, needle in mutations:
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, needle)
+
+    def test_raw_html_blocks_are_forbidden_and_atx_closing_hashes_are_valid(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8") + "\n<div>hidden injection</div>\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "raw HTML block")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "## Verdict\n", "  ## Verdict ##\n", 1
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            chair = root / "90-chair-synthesis.md"
+            chair.write_text(
+                chair.read_text(encoding="utf-8")
+                + "\n## Standalone AI-style judgment\n- Signal: high\n- Confidence: low\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "must occur exactly once")
+
+    def test_h1_and_nonrendered_blocks_cannot_supply_verdict_structure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8")
+            text = text.replace("- Confidence: high\n", "", 1)
+            text = text.replace(
+                "## What I inspected",
+                "# Unrelated top-level appendix\n- Confidence: high\n\n## What I inspected",
+                1,
+            )
+            report.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "Confidence must be high, medium, or low")
+
+        for wrapper, suffix in (("```markdown\n", "```\n"), ("<!--\n", "")):
+            with self.subTest(wrapper=wrapper), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                report = root / "R1-comprehensive-review.md"
+                text = report.read_text(encoding="utf-8")
+                match = re.search(
+                    r"(?ms)^## Verdict\n.*?(?=^## What I inspected)", text
+                )
+                self.assertIsNotNone(match)
+                hidden = wrapper + (match.group(0) if match else "") + suffix
+                report.write_text(
+                    text[:match.start()] + hidden + text[match.end():],
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, "required section 'Verdict' must occur exactly once")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8").replace(
+                "- Academic grade: B", "    - Academic grade: B", 1
+            )
+            report.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "missing explicit academic grade")
+
+    def test_summary_actor_table_must_belong_to_conclusion_section(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            summary = root / "93-user-facing-summary.md"
+            text = summary.read_text(encoding="utf-8")
+            match = re.search(
+                r"(?ms)(\| Actor \|.*?)(?=\n## Current actionable items)", text
+            )
+            self.assertIsNotNone(match)
+            table = match.group(1) if match else ""
+            text = text[:match.start()] + "No table here.\n" + text[match.end():]
+            text += "\n## Appendix projection\n\n" + table + "\n"
+            summary.write_text(text, encoding="utf-8")
+            self.assert_fails(root, "first header is 'Actor', found 0")
+
+    def test_chair_tables_reject_duplicate_actor_rows(self) -> None:
+        for row_prefix, needle in (
+            ("| R1 | adequate |", "duplicate reviewer-coverage actors"),
+            (
+                "| R1 | R1 technical/methods/experiments — technical method and experiment reasoning",
+                "duplicate independent-verdict actors",
+            ),
+        ):
+            with self.subTest(prefix=row_prefix), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                chair = root / "90-chair-synthesis.md"
+                text = chair.read_text(encoding="utf-8")
+                line = next(line for line in text.splitlines() if line.startswith(row_prefix))
+                text = text.replace(line, line + "\n" + line, 1)
+                chair.write_text(text, encoding="utf-8")
+                self.assert_fails(root, needle)
+
+    def test_institutional_regime_projects_official_verdicts(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            rule_endpoint = "https://example.edu/official-rule"
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["decision_regime_status"] = "verified-institutional"
+            process["governing_rule_urls"] = [rule_endpoint]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            manifest = root / "00-manifest.md"
+            manifest_text = manifest.read_text(encoding="utf-8")
+            new_process_hash = hashlib.sha256(
+                process_path.read_bytes()
+            ).hexdigest().upper()
+            manifest_text = re.sub(
+                r"(?m)^- Process-parameter file and SHA-256: .*$",
+                "- Process-parameter file and SHA-256: "
+                f"00-process-parameters.json / {new_process_hash}",
+                manifest_text,
+            ).replace(
+                "decision_regime_status=skill-default ; sources=none",
+                "decision_regime_status=verified-institutional ; "
+                "sources=https://example.edu/official-rule",
+            ).replace(
+                "public_endpoints=[none]",
+                f"public_endpoints=[{rule_endpoint}]",
+                1,
+            )
+            manifest.write_text(manifest_text, encoding="utf-8")
+            policy = root / "01-policy-basis.md"
+            policy.write_text(
+                policy.read_text(encoding="utf-8").replace(
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{rule_endpoint}]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            for index in range(1, 4):
+                path = root / f"R{index}-comprehensive-review.md"
+                text = path.read_text(encoding="utf-8")
+                if index == 3:
+                    text = text.replace(
+                        f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
+                        f"public_endpoints=[{rule_endpoint}; {BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
+                        1,
+                    )
+                else:
+                    text = text.replace(
+                        "public_endpoints=[none]",
+                        f"public_endpoints=[{rule_endpoint}]",
+                        1,
+                    )
+                replacements = {
+                    "- Decision regime: skill-default": "- Decision regime: institutional",
+                    "- Official category: N/A": "- Official category: Institutional-B",
+                    "- Official defense recommendation: N/A": "- Official defense recommendation: 允许答辩前小修",
+                    "- Governing source: N/A": "- Governing source: https://example.edu/official-rule",
+                    "- Academic grade: B": "- Academic grade: N/A",
+                    "- Defense recommendation: 小修后可答辩": "- Defense recommendation: N/A",
+                }
+                for old, new in replacements.items():
+                    text = text.replace(old, new, 1)
+                path.write_text(text, encoding="utf-8")
+            chair = root / "90-chair-synthesis.md"
+            chair_text = chair.read_text(encoding="utf-8").replace(
+                "public_endpoints=[none]",
+                f"public_endpoints=[{rule_endpoint}]",
+                1,
+            )
+            chair_replacements = {
+                "- Decision regime: skill-default": "- Decision regime: institutional",
+                "- Overall official category: N/A": "- Overall official category: Institutional-B",
+                "- Overall official defense recommendation: N/A": "- Overall official defense recommendation: 允许答辩前小修",
+                "- Overall governing source: N/A": "- Overall governing source: https://example.edu/official-rule",
+                "- Overall academic grade: B": "- Overall academic grade: N/A",
+                "- Overall defense recommendation: 小修后可答辩": "- Overall defense recommendation: N/A",
+                "| B | 小修后可答辩 | skill-default |": "| Institutional-B | 允许答辩前小修 | institutional / https://example.edu/official-rule |",
+                "- Category distribution: B=3": "- Category distribution: Institutional-B=3",
+            }
+            for old, new in chair_replacements.items():
+                chair_text = chair_text.replace(old, new)
+            chair.write_text(chair_text, encoding="utf-8")
+            summary = root / "93-user-facing-summary.md"
+            summary_text = summary.read_text(encoding="utf-8").replace(
+                "| B | 小修后可答辩 | skill-default | high |",
+                "| Institutional-B | 允许答辩前小修 | institutional / https://example.edu/official-rule | high |",
+            )
+            summary.write_text(summary_text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            r1 = root / "R1-comprehensive-review.md"
+            r1_text = r1.read_text(encoding="utf-8")
+            r1.write_text(
+                r1_text.replace(
+                    "- Governing source: https://example.edu/official-rule",
+                    "- Governing source: https://invented.example/not-in-envelope",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "absent from the frozen process envelope")
+            r1.write_text(r1_text, encoding="utf-8")
+            summary.write_text(
+                summary.read_text(encoding="utf-8").replace(
+                    "| R1 | R1 technical/methods/experiments — technical method and experiment reasoning across the complete thesis | Institutional-B |",
+                    "| R1 | R1 technical/methods/experiments — technical method and experiment reasoning across the complete thesis | N/A |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "R1 conclusion does not exactly copy")
+
+    def test_finding_schema_and_source_ids_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Required action: Correct only the bounded wording without changing the claim.\n",
+                    "",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "missing or duplicated field 'Required action'")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "91-revision-ledger.csv")
+            rows[0]["SourceReviewerFindingIDs"] = "R1-F99"
+            write_csv(root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows)
+            self.assert_fails(root, "unknown current reviewer finding IDs")
+
+    def test_every_actionable_reviewer_finding_requires_one_chair_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8")
+            match = re.search(
+                r"(?ms)(### R1-F01 —.*?)(?=^## Questions, not findings)", text
+            )
+            self.assertIsNotNone(match)
+            duplicate = (match.group(1) if match else "").replace(
+                "R1-F01", "R1-F02", 1
+            ).replace(
+                "bounded fixture wording issue", "second bounded fixture issue", 1
+            )
+            text = text[:match.end()] + "\n" + duplicate + text[match.end():]
+            report.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root, "actionable reviewer findings omitted from chair adjudication"
+            )
+
+    def test_chair_finding_ids_are_unique_and_evidence_status_is_mandatory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, rows = read_csv(root / "91-revision-ledger.csv")
+            duplicate = dict(rows[0])
+            duplicate["LedgerID"] = "L02"
+            duplicate["Status"] = "closed"
+            rows.append(duplicate)
+            write_csv(
+                root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
+            )
+            self.assert_fails(root, "ChairFindingID values must be unique")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, rows = read_csv(root / "91-revision-ledger.csv")
+            rows[0]["EvidenceStatus"] = ""
+            write_csv(
+                root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
+            )
+            self.assert_fails(root, "blank mandatory field EvidenceStatus")
+
+    def test_rejected_or_disputed_findings_require_explicit_chair_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, rows = read_csv(root / "91-revision-ledger.csv")
+            rows[0]["EvidenceStatus"] = "rejected"
+            write_csv(
+                root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
+            )
+            for filename in ("91-revision-ledger.md", "90-chair-synthesis.md"):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "| verified |", "| rejected |", 1
+                    ),
+                    encoding="utf-8",
+                )
+            self.assert_fails(root, "disagreements table omits chair dispositions ['C-F01']")
+
     def test_summary_cannot_invent_optional_or_limitation_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1543,11 +3197,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "93-user-facing-summary.md"
             text = path.read_text(encoding="utf-8").replace(
-                "| L01 | C-F01 | S2/W | physical p.1 | visible wording defect |",
-                "| L01 | C-F01 | S2/W | physical p.1 | invented different defect |",
+                "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | visible wording defect |",
+                "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | invented different defect |",
             )
             path.write_text(text, encoding="utf-8")
-            self.assert_fails(root, "Markdown/CSV value mismatch for L01/DirectPDFObservation")
+            self.assert_fails(root, "Markdown/CSV value mismatch for L01/DirectObservation")
 
     def test_markdown_master_requires_complete_documented_schema(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1576,6 +3230,58 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertIn("Gate I", result.stdout)
             self.assertIn("missing explicit academic grade", result.stdout)
 
+    def test_reviewer_assessment_requires_exact_six_column_header(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "R2-comprehensive-review.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "| Gate | Depth | Disposition | Evidence | Findings | Confidence |",
+                "| Gate | Review depth | Disposition | Evidence | Findings | Confidence |",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "expected exactly one Markdown table with schema "
+                "['Gate', 'Depth', 'Disposition', 'Evidence', 'Findings', "
+                "'Confidence']",
+            )
+
+    def test_reviewer_assessment_rejects_a_second_table(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "R2-comprehensive-review.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "\n\n## Persona-weighted deep review",
+                "\n\n| Extra | Table |\n|---|---|\n| x | y |"
+                "\n\n## Persona-weighted deep review",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "Whole-thesis assessment must contain exactly one complete "
+                "Markdown table, found 2",
+            )
+
+    def test_reviewer_assessment_gate_rows_must_be_in_a_to_i_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "R2-comprehensive-review.md"
+            lines = path.read_text(encoding="utf-8").splitlines()
+            a_row = next(i for i, line in enumerate(lines) if line.startswith("| A —"))
+            b_row = next(i for i, line in enumerate(lines) if line.startswith("| B —"))
+            lines[a_row], lines[b_row] = lines[b_row], lines[a_row]
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assert_fails(
+                root,
+                "Whole-thesis assessment gate order must be exactly "
+                "A,B,C,D,E,F,G,H,I",
+            )
+
     def test_missing_chair_cross_ledger_result_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1603,6 +3309,112 @@ class ValidateReviewBundleTests(unittest.TestCase):
             path.write_text(text, encoding="utf-8")
             self.assert_fails(root, "non-attribution disclaimer")
 
+    def test_ai_disclaimer_must_be_correct_in_its_own_field(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "05-ai-style-assessment.md"
+            canonical = (
+                "This is a prose-style assessment, not a determination of AI use, "
+                "authorship, plagiarism, or misconduct."
+            )
+            text = path.read_text(encoding="utf-8").replace(
+                f"- Required disclaimer: {canonical}",
+                "- Required disclaimer: AI use and misconduct conclusively established",
+                1,
+            ).replace(
+                "## Limitations\n",
+                f"## Limitations\n\n{canonical}\n",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "Required disclaimer must exactly equal the canonical "
+                "non-attribution disclaimer",
+            )
+
+    def test_ai_report_rejects_probability_or_academic_verdict_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "05-ai-style-assessment.md"
+            text = path.read_text(encoding="utf-8").replace(
+                "## Overall judgment\n",
+                "## Overall judgment\n\n- AI probability: 99%\n"
+                "- Academic grade: D\n- Misconduct determination: confirmed\n",
+                1,
+            )
+            path.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "standalone AI-style report contains forbidden "
+                "academic/detector/misconduct field 'AI probability'",
+            )
+
+    def test_ai_report_rejects_probability_label_variants(self) -> None:
+        for label in ("AI probability estimate", "AI 概率"):
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / "05-ai-style-assessment.md"
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "## Overall judgment\n",
+                        f"## Overall judgment\n\n- {label}: 97%\n",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "semantically forbidden probability/detector/academic/"
+                    "misconduct label",
+                )
+
+    def test_ai_report_rejects_semantic_attribution_label_bypasses(self) -> None:
+        forbidden_labels = (
+            "AI-generated percentage",
+            "AI generation rate",
+            "AI content ratio",
+            "人工智能生成百分比",
+            "AI生成占比",
+            "人工智能生成比例",
+            "检测器阳性率",
+            "Authorship verdict",
+            "Authorship conclusion",
+            "作者身份结论",
+            "AI-use verdict",
+            "AI-use conclusion",
+            "AI使用结论",
+        )
+        for label in forbidden_labels:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                path = root / "05-ai-style-assessment.md"
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "## Overall judgment\n",
+                        f"## Overall judgment\n\n- {label}: confirmed\n",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "semantically forbidden probability/detector/academic/"
+                    "misconduct label",
+                )
+
+    def test_ai_required_disclaimer_remains_allowed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("**PASS**", result.stdout)
+
     def test_summary_reconciliation_count_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1610,12 +3422,12 @@ class ValidateReviewBundleTests(unittest.TestCase):
             path = root / "93-user-facing-summary.md"
             path.write_text(
                 path.read_text(encoding="utf-8").replace(
-                    "- Rows in Current actionable items: 1",
-                    "- Rows in Current actionable items: 99",
+                    "- Rows in Current actionable items Markdown table: 1",
+                    "- Rows in Current actionable items Markdown table: 99",
                 ),
                 encoding="utf-8",
             )
-            self.assert_fails(root, "93 academic reconciliation count")
+            self.assert_fails(root, "93 academic Markdown reconciliation count")
 
     def test_frozen_pdf_hash_mismatch_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1637,6 +3449,155 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertIn("R4-comprehensive-review.md", result.stdout)
             self.assertIn("R5-comprehensive-review.md", result.stdout)
 
+    def test_valid_optional_stage_v_passes_after_fresh_rereview_freeze(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            (root / "94-post-freeze-prior-issue-closure.md").write_text(
+                self.stage_v_report(root, digest), encoding="utf-8"
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_stage_v_is_rejected_before_a_fresh_rereview_freeze(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            (root / "94-post-freeze-prior-issue-closure.md").write_text(
+                self.stage_v_report(root, digest), encoding="utf-8"
+            )
+            self.assert_fails(root, "review_mode=fresh-rereview")
+
+    def test_stage_v_receipt_must_cover_every_allowlisted_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(
+                self.stage_v_report(root, digest).replace(
+                    "; round-previous-prior-issues.csv]; public_endpoints=",
+                    "]; public_endpoints=",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "Stage-V opened receipt must exactly equal")
+
+    def test_stage_v_rejects_missing_prior_allowlisted_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(self.stage_v_report(root, digest), encoding="utf-8")
+            (root / "stage-v-inputs" / "round-previous-prior-issues.csv").unlink()
+            self.assert_fails(root, "missing prior allowlisted artifact")
+
+    def test_stage_v_rejects_prior_allowlisted_artifact_hash_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(self.stage_v_report(root, digest), encoding="utf-8")
+            prior_path = (
+                root / "stage-v-inputs" / "round-previous-prior-issues.csv"
+            )
+            prior_path.write_text(
+                prior_path.read_text(encoding="utf-8") + "\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "prior allowlisted artifact hash mismatch")
+
+    def test_stage_v_rejects_phantom_prior_finding_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(
+                self.stage_v_report(root, digest).replace(
+                    "| OLD-F01 | resolved |",
+                    "| GHOST-F99 | resolved |",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "phantom prior finding IDs")
+
+    def test_stage_v_rejects_missing_prior_finding_id(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            report = self.stage_v_report(root, digest)
+            prior_path = (
+                root / "stage-v-inputs" / "round-previous-prior-issues.csv"
+            )
+            old_hash = hashlib.sha256(prior_path.read_bytes()).hexdigest().upper()
+            _headers, rows = read_csv(prior_path)
+            rows.append({
+                "PriorFindingID": "OLD-F02",
+                "PriorPDFSHA256": "B" * 64,
+                "PriorPDFAnchor": "physical p.1",
+                "Finding": "a second tracked prior issue",
+                "RequiredClosureEvidence": "visible current-PDF closure evidence",
+            })
+            write_csv(prior_path, PRIOR_ISSUES_COLUMNS, rows)
+            new_hash = hashlib.sha256(prior_path.read_bytes()).hexdigest().upper()
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(report.replace(old_hash, new_hash), encoding="utf-8")
+            self.assert_fails(root, "missing prior finding IDs")
+
+    def test_stage_v_rejects_false_csv_completion_checklist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(
+                self.stage_v_report(root, digest).replace(
+                    "open_academic_rows=1",
+                    "open_academic_rows=0",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "contradicts current CSV/report state")
+
+    def test_stage_v_cannot_claim_regression_without_complete_baseline(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            path.write_text(
+                self.stage_v_report(root, digest).replace(
+                    "| not assessed | none |", "| regression visible | none |"
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(root, "cannot be asserted without the complete prior baseline")
+
+    def test_stage_v_rejects_extra_sections_and_unbound_current_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.enable_fresh_rereview(root)
+            path = root / "94-post-freeze-prior-issue-closure.md"
+            text = self.stage_v_report(root, digest).replace(
+                hashlib.sha256(
+                    (root / "R1-comprehensive-review.md").read_bytes()
+                ).hexdigest().upper(),
+                "B" * 64,
+                1,
+            )
+            text += "\n## Prior repository proof\n\nAn unlisted old repository proves the claim.\n"
+            path.write_text(text, encoding="utf-8")
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("Stage-V section sequence", result.stdout)
+            self.assertIn("current frozen artifact identity list", result.stdout)
+
     def test_valid_helper_provenance_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -1650,9 +3611,16 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "actor_id": "H01",
                 "round_id": "fixture",
                 "retry_id": "r1",
-                "prompt_sha256": PROMPT_HASH,
-                "fresh_context_declaration": "clean empty context",
-                "input_receipt_access_declaration": "received prompt; opened PDF",
+                "prompt_sha256": "B" * 64,
+                "fresh_context_declaration": (
+                    "no inherited user/thread/task turns beyond system/developer "
+                    "instructions and the exact operational prompt"
+                ),
+                "input_receipt_access_declaration": (
+                    "received=[operational prompt]; opened=[frozen-thesis.pdf]; "
+                    "no unlisted substantive assertion was received; no prohibited "
+                    "context/artifact was used; neighboring paths were not enumerated"
+                ),
                 "received_blocks": ["operational prompt"],
                 "opened_inputs": ["frozen-thesis.pdf"],
                 "tool": "fixture",
@@ -1662,13 +3630,93 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "pdf_sha256_end": digest,
                 "outputs": [{"file": sidecar.name, "sha256": sidecar_hash}],
                 "limitations": [],
-                "recipient_stages": ["R5"],
+                "recipient_stages": ["R3"],
             }
             (helpers / "H01-provenance.json").write_text(
                 json.dumps(provenance), encoding="utf-8"
             )
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            old_opened = "; ".join(
+                VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "R3")
+            )
+            new_opened = "; ".join(
+                VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                    process, 3, "R3", root
+                )
+            )
+            for filename in (
+                "R3-comprehensive-review.md", "02-page-layout-ledger.md",
+                "03-bibliography-audit-ledger.md",
+                "04-citation-claim-audit-ledger.md",
+            ):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        f"opened=[{old_opened}]", f"opened=[{new_opened}]", 1
+                    ),
+                    encoding="utf-8",
+                )
             result = self.run_validator(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_helper_receipt_must_exactly_project_structured_arrays(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.install_helper_fixture(
+                root,
+                digest,
+                receipt=(
+                    "received=[secret prior review]; opened=[old-review.md]; "
+                    "no unlisted substantive assertion was received; no prohibited "
+                    "context/artifact was used; neighboring paths were not enumerated"
+                ),
+            )
+            self.assert_fails(
+                root,
+                "input_receipt_access_declaration must exactly project "
+                "received_blocks/opened_inputs",
+            )
+
+    def test_helper_recipient_must_record_provenance_and_output_as_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.install_helper_fixture(root, digest)
+            self.assert_fails(
+                root,
+                "opened receipt must exactly equal the canonical ordered R3 allowlist",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS junction test is Windows-specific")
+    def test_page_render_directory_junction_is_rejected_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external:
+            root = Path(directory)
+            self.build_bundle(root)
+            render_dir = root / "page-renders"
+            external_dir = Path(external) / "render-source"
+            external_dir.mkdir()
+            for source in list(render_dir.iterdir()):
+                source.rename(external_dir / source.name)
+            render_dir.rmdir()
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(render_dir), str(external_dir)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if created.returncode != 0:
+                self.skipTest(f"could not create NTFS junction: {created.stderr}")
+            try:
+                self.assert_fails(
+                    root,
+                    "closed current-round boundary contains "
+                    "symlink/junction/reparse entries: ['page-renders']",
+                )
+            finally:
+                render_dir.rmdir()
 
     def test_helper_hash_mismatch_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1717,6 +3765,661 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(report.is_file())
             self.assertIn("**PASS**", report.read_text(encoding="utf-8"))
+
+    def test_write_report_rejects_any_noncanonical_destination_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            rogue = root / "rogue.md"
+            result = self.run_validator(root, rogue)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "--write-report must target exactly the in-root regular file",
+                result.stdout,
+            )
+            self.assertFalse(rogue.exists())
+            clean = self.run_validator(root)
+            self.assertEqual(clean.returncode, 0, clean.stdout + clean.stderr)
+
+    def test_write_report_rejects_directory_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "95-bundle-validation.md"
+            report.mkdir()
+            sentinel = report / "sentinel.txt"
+            sentinel.write_text("unchanged", encoding="utf-8")
+            result = self.run_validator(root, report)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn(
+                "an existing destination must be a regular", result.stdout
+            )
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertTrue(report.is_dir())
+            self.assertEqual(sentinel.read_text(encoding="utf-8"), "unchanged")
+
+    def test_write_report_rejects_hard_link_without_mutation(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as external,
+        ):
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "95-bundle-validation.md"
+            source = Path(external) / "external-report.md"
+            sentinel = b"external sentinel must remain unchanged"
+            source.write_bytes(sentinel)
+            try:
+                os.link(source, report)
+            except (OSError, NotImplementedError) as exc:
+                self.skipTest(f"hard links unavailable on this filesystem: {exc}")
+            if source.stat().st_nlink < 2:
+                self.skipTest("filesystem did not expose a hard-link count")
+            result = self.run_validator(root, report)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("single-link file (st_nlink == 1)", result.stdout)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(source.read_bytes(), sentinel)
+            self.assertEqual(report.read_bytes(), sentinel)
+
+    def test_audit_owner_receipt_must_list_sources_claimed_opened(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "03-bibliography-audit-ledger.md"
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    f"public_endpoints=[{BIB_ENDPOINT}]",
+                    "public_endpoints=[none]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "public_endpoints omits authoritative endpoint(s) that this R3 "
+                "artifact says were opened",
+            )
+
+    def test_bibliography_mismatch_cannot_have_no_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+            row = next(
+                item for item in bib_rows
+                if item["Field"] == "retraction_withdrawal_correction_superseding"
+            )
+            row["Verdict"] = "mismatch"
+            row["CanonicalValue"] = "corrected record exists"
+            row["FindingDisposition"] = "none"
+            write_csv(
+                root / "03-bibliography-audit-ledger.csv",
+                BIB_LEDGER_COLUMNS,
+                bib_rows,
+            )
+            _, inventory = read_csv(root / "00-bibliography-inventory.csv")
+            (root / "03-bibliography-audit-ledger.md").write_text(
+                "# Bibliography ledger\n\n"
+                + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+                + markdown_table(
+                    BIB_MARKDOWN_HEADERS,
+                    bibliography_markdown_rows(inventory, bib_rows),
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "mismatch row must link an owning-reviewer R3-Fxx or "
+                "R3-Qxx disposition",
+            )
+
+    def test_citation_mismatch_cannot_have_none_as_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            _, citation_rows = read_csv(root / "04-citation-claim-audit-ledger.csv")
+            citation_rows[0]["Support"] = "mismatch"
+            citation_rows[0]["SeverityFinding"] = "none"
+            citation_rows[0]["DispositionEvidence"] = "none"
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            _, inventory = read_csv(root / "00-bibliography-inventory.csv")
+            (root / "04-citation-claim-audit-ledger.md").write_text(
+                "# Citation ledger\n\n"
+                + self.declaration(digest, process, "R3", [CITATION_ENDPOINT])
+                + markdown_table(
+                    CITATION_MARKDOWN_HEADERS,
+                    citation_markdown_rows(citation_rows, inventory),
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "mismatch row must link an owning-reviewer R3-Fxx or "
+                "R3-Qxx disposition",
+            )
+
+    def test_hardening_missing_92_csv_is_a_required_file_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "92-new-evidence-or-experiments.csv").unlink()
+            self.assert_fails(
+                root,
+                "missing required file: 92-new-evidence-or-experiments.csv",
+            )
+
+    def test_hardening_stage_v_prompt_presence_is_bound_to_stage_v_artifact(
+        self,
+    ) -> None:
+        with self.subTest(case="V prompt without 94"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["actor_prompt_sha256"]["V"] = ACTOR_PROMPT_HASHES["V"]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?m)^- Process-parameter file and SHA-256: .*$",
+                    "- Process-parameter file and SHA-256: "
+                    f"00-process-parameters.json / {process_digest}",
+                    manifest.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("actor_prompt_sha256 actor set mismatch", result.stdout)
+            self.assertIn("extra=['V']", result.stdout)
+
+        with self.subTest(case="94 without V prompt"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "94-post-freeze-prior-issue-closure.md").write_text(
+                "# Deliberately incomplete Stage V fixture\n",
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("actor_prompt_sha256 actor set mismatch", result.stdout)
+            self.assertIn("missing=['V']", result.stdout)
+
+    def test_hardening_chair_disagreement_rejects_phantom_chair_finding(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            chair = root / "90-chair-synthesis.md"
+            chair.write_text(
+                chair.read_text(encoding="utf-8").replace(
+                    "|---|---|---|---|---|---|---|\n\n"
+                    "## Thesis-level narrative and chapter logic",
+                    "|---|---|---|---|---|---|---|\n"
+                    "| D01 | C-F99 | phantom concern | one unsupported "
+                    "position | current frozen PDF | resolved | no action |\n\n"
+                    "## Thesis-level narrative and chapter logic",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "disagreements table contains unknown chair findings ['C-F99']",
+            )
+
+    def test_hardening_stage_s_actor_rows_have_canonical_order(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            summary = root / "93-user-facing-summary.md"
+            lines = summary.read_text(encoding="utf-8").splitlines()
+            r1_index = next(
+                index for index, line in enumerate(lines) if line.startswith("| R1 |")
+            )
+            r2_index = next(
+                index for index, line in enumerate(lines) if line.startswith("| R2 |")
+            )
+            lines[r1_index], lines[r2_index] = lines[r2_index], lines[r1_index]
+            summary.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            self.assert_fails(
+                root,
+                "independent-conclusion actor order must exactly be "
+                "['R1', 'R2', 'R3', 'AI', 'Chair']",
+            )
+
+    def test_hardening_reconciliation_statement_cannot_be_supplied_elsewhere(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            summary = root / "93-user-facing-summary.md"
+            canonical = (
+                "This summary introduces no new finding and uses no prior-round "
+                "or author-side information."
+            )
+            text = summary.read_text(encoding="utf-8")
+            text = text.replace(
+                "# Current-round user-facing review summary\n\n",
+                "# Current-round user-facing review summary\n\n"
+                + canonical
+                + "\n\n",
+                1,
+            ).replace(
+                f"- Statement: {canonical}",
+                "- Statement: This field is deliberately incorrect.",
+                1,
+            )
+            summary.write_text(text, encoding="utf-8")
+            self.assert_fails(
+                root,
+                "reconciliation Statement must exactly equal the canonical "
+                "clean Stage-S non-invention statement",
+            )
+
+    def test_hardening_duplicate_governing_local_neutral_file_is_rejected(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            rule = root / "official-rule.txt"
+            rule.write_text("synthetic official rule fixture", encoding="utf-8")
+            rule_hash = hashlib.sha256(rule.read_bytes()).hexdigest().upper()
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            entry = {
+                "neutral_file": rule.name,
+                "official_title": "Synthetic official rule",
+                "sha256": rule_hash,
+            }
+            process["governing_local_files"] = [entry, dict(entry)]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?m)^- Process-parameter file and SHA-256: .*$",
+                    "- Process-parameter file and SHA-256: "
+                    f"00-process-parameters.json / {process_digest}",
+                    manifest.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "duplicate governing_local_files neutral_file 'official-rule.txt'",
+            )
+
+    def test_hardening_governing_file_cannot_reuse_reserved_round_basename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            reserved = root / "R1-comprehensive-review.md"
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["governing_local_files"] = [{
+                "neutral_file": reserved.name,
+                "official_title": "Synthetic colliding rule",
+                "sha256": hashlib.sha256(reserved.read_bytes()).hexdigest().upper(),
+            }]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(
+                root,
+                "governing_local_files[0].neutral_file "
+                "'R1-comprehensive-review.md' collides with a reserved "
+                "skill/round basename",
+            )
+
+    def test_hardening_frozen_pdf_cannot_reuse_governing_file_basename(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            frozen_name = process["frozen_pdf_file"]
+            frozen_hash = hashlib.sha256((root / frozen_name).read_bytes()).hexdigest().upper()
+            process["governing_local_files"] = [{
+                "neutral_file": frozen_name,
+                "official_title": "Synthetic colliding rule",
+                "sha256": frozen_hash,
+            }]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(
+                root,
+                f"frozen_pdf_file {frozen_name!r} collides with a governing local file",
+            )
+
+    def test_hardening_reserved_names_use_portable_casefolded_comparison(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            alias = root / "r1-comprehensive-review.md"
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["governing_local_files"] = [{
+                "neutral_file": alias.name,
+                "official_title": "Synthetic case-alias rule",
+                "sha256": hashlib.sha256(alias.read_bytes()).hexdigest().upper(),
+            }]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(
+                root,
+                "'r1-comprehensive-review.md' collides with a reserved "
+                "skill/round basename",
+            )
+
+    def test_hardening_governing_names_reject_win32_aliases_and_render_names(
+        self,
+    ) -> None:
+        for name, expected in (
+            (
+                "official-rule.txt.",
+                "must be a neutral portable basename without filesystem aliases",
+            ),
+            (
+                "P0001.png",
+                "'P0001.png' collides with a reserved skill/round basename",
+            ),
+        ):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                rule = root / name.rstrip(" .")
+                if not rule.exists():
+                    rule.write_text("synthetic rule", encoding="utf-8")
+                process_path = root / "00-process-parameters.json"
+                process = json.loads(process_path.read_text(encoding="utf-8"))
+                process["governing_local_files"] = [{
+                    "neutral_file": name,
+                    "official_title": "Synthetic alias rule",
+                    "sha256": hashlib.sha256(rule.read_bytes()).hexdigest().upper(),
+                }]
+                process_path.write_text(json.dumps(process), encoding="utf-8")
+                self.assert_fails(root, expected)
+
+    def test_hardening_governing_duplicate_detection_is_case_insensitive(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            rule = root / "official-rule.txt"
+            rule.write_text("synthetic official rule fixture", encoding="utf-8")
+            rule_hash = hashlib.sha256(rule.read_bytes()).hexdigest().upper()
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["governing_local_files"] = [
+                {
+                    "neutral_file": "official-rule.txt",
+                    "official_title": "Synthetic official rule one",
+                    "sha256": rule_hash,
+                },
+                {
+                    "neutral_file": "OFFICIAL-RULE.TXT",
+                    "official_title": "Synthetic official rule two",
+                    "sha256": rule_hash,
+                },
+            ]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(
+                root,
+                "duplicate governing_local_files neutral_file 'OFFICIAL-RULE.TXT'",
+            )
+
+    def test_hardening_reviewer_receipt_rejects_extra_prior_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            reviewer = root / "R1-comprehensive-review.md"
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8").replace(
+                    "opened=[", "opened=[old-review.md; ", 1
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "opened receipt must exactly equal the canonical ordered R1 allowlist",
+            )
+
+    def test_hardening_receipt_rejects_duplicate_structured_keys(self) -> None:
+        mutations = (
+            (
+                "received=[operational prompt]; opened=[",
+                "received=[operational prompt]; received=[user rebuttal]; opened=[",
+            ),
+            (
+                "]; public_endpoints=[none]; no unlisted",
+                "]; opened=[prior-review.md]; public_endpoints=[none]; no unlisted",
+            ),
+            (
+                "public_endpoints=[none]; no unlisted",
+                "public_endpoints=[none]; public_endpoints=[https://invalid.example]; "
+                "no unlisted",
+            ),
+        )
+        for old, new in mutations:
+            with self.subTest(new=new), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                reviewer = root / "R1-comprehensive-review.md"
+                reviewer.write_text(
+                    reviewer.read_text(encoding="utf-8").replace(old, new, 1),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "input receipt must use the exact closed grammar with one "
+                    "received, one opened, one public_endpoints",
+                )
+
+    def test_hardening_closed_round_root_rejects_old_review_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "old-review.md").write_text(
+                "# Prohibited prior-round review\n",
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "closed current-round root contains unallowlisted file(s): "
+                "['old-review.md']",
+            )
+
+    def test_hardening_reviewer_retry_id_is_process_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            reviewer = root / "R1-comprehensive-review.md"
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8").replace(
+                    "- Review retry ID: r1",
+                    "- Review retry ID: r9",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "Review retry ID does not equal the process envelope",
+            )
+
+    def test_hardening_indented_setext_heading_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            reviewer = root / "R1-comprehensive-review.md"
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8").replace(
+                    "## Role, scope, and independence",
+                    "  Disguised heading\n  -----------------\n\n"
+                    "## Role, scope, and independence",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "Setext headings are not allowed in the validated Markdown dialect",
+            )
+
+    def test_hardening_reviewer_question_requires_chair_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            reviewer = root / "R1-comprehensive-review.md"
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8").replace(
+                    "|---|---|---|---|---|\n\n"
+                    "## Coverage and limitations",
+                    "|---|---|---|---|---|\n"
+                    "| R1-Q01 | physical p.1 | Does the rendered claim cover "
+                    "all cases? | The submitted PDF does not resolve the "
+                    "scope. | A precise author clarification or visible "
+                    "evidence is needed. |\n\n"
+                    "## Coverage and limitations",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "disagreements table omits chair dispositions ['R1-Q01']",
+            )
+
+    def test_hardening_92_csv_rejects_missing_and_phantom_n_coverage(self) -> None:
+        with self.subTest(case="missing N row"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            for filename, columns in (
+                ("91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS),
+                ("93-current-actionable-items.csv", ACADEMIC_SUMMARY_COLUMNS),
+            ):
+                _headers, rows = read_csv(root / filename)
+                rows[0]["Remedy"] = "N"
+                write_csv(root / filename, columns, rows)
+            for filename in (
+                "91-revision-ledger.md",
+                "90-chair-synthesis.md",
+                "93-user-facing-summary.md",
+            ):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "| S2 | N/A | W | physical p.1 |",
+                        "| S2 | N/A | N | physical p.1 |",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+            evidence_md = root / "92-new-evidence-or-experiments.md"
+            evidence_md.write_text(
+                evidence_md.read_text(encoding="utf-8").replace(
+                    "| L01 | W | physical p.1 | correct the wording | reinspect p.1 |\n",
+                    "",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "92 evidence coverage of open Remedy=N rows: missing IDs ['L01']",
+            )
+
+        with self.subTest(case="phantom N row"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            write_csv(
+                root / "92-new-evidence-or-experiments.csv",
+                EVIDENCE_ITEM_COLUMNS,
+                [{
+                    "EvidenceItemID": "N01",
+                    "LedgerID": "L99",
+                    "ChairFindingID": "C-F99",
+                    "Remedy": "N",
+                    "Item": "phantom additional experiment",
+                    "ClaimThatDependsOnIt": "phantom unsupported claim",
+                    "WhyWritingIsInsufficient": "new evidence would be required",
+                    "MinimumViableEvidence": "one bounded experiment",
+                    "ConsequenceIfUnavailable": "remove the phantom claim",
+                }],
+            )
+            self.assert_fails(
+                root,
+                "LedgerID must refer to one open current 91 row with Remedy=N",
+            )
+
+    def test_hardening_stage_s_csv_row_order_tracks_authoritative_ledgers(
+        self,
+    ) -> None:
+        with self.subTest(kind="academic"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, ledger_rows = read_csv(root / "91-revision-ledger.csv")
+            second = dict(ledger_rows[0])
+            second["LedgerID"] = "L02"
+            second["ChairFindingID"] = "C-F02"
+            write_csv(
+                root / "91-revision-ledger.csv",
+                ACADEMIC_LEDGER_COLUMNS,
+                [ledger_rows[0], second],
+            )
+            write_csv(
+                root / "93-current-actionable-items.csv",
+                ACADEMIC_SUMMARY_COLUMNS,
+                [second, ledger_rows[0]],
+            )
+            self.assert_fails(
+                root,
+                "93-current-actionable-items.csv: row order must exactly follow "
+                "the open 91-revision-ledger.csv row order",
+            )
+
+        with self.subTest(kind="AI"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, ledger_rows = read_csv(root / "91-ai-actionable-ledger.csv")
+            second = dict(ledger_rows[0])
+            second["AIFindingID"] = "AI-F02"
+            write_csv(
+                root / "91-ai-actionable-ledger.csv",
+                AI_LEDGER_COLUMNS,
+                [ledger_rows[0], second],
+            )
+            write_csv(
+                root / "93-current-ai-actionable-items.csv",
+                AI_SUMMARY_COLUMNS,
+                [second, ledger_rows[0]],
+            )
+            self.assert_fails(
+                root,
+                "93-current-ai-actionable-items.csv: row order must exactly follow "
+                "the open 91-ai-actionable-ledger.csv row order",
+            )
 
 
 if __name__ == "__main__":

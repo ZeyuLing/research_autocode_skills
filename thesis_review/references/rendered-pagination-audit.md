@@ -16,6 +16,17 @@ Write `02-page-layout-ledger.csv` as the machine-readable master and mirror it i
 | Page ID | Physical page | Printed page | Region | Dominant content | Signals | Inspection mode/scale | Render DPI | Render artifact ID/hash | Neighbor pages checked | Disposition | Evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 
+This is an exact projection of `02-page-layout-ledger.csv`, not an independently
+worded summary. Use the header above verbatim and in that order. Sort rows by
+`PageID`, then project these CSV fields in order:
+`PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence`.
+Every logical Markdown cell must equal the corresponding authoritative CSV
+scalar under the common escaping rule in `ledger-validation.md`; the
+`PDFSHA256` column is projected through the checksum declaration and is checked
+separately on every CSV row. Changing a disposition, evidence statement, render
+hash, or any other non-ID cell while retaining the same Page ID invalidates the
+projection.
+
 Use continuous deterministic Page IDs `P0001...` in physical-page order, with `Pnnnn` bound to physical page `nnnn`. Retain every inspected PNG in the round as `page-renders/<PageID>.png`; the validator decodes its pixels and checks its PNG structure, pixel dimensions against the corresponding PDF page and declared DPI, and exact SHA-256. `Region` distinguishes front matter, chapter, references, appendix, and back matter. `Signals` records automated or visual triage. `Inspection mode/scale` is `individual`, `small-legible-group`, or `full-scale` with the actual zoom/scale; every page needs one valid inspection record, and every suspect page needs `full-scale`. `Render artifact ID/hash` records the retained PNG's exact 64-hex hash, optionally prefixed by its PageID; do not put an arbitrary token or the source-PDF hash there. `Disposition` is `clean`, `intentional`, `finding <ID>`, or `recheck after edit`. Do not omit blank pages; explain whether each is template-mandated, chapter-structure-induced, or erroneous. Reconcile the parsed PDF page count, retained render filenames, Stage-P inventory, CSV, and complete Markdown table Page-ID sets; duplicate/missing/extra IDs and PageID/physical-page swaps must all be zero.
 
 ## 3. Mandatory triage signals

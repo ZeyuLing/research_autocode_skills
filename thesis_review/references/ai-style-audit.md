@@ -102,6 +102,27 @@ Write `05-ai-style-assessment.md` with:
 - passages sampled across every authored chapter;
 - limitations and the explicit statement: **This is a prose-style assessment, not a determination of AI use, authorship, plagiarism, or misconduct.**
 
+The `Required disclaimer` field must equal that sentence exactly; placing the
+sentence elsewhere cannot compensate for a changed or contradictory field.
+Do not add structured fields for an AI probability, percentage, rate, ratio,
+share, detector score/positive rate, academic or defense grade, reviewer
+severity/remedy, authorship or AI-use verdict/conclusion/determination, or
+misconduct determination. The validator rejects those fields even when the rest
+of the report is complete. Equivalent label variants are also prohibited:
+normalize Unicode, spacing, hyphens, and case before applying the boundary. Thus
+labels such as `AI probability estimate`, `AI-generated percentage`, `AI content
+ratio`, `AI 概率`, `AI生成占比`, detector-likelihood/positive-rate scores,
+academic grades, defense verdicts, authorship conclusions, AI-use conclusions,
+and misconduct conclusions cannot evade the separation rule through wording
+variation.
+
+The colon-labeled bullet fields in `05-ai-style-assessment.md` are a closed
+schema: use only the exact field labels shown in `report-template.md`. Put
+signal-family analysis, counter-evidence, limitations, and any sealed
+out-of-scope observation in paragraphs, tables, or bullets without colon-style
+field labels. An extra or renamed colon-labeled bullet invalidates the report;
+free prose cannot compensate for or contradict the required disclaimer.
+
 The chair copies every unresolved `material` or `local` style remedy into the separate AI-actionable ledger without translating it to `S0--S4` or changing the defense grade. Any such open finding blocks a claim that the thesis has completed final prose-polish review, regardless of the overall signal label. The judgment remains separate from the R1--R5 category/recommendation distribution and does not by itself change the academic, defense, or integrity conclusion.
 
 After prose edits, run the assessor again on the newly frozen PDF without showing it the previous assessment. Compare current and prior AI reports only in a separately labeled Stage-V longitudinal style comparison after the current R reports, chair outputs, and Stage-S summary are frozen. Never expose the prior AI report to the current chair or use the comparison to alter current grades, findings, revision ledger, or clean summary.

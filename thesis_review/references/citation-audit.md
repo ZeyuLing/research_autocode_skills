@@ -38,16 +38,39 @@ Use continuous deterministic rendered-reference IDs `REF0001...` in PDF order. I
 | Reference ID | Displayed label | Cited? | Type | Title | Ordered authors | Year | Venue | Publication status | Volume/issue | Pages/article no. | Persistent IDs/URL/access date | Existence | Retraction/correction/superseding | Finding/disposition |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
+The bibliography table is a deterministic projection of the authoritative
+long-form CSV, not free-form reviewer prose. Use the header above verbatim and
+sort summary rows by `ReferenceID`. `Reference ID`, `Displayed label`, and
+`Cited?` project their inventory/CSV scalars directly. Each audit column from
+`Type` through `Retraction/correction/superseding` uses the fixed compact-JSON
+field-record serialization defined in `ledger-validation.md`; grouped columns
+use the documented fixed field order. `Finding/disposition` serializes all
+seventeen field dispositions in that same order. Consequently, a title, author,
+year, canonical value, verdict, evidence endpoint/date/note, or disposition
+cannot differ between the signed Markdown and CSV while retaining the same
+Reference ID.
+
 The authoritative machine-readable master is `03-bibliography-audit-ledger.csv` in long form, with columns:
 
 `ReferenceID,DisplayedLabel,Cited,Field,RenderedValue,CanonicalValue,Verdict,EvidenceEndpoint,EndpointType,CheckedAt,EvidenceNote,FindingDisposition,PDFSHA256`.
 
-For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. For a verified verdict, record the exact `http(s)` authoritative endpoint and an ISO-8601 `CheckedAt`; for an inaccessible official route, use `unverifiable`, leave the endpoint blank if necessary, and record the attempted route/query/date and access result in `EvidenceNote`. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
+For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. For a verified verdict, record the exact `http(s)` authoritative endpoint and an ISO-8601 `CheckedAt`; for an inaccessible official route, use `unverifiable`, leave the endpoint blank if necessary, and record the attempted route/query/date and access result in `EvidenceNote`. Every `mismatch` row names an actual current owning-reviewer finding or question (`R5-Fxx`/`R5-Qxx` for a doctorate; `R3-Fxx`/`R3-Qxx` for a master's thesis) in `FindingDisposition`; `none`, `no finding`, and unlinked prose do not close that row. An `unverifiable` row instead follows the attempted-route contract and may remain a calibrated limitation unless the owner elevates it. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
 
 In `04-citation-claim-audit-ledger.md`, create the following human-readable projection with one row per citation--source pair:
 
 | Pair ID | Occurrence ID | PDF location | Exact attached proposition | Reference ID | Displayed label | Public source/identifier | Content source opened and exact locator | Support | Metadata/status | Severity/finding | Disposition/evidence |
 |---|---|---|---|---|---|---|---|---|---|---|---|
+
+This table is an exact ordered projection of
+`04-citation-claim-audit-ledger.csv`. Sort rows by `PairID`; project every scalar
+field under the common escaping rule in `ledger-validation.md`; obtain
+`Displayed label` from `00-bibliography-inventory.csv` by the row's
+`ReferenceID`. The combined source/locator cell is the compact JSON object
+`{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`
+with that exact key order and no extra whitespace. The CSV `PDFSHA256` is
+projected through the checksum declaration and validated separately. An
+unchanged Pair ID therefore cannot conceal drift in proposition, source,
+locator, support, metadata status, severity/finding, or disposition/evidence.
 
 Use continuous occurrence IDs `C0001...` in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference and assign continuous Pair IDs `C0001-S01`, `C0001-S02...`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
 
@@ -55,7 +78,23 @@ The authoritative CSV schema is exactly the contract in `ledger-validation.md`:
 
 `PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`.
 
-The Markdown projection may combine `ContentSourceOpened` and `ExactSourceLocator` for readability; the CSV keeps them separate and carries the source PDF checksum.
+The Markdown projection combines `ContentSourceOpened` and `ExactSourceLocator`
+only through the fixed JSON serialization above; the CSV keeps them separate
+and carries the source PDF checksum. `MetadataStatus` is exactly `verified`,
+`mismatch`, or `unverifiable` and is reconciled by the chair against the
+independent bibliography identity fields; it is not free-form prose.
+
+Whenever `Support` is `partial`, `context-only`, `mismatch`, `unverifiable`, or
+`not-needed`, or `MetadataStatus` is `mismatch`/`unverifiable`, the two
+disposition columns must name an actual current owning-reviewer finding or
+question (`R4-Fxx`/`R4-Qxx` for a doctorate; `R3-Fxx`/`R3-Qxx` for a master's
+thesis). For `partial`, `context-only`, `unverifiable`, or `not-needed` only,
+`DispositionEvidence` may instead begin with the machine-auditable marker
+`reasoned non-finding:` followed by a substantive explanation. A support or
+metadata `mismatch` is a contradiction and cannot use that waiver. A bare
+`none`, `no finding`, or severity word is not a disposition.
+When a mismatch links a finding rather than a question, that finding is at least
+`S3`; an `S4` label cannot waive a documented contradiction.
 
 ## 3. Static closure checks
 

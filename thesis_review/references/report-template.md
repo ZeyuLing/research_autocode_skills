@@ -35,9 +35,12 @@ thesis-review-round-YYYYMMDD/
   91-revision-ledger.csv
   91-ai-actionable-ledger.csv
   92-new-evidence-or-experiments.md
+  92-new-evidence-or-experiments.csv
   93-user-facing-summary.md
   93-current-actionable-items.csv
   93-current-ai-actionable-items.csv
+  stage-v-inputs/                       # optional; exact copied inputs when Stage V runs
+    round-previous-prior-issues.csv     # required Stage-V prior-ID master
   94-post-freeze-prior-issue-closure.md  # optional, only after a fresh re-review round is frozen
   95-bundle-validation.md               # mechanical Stage-O validation, never reviewer input
 ```
@@ -75,51 +78,59 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
   "output_language": "zh-CN",
   "governing_rule_urls": [],
   "governing_local_files": [{"neutral_file": "rule-01.pdf", "official_title": "...", "sha256": "..."}],
-  "decision_regime_status": "verified-institutional|skill-default|undetermined"
+  "decision_regime_status": "verified-institutional|skill-default|undetermined",
+  "actor_prompt_sha256": {"P": "...", "R1": "...", "R2": "...", "R3": "...", "AI": "...", "C": "...", "S": "..."}
 }
 ```
+
+`actor_prompt_sha256` is a closed mechanical launch plan. It contains `P`, every degree-appropriate `R` actor (`R1`--`R5` for a doctorate or `R1`--`R3` for a master's thesis), `AI`, `C`, and `S`, with one distinct 64-hex prompt hash per actor; `V` is present if and only if optional `94-post-freeze-prior-issue-closure.md` is actually launched. The hash is computed from the exact operational-prompt bytes before the fresh actor starts, and Stage O dispatches those same bytes. It does not contain thesis assertions. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and filesystem aliases are invalid. Governing-file and frozen-PDF basenames are mutually distinct and do not reuse any skill-reference, generated-artifact (including `P####.png`), or closed-root-directory basename.
 
 ## Manifest
 
 ```markdown
 # Frozen evidence manifest
 
-- Process-parameter file and SHA-256:
+- Process-parameter file and SHA-256: 00-process-parameters.json / <exact 64-hex file hash>
+- Actor ID: P
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
 - Packet-builder fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Packet-builder input-receipt/access declaration: prompt SHA-256; received messages/resources/preloads; exact local artifacts and public endpoints opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
-- Operational prompt SHA-256: `<exactly one 64-hex hash>`
-- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
-- Frozen at: `<exact process-envelope frozen_at value>`
-- Degree/institution/discipline:
-- Review round and purpose:
-- Frozen PDF path, SHA-256, `frozen_at` timestamp copied exactly from the process envelope, and pages:
-- Governing template/rules:
-- Reviewer-visible artifact: exactly one frozen thesis PDF
-- Permitted public citation-verification sources:
+- Packet-builder input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered P allowlist]; public_endpoints=[a duplicate-free subset of current process-rule URLs, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Operational prompt SHA-256: <exactly one 64-hex hash>
+- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
+- Frozen at: <exact process-envelope frozen_at value>
+- Degree/institution/discipline: degree_level=<value> ; degree_type=<value> ; institution=<value-or-null> ; school_or_department=<value-or-null> ; discipline=<value-or-null> ; expected_submission_year=<value-or-null>
+- Review round and purpose: round_id=<value> ; retry_id=<value> ; review_mode=<value> ; artifact_type=<value> ; output_language=<value>
+- Frozen PDF path, SHA-256, frozen_at timestamp, and pages: file=<frozen_pdf_file> ; sha256=<selected_pdf_sha256> ; frozen_at=<frozen_at> ; pages=<physical_page_count>
+- Governing template/rules: template=thesis-review/SKILL.md ; decision_regime_status=<value> ; sources=<sorted official URL/title values joined by " | ", or none>
+- Reviewer-visible artifact: exactly one frozen thesis PDF: <frozen_pdf_file>
+- Permitted public citation-verification sources: authoritative publisher, DOI, proceedings, and official full-text `http(s)` endpoints only
 - Prohibited context and artifacts: conversation/memory summaries, user explanations, earlier assistant outputs, other actors' messages, thesis source, `.bib`, build/auxiliary files, Git history, sibling repositories, local papers, code/config/logs, old rounds, source/provenance audits, and author-side records
-- Items explicitly out of scope:
+- Items explicitly out of scope: <concrete non-shell boundary>
 
 ## Thesis structure
-...
+Record a neutral structural map with physical-page anchors. Do not evaluate it.
 
 ## Thesis-stated questions and contributions — neutral navigation only
 Record only statements explicitly visible in the PDF, with exact page anchors. Do not adjudicate them or create a consensus map.
 
 ## Objective inventories and locations
-Chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, the complete numeric-bracket candidate ledger, citation occurrences, unmatched-bracket glyph count/dispositions, and PDF-derived corpus locations.
+Name at least `00-page-inventory.csv`, `00-bibliography-inventory.csv`, `00-citation-candidate-ledger.csv`, `00-citation-inventory.csv`, and `00-unmatched-bracket-ledger.csv`, plus the locations of chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, citation occurrences, and any PDF-derived corpus.
 
-- Numeric-bracket candidate rows: `<integer>`
-- Citation-classified candidate rows: `<integer>`
-- Non-citation-classified candidate rows: `<integer>`
-- Unmatched square-bracket glyphs: `<integer>`
-- Unmatched glyph dispositions: `<concrete physical-page/context audit result; state none found when the validated count is zero>`
+- Numeric-bracket candidate rows: <integer>
+- Citation-classified candidate rows: <integer>
+- Non-citation-classified candidate rows: <integer>
+- Unmatched square-bracket glyphs: <integer>
+- Unmatched glyph dispositions: <concrete physical-page/context audit result; state none found when the validated count is zero>
 ```
+
+The manifest uses exactly this H1 followed by these three H2 sections in this order. The fourteen identity bullets occur once, in the shown order, before the first H2. Its process fields are deterministic projections, not prose paraphrases. The process-parameter hash is the hash of the final closed JSON bytes; if the JSON changes, regenerate the manifest before any actor starts. Apart from specifically hash-bound governing-rule PDFs declared in the process envelope, the round root contains exactly one PDF: the process-selected frozen thesis.
 
 When the unmatched count is positive, `00-unmatched-bracket-ledger.csv` is the row-level master with schema `GlyphID,PhysicalPage,Glyph,AdjacentPDFText,Disposition,PDFSHA256`; the manifest disposition names that file and its exact row count. When the count is zero, retain the header-only CSV and state explicitly that none were found.
 
 `01-policy-basis.md` begins with the packet builder's same complete declaration block before recording only the verified governing regime and sources.
 
-Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: fresh-context declaration using the exact no-inherited-turn wording above; input-receipt/access declaration naming received and opened inputs, no unlisted substantive assertion, no prohibited context/artifact, and no neighboring-path enumeration; exact operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
+Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: exact `Actor ID`, `Review round ID`, and `Review retry ID`; fresh-context declaration using the exact no-inherited-turn wording above; one input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, the allowed `public_endpoints=[...]`, and the three boundary confirmations; the process-bound operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
 
 ## Independent reviewer report
 
@@ -127,18 +138,24 @@ Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same c
 # Rn — Comprehensive whole-thesis review — persona emphasis
 
 ## Role, scope, and independence
+- Actor ID: Rn
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
 - Whole-thesis mandate: Gate A--I
+- Persona assignment: exact degree-specific value from `reviewer-panels.md` and the list below
 - Persona emphasis:
 - Separate exhaustive audit duties, if any:
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Operational prompt SHA-256: `<exactly one 64-hex hash>`
-- Input-receipt/access declaration: received messages/resources/preloads; every local artifact and public endpoint opened; confirmation that no unlisted substantive assertion was received, no prohibited context/artifact was used, and neighboring paths were not enumerated
-- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
+- Operational prompt SHA-256: <exactly one 64-hex hash>
+- Input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered Rn allowlist]; public_endpoints=[a duplicate-free subset of endpoints allowed for this actor, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
 
 ## Verdict
 - Decision regime: institutional / skill-default
-- Official category, defense recommendation, and governing source: required under `institutional`; otherwise N/A
+- Official category: required under `institutional`; otherwise N/A
+- Official defense recommendation: required under `institutional`; otherwise N/A
+- Governing source: required under `institutional`; otherwise N/A
 - Academic grade: A / B / C / D — required under `skill-default`; otherwise N/A
 - Defense recommendation: 同意答辩 / 小修后可答辩 / 大修后重新送审，复审通过后方可答辩 / 不同意答辩 — required under `skill-default`; otherwise use the official wording above
 - Confidence:
@@ -198,7 +215,8 @@ Explain the additional scrutiny performed because of this reviewer's expertise. 
 - Confidence: high/medium/low
 
 ## Questions, not findings
-...
+| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |
+|---|---|---|---|---|
 
 ## Coverage and limitations
 ...
@@ -212,8 +230,8 @@ The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally r
 - Suspect-page signals / resolved / unresolved:
 - Actionable layout findings:
 - Neighbor-page verification status:
-- Machine-readable master: `02-page-layout-ledger.csv`; duplicate/missing/extra page IDs:
-- Source-forcing cause: `not verifiable from the PDF`
+- Machine-readable master: 02-page-layout-ledger.csv; duplicate/missing/extra page IDs:
+- Source-forcing cause: not verifiable from the PDF
 ```
 
 The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
@@ -234,7 +252,7 @@ The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally 
 - Retraction/withdrawal/correction/superseding-status fields verified / mismatched / legitimate N/A / unverifiable:
 - Suspected fabricated/nonexistent entries and adjudication status:
 - Metadata/status verified entries:
-- Machine-readable master: `03-bibliography-audit-ledger.csv`; duplicate/missing/extra reference IDs:
+- Machine-readable master: 03-bibliography-audit-ledger.csv; duplicate/missing/extra reference IDs:
 ```
 
 The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
@@ -250,12 +268,16 @@ The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionall
 - Mismatch pairs:
 - Inaccessible/unverifiable pairs:
 - Ledger rows and unchecked rows:
-- Machine-readable master: `04-citation-claim-audit-ledger.csv`; duplicate/missing/extra Pair IDs:
+- Machine-readable master: 04-citation-claim-audit-ledger.csv; duplicate/missing/extra Pair IDs:
 ```
 
-Questions are not counted as defects until evidence supports them.
+Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals, suspect/resolved/unresolved counts, and Gate-I actionable-finding counts reconcile to `02`; bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
+
+Questions are not counted as defects until evidence supports them. Use continuous `Rn-Q01...` IDs in report order; an empty canonical table is the explicit no-question result. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.
 
 Before freezing an R-numbered report, verify that the decision regime, category, recommendation, severity profile, and required revision path are consistent with `grading-and-verdicts.md`.
+
+Under `institutional`, `Governing source` is a duplicate-free semicolon-separated subset copied exactly from `governing_rule_urls` or the `official_title` values of hash-bound `governing_local_files` in the process envelope. An invented description or unrelated URL is invalid. Under `skill-default`, the governing-source field is `N/A`.
 
 ## Standalone AI-style assessment
 
@@ -263,14 +285,17 @@ Before freezing an R-numbered report, verify that the decision regime, category,
 # Standalone AI-style prose assessment
 
 ## Boundary and independence
+- Actor ID: AI
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
 - Frozen artifact:
 - Reviewer-visible inputs:
 - Excluded material:
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
 - Independence declaration:
-- Operational prompt SHA-256: `<exactly one 64-hex hash>`
-- Input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received; no prohibited context/artifact used; neighboring paths were not enumerated
-- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
+- Operational prompt SHA-256: <exactly one 64-hex hash>
+- Input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered AI allowlist]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
 - Required disclaimer: This is a prose-style assessment, not a determination of AI use, authorship, plagiarism, or misconduct.
 
 ## Overall judgment
@@ -279,7 +304,7 @@ Before freezing an R-numbered report, verify that the decision regime, category,
 - Rationale:
 
 ## Coverage and mechanical checks
-- Physical pages inspected:
+- Physical pages inspected: <physical_page_count> / <physical_page_count>
 - Authored sections inspected:
 - Recurrent-pattern queries/statistics:
 - Corpus exclusions:
@@ -305,6 +330,10 @@ PDF-visible non-style observations only, without AI finding IDs or severity; `no
 ```
 
 Do not add an academic/defense category, R1--R5 severity, AI probability, or misconduct finding to this report.
+The colon-labeled bullet fields above form a closed schema. Use no additional or
+renamed colon-labeled bullet field anywhere in this artifact; write
+signal-family discussion, counter-evidence, limitations, and sealed out-of-scope
+observations as paragraphs, tables, or bullets without colon-style field labels.
 
 ## Chair synthesis
 
@@ -312,17 +341,22 @@ Do not add an academic/defense category, R1--R5 severity, AI probability, or mis
 # Chair synthesis
 
 ## Clean-room boundary
+- Actor ID: C
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist:
-- Operational prompt SHA-256: `<exactly one 64-hex hash>`
-- Chair input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; confirm no unlisted substantive assertion, no prohibited context/artifact, and no neighboring-path enumeration
-- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md (omit the governing-file placeholder when none exist; expand every actual filename and R row exactly, in order, with no ellipsis)
+- Operational prompt SHA-256: <exactly one 64-hex hash>
+- Chair input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded allowlist above in the same order]; public_endpoints=[a duplicate-free subset of current process-rule URLs and current 03/04 evidence/content endpoints, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
 
 ## Overall risk and recommendation
 - Decision regime: institutional / skill-default
-- Overall official category, recommendation, and governing source: required under `institutional`; otherwise N/A
+- Overall official category: required under `institutional`; otherwise N/A
+- Overall official defense recommendation: required under `institutional`; otherwise N/A
+- Overall governing source: required under `institutional`; otherwise N/A
 - Overall academic grade: A / B / C / D — required under `skill-default`; otherwise N/A
-- Overall defense recommendation: exact Chinese action conclusion
+- Overall defense recommendation: exact skill-default Chinese action conclusion; `N/A` under `institutional`
 - Confidence:
 - Whole-thesis rationale:
 
@@ -332,16 +366,21 @@ Do not add an academic/defense category, R1--R5 severity, AI probability, or mis
 
 Validate this table before substantive synthesis. A report with a missing gate row must be returned to the same isolated reviewer for completion before that reviewer sees any other report.
 
+Each Gate cell exactly copies that reviewer's frozen Gate disposition. `Whole-thesis rationale` is the literal status `complete`. `Audit duty complete` is `yes` only for the assigned owner (doctoral R4/R5, or master's R3) and `not assigned` for every other reviewer; it is not a generic quality score. `Eligible for adjudication` must be `yes` for every included reviewer.
+
 ## Independent verdicts
 | Reviewer | Persona | Category/grade | Defense recommendation | Decision regime/source | Confidence | Decisive reason |
 |---|---|---|---|---|---|---|
 
-State the category distribution. Under the skill-default regime, do not convert letters to numbers: the chair's overall grade is an evidence-adjudicated decision, not an average, median, or automatic majority result. Explain any departure from a severe minority opinion or from the modal category.
+- Category distribution: <sorted category=count values joined by "; ">
+- Modal/severe-minority departure explanation: <at least one concrete sentence; say explicitly when there is no departure>
+
+Under the skill-default regime, do not convert letters to numbers: the chair's overall grade is an evidence-adjudicated decision, not an average, median, or automatic majority result. Explain any departure from a severe minority opinion or from the modal category.
 
 ## Standalone AI-style judgment
 - Signal: low / moderate / high / indeterminate
 - Confidence:
-- Material/local/optional findings:
+- Material/local/optional findings: material=<integer> ; local=<integer> ; optional=<integer>
 - Separation statement: report this outside the reviewer verdict distribution and do not infer AI use, authorship, plagiarism, or misconduct.
 
 ## AI-style actionable findings
@@ -354,12 +393,12 @@ These rows populate `91-ai-actionable-ledger.csv` and never receive academic sev
 ...
 
 ## Adjudicated findings
-| Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |
-|---|---|---|---|---|---|---|---|---|---|
+| Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |
+|---|---|---|---|---|---|---|---|---|---|---|
 
 ## Mandatory citation cross-ledger consistency gate
-| Rendered reference ID | R4 identity/source | R5 canonical identity | Version/record agreement | Affected Pair IDs | Conflict class (`none` / `local` / `substantive`) | Reclassification/finding | Resolution |
-|---|---|---|---|---|---|---|---|
+| Rendered reference ID | Displayed label | Affected Pair IDs | Citation-ledger identity/source projection | Bibliography-ledger canonical identity projection | Version/record agreement (`agree` / `disagree` / `not verifiable`) | Conflict class (`none` / `local` / `substantive`) | Chair finding ID(s) | Resolution (`closed` / `open`) |
+|---|---|---|---|---|---|---|---|---|
 
 - Unique cited rendered references joined:
 - Identity-agreement count:
@@ -370,9 +409,15 @@ These rows populate `91-ai-actionable-ledger.csv` and never receive academic sev
 - Unresolved conflicts:
 - Combined citation gate: pass / fail
 
+The table has exactly one row for every cited `ReferenceID`, in first-citation order. `Displayed label` is copied from `00-bibliography-inventory.csv`. `Affected Pair IDs` is the comma-space-joined sequence of all `04` rows for that reference. `Citation-ledger identity/source projection` is the exact ledger-order serialization `PairID=>PublicIdentifier @ ContentSourceOpened`, joined by ` ; ` and using `N/A` only for a blank content source. `Bibliography-ledger canonical identity projection` is the exact fixed-order serialization `field=CanonicalValue`, joined by ` ; `, for `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `isbn_or_other_persistent_id`, and `existence`.
+
+The agreement value is derived from the frozen ledgers: `disagree` when any projected bibliography field or citation `MetadataStatus` is `mismatch`; otherwise `not verifiable` when any is `unverifiable`; otherwise `agree`. A disagreement cannot have conflict class `none`. A local conflict maps only to an `S3` chair finding; a substantive conflict maps to an `S0`--`S2` chair finding. Conflict rows list canonical comma-space-separated current `C-Fxx` IDs and set resolution from the linked `91` statuses; a no-conflict row uses `none` and `closed`. Counts are derived from these rows, `Reclassified Pair IDs` counts all Pair IDs in non-`none` rows, and the combined gate passes exactly when no conflict row remains open.
+
 ## Disagreements and chair decisions
-| Topic | Positions | Evidence checked | Decision or unresolved status |
-|---|---|---|---|
+| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |
+|---|---|---|---|---|---|---|
+
+Keep this exact table even when it has no rows. Use continuous `D01...` IDs. `Source item IDs` is a canonical list containing current `Rn-Qxx` and/or `C-Fxx` IDs only. Every reviewer question and every `C-Fxx` whose `EvidenceStatus` is `rejected`, `not verifiable from submitted PDF`, or `disputed` appears exactly once. `Status` is exactly `resolved`, `unresolved`, `not verifiable`, `rejected`, or `disputed`; the row preserves the positions, checked evidence, and chair decision. Stage S projects the `unresolved`, `not verifiable`, and `disputed` rows exactly and in order.
 
 ## Thesis-level narrative and chapter logic
 ...
@@ -391,17 +436,17 @@ Only current-round adjudicated S4 suggestions, or `none`.
 
 Prioritize by risk, not by chapter order.
 
-`91-revision-ledger.md` begins with the chair's complete fresh-context, input-receipt/access, prompt-hash, and start/end PDF-hash declaration block before the tables.
+`91-revision-ledger.md` begins with the chair's complete actor/round/retry identity, fresh-context, exact input-receipt/access, process-bound prompt-hash, and start/end PDF-hash declaration block before the tables.
 
 ```markdown
-| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | Remedy | Exact PDF anchor | Direct observation | Minimum edit/evidence | Dependency | Owner | Status | Verification |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L01 | P0 | C-F01 | Rn-Fxx | S0/S1 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
-| L02 | P1 | C-F02 | Rn-Fxx | S2 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
-| L03 | P2 | C-F03 | Rn-Fxx | S3 | W/E/N/P | ... | ... | ... | ... | ... | open | ... |
+| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Minimum edit/evidence | Dependency | Owner | Status | Verification |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| L01 | P0 | C-F01 | Rn-Fxx | S0/S1 | procedural / integrity/foundational / N/A | W/E/N/P | ... | ... | verified / partially verified / not verifiable from submitted PDF / rejected / deduplicated / disputed | ... | ... | ... | open | ... |
+| L02 | P1 | C-F02 | Rn-Fxx | S2 | N/A | W/E/N/P | ... | ... | verified | ... | ... | ... | open | ... |
+| L03 | P2 | C-F03 | Rn-Fxx | S3 | N/A | W/E/N/P | ... | ... | verified | ... | ... | ... | open | ... |
 ```
 
-Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
+Every current reviewer `S0`--`S3` finding enters chair adjudication exactly once: either as its own row or as one member of a supported deduplicated row. `Source reviewer finding IDs` is a duplicate-free canonical comma-space list in reviewer/finding-number order; no current actionable finding may disappear, recur in two rows, or point to another round. `Ledger ID` and `Chair finding ID` are unique continuous `L01...` and `C-F01...` sequences. Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
 
 In the same `91-revision-ledger.md`, add the following separate table, mirrored exactly by `91-ai-actionable-ledger.csv`:
 
@@ -417,83 +462,99 @@ Every unresolved current-round `AI-Fxx` with `material` or `local` impact appear
 
 Always split the list:
 
-`92-new-evidence-or-experiments.md` begins with the chair's complete fresh-context, input-receipt/access, prompt-hash, and start/end PDF-hash declaration block before these sections.
+`92-new-evidence-or-experiments.md` begins with the chair's complete actor/round/retry identity, fresh-context, exact input-receipt/access, process-bound prompt-hash, and start/end PDF-hash declaration block before these sections. `92-new-evidence-or-experiments.csv` is the authoritative N-remedy row set with schema `EvidenceItemID,LedgerID,ChairFindingID,Remedy,Item,ClaimThatDependsOnIt,WhyWritingIsInsufficient,MinimumViableEvidence,ConsequenceIfUnavailable`.
 
 ```markdown
 ## No-new-experiment remedies (W/E/P)
-- Existing evidence the author may recover in a separate revision task; reviewers do not inspect it:
-- Writing or claim narrowing:
-- Policy confirmation:
+| Ledger ID | Remedy | Exact PDF anchor | Minimum edit/evidence | Verification |
+|---|---|---|---|---|
 
 ## Genuine new experiments or unavailable evidence (N)
-| Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |
-|---|---|---|---|---|
+| Evidence item ID | Ledger ID | Chair finding ID | Remedy | Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |
+|---|---|---|---|---|---|---|---|---|
 ```
 
-An empty `N` table is a valid and often preferable result.
+The W/E/P table is the exact ledger-order projection of every open current `91-revision-ledger.csv` row whose remedy is W, E, or P. Each open current row whose remedy is N has exactly one `92` CSV row and Markdown row; no other `91` row may enter the CSV. `EvidenceItemID` is continuous `N01...`, and `LedgerID`, `ChairFindingID`, and `Remedy=N` exactly match the linked `91` row. An empty N CSV/table is valid and often preferable when no open N remedy exists.
 
 ## Clean user-facing summary
 
 Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, or re-adjudicate evidence.
 
+The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
+
 ```markdown
 # Current-round user-facing review summary
 
 ## Clean-room identity
-- Review round ID:
-- Frozen PDF path and SHA-256:
+- Actor ID: S
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
+- Frozen PDF path and SHA-256: file=<frozen_pdf_file> ; sha256=<selected_pdf_sha256>
 - Summary fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: `00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md` (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
-- Operational prompt SHA-256: `<exactly one 64-hex hash>`
-- Summary input-receipt/access declaration: received messages/resources/preloads; opened artifacts/endpoints; no unlisted substantive assertion received; no prohibited context/artifact used; neighboring paths were not enumerated
-- Frozen PDF SHA-256 at start and end: `<start 64-hex hash> / <end 64-hex hash>` (both hashes must be on this one line)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md; 92-new-evidence-or-experiments.csv (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
+- Operational prompt SHA-256: <exactly one 64-hex hash>
+- Summary input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded current-round input allowlist above in the same order]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
 
 ## Independent and overall conclusions
-| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Confidence | Decisive current-round basis |
-|---|---|---|---|---|---|
-
-Keep the AI-style row visibly separate from R1--R5/R1--R3 and the chair; it has no defense category.
-
-The actor table is an exact projection, including its prose basis; Stage S does not write a new rationale. For each `Rn`, `Persona/status = Rn.Persona emphasis`, category/recommendation/confidence copy the corresponding reviewer verdict fields byte-for-byte after trimming, and `Decisive current-round basis = Rn.One-paragraph whole-thesis rationale`. For `AI`, use `Persona/status = standalone AI-style assessment`, category = its exact `AI-style signal`, recommendation = `N/A`, confidence = its exact confidence, and basis = its exact `Rationale`. For `Chair`, use `Persona/status = chair adjudication`, copy its overall category/recommendation/confidence, and basis = its exact `Whole-thesis rationale`. Any paraphrase, extra context, old-round statement, author explanation, or repository fact in this table invalidates Stage S.
+| Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Decision regime/source | Confidence | Decisive current-round basis |
+|---|---|---|---|---|---|---|
 
 ## Current actionable items
-| Ledger ID | Current finding ID(s) | Severity / remedy | Exact PDF anchor | Direct PDF-visible observation | Minimum required action | Origin reviewer(s) | Chair disposition |
-|---|---|---|---|---|---|---|---|
+| Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct PDF-visible observation | Evidence status | Minimum required action | Dependency | Owner | Chair disposition | Verification |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 
 ## Current AI-style actionable items — separate from academic grading
-| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status |
-|---|---|---|---|---|---|
+| AI finding ID | Impact (`material` / `local`) | Exact PDF anchor | Direct style observation | Minimum editing action | Chair status | Verification |
+|---|---|---|---|---|---|---|
+
+## Current new evidence or experiments (N)
+| Evidence item ID | Ledger ID | Chair finding ID | Remedy | Item | Claim that depends on it | Why writing is insufficient | Minimum viable evidence | Consequence if unavailable |
+|---|---|---|---|---|---|---|---|---|
 
 ## Optional suggestions
-Copy the current chair's `Optional suggestions` section exactly after whitespace normalization; do not summarize or add an item. Use `none` only when the chair section is `none`.
+none
 
-## Unresolved questions and review limitations
-Copy the current chair's `Review limitations` section exactly after whitespace normalization; do not summarize or add an item. Use `none` only when the chair section is `none`.
+## Unresolved questions
+| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |
+|---|---|---|---|---|---|---|
+
+## Review limitations
+none
 
 ## Reconciliation
-- Open required rows in 91-revision-ledger.md:
-- Rows in Current actionable items:
+- Open required rows in 91-revision-ledger.csv:
+- Rows in 93-current-actionable-items.csv:
+- Rows in Current actionable items Markdown table:
 - Missing ledger IDs: none / list and mark summary invalid
 - Extra summary IDs: none / list and mark summary invalid
 - Duplicate IDs: none / list and mark summary invalid
 - Open AI rows in 91-ai-actionable-ledger.csv:
-- Rows in Current AI-style actionable items:
+- Rows in 93-current-ai-actionable-items.csv:
+- Rows in Current AI-style actionable items Markdown table:
 - Missing/extra/duplicate AI finding IDs: none / list and mark summary invalid
+- Rows in 92-new-evidence-or-experiments.csv:
+- Rows in Current new evidence or experiments Markdown table:
+- Missing/extra/duplicate evidence item IDs: none / list and mark summary invalid
 - Statement: This summary introduces no new finding and uses no prior-round or author-side information.
 ```
 
-The academic required row sets and the AI-actionable row sets must each be identical to their respective `91` sidecars. Every academic row traces to a current-round chair finding, current reviewer finding ID(s), and exact PDF anchor; every AI row traces to a current `AI-Fxx` and exact PDF anchor. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. If reconciliation fails, do not improvise; return the inconsistency to the clean chair or regenerate Stage S.
+The H1 and nine H2 headings above are an exact closed sequence: no extra H2, preamble, appendix, or free prose outside those sections is allowed. `Clean-room identity` contains only its nine bullets in the shown order. The allowlist is the exact canonical ordered basename sequence with each name once; a set-equivalent reorder or duplicate is invalid. `Independent and overall conclusions`, the three current-item sections, and `Unresolved questions` contain only their canonical tables. `Reconciliation` contains only its fourteen shown bullets in order. Replace the illustrative `none` bodies in `Optional suggestions` and `Review limitations` with exact whitespace-normalized copies of the current Chair sections; keep `none` only when the Chair section is `none`.
 
-For deterministic reconciliation, the CSV projections are exact field mappings, not paraphrases. For each open academic row, `93.CurrentFindingIDs = 91.ChairFindingID`, `93.SeverityRemedy = 91.Severity + "/" + 91.Remedy`, `93.ExactPDFAnchor = 91.ExactPDFAnchor`, `93.DirectPDFObservation = 91.DirectObservation`, `93.MinimumRequiredAction = 91.MinimumEditEvidence`, `93.OriginReviewers = 91.SourceReviewerFindingIDs`, and `93.ChairDisposition = 91.Status`. For each open material/local AI row, `AIFindingID`, `Impact`, `ExactPDFAnchor`, `DirectStyleObservation`, and `MinimumEditingAction` are byte-for-byte equal after CSV parsing and trimming, and `93.ChairStatus = 91.Status`.
+Keep the AI-style actor row visibly separate from the reviewers and Chair; its defense recommendation and regime/source are `N/A`. The actor table is an exact projection, including its prose basis; Stage S writes no new rationale. Reviewer persona fields come only from the unique `Role, scope, and independence` section, reviewer verdict fields from the unique `Verdict` section, AI fields from the unique `Overall judgment` section, and Chair fields from the unique `Overall risk and recommendation` section. `Persona/status = Persona assignment + " — " + Persona emphasis` for reviewers, `standalone AI-style assessment` for AI, and `chair adjudication` for Chair. Category, recommendation, regime/source, confidence, and rationale copy their authoritative source fields byte-for-byte after trimming. The degree-specific persona-assignment values are the exact values listed earlier in this file. Any paraphrase, extra context, old-round statement, author explanation, or repository fact invalidates Stage S.
+
+The open academic and AI row sets are lossless, order-preserving projections: `93-current-actionable-items.csv` has exactly the same fifteen columns and values, in the same order, as the open subset of `91-revision-ledger.csv`; `93-current-ai-actionable-items.csv` has exactly the same seven columns and values, in the same order, as the open subset of `91-ai-actionable-ledger.csv`. Their Stage-S Markdown tables preserve the corresponding CSV order and exact fields. The current N-evidence table is the exact ordered projection of `92-new-evidence-or-experiments.csv`. The conclusion table order is `R1...Rn, AI, Chair`. `Unresolved questions` is the exact ordered subset of the current Chair decision table whose status is `unresolved`, `not verifiable`, or `disputed`. The `Statement` reconciliation value is exactly `This summary introduces no new finding and uses no prior-round or author-side information.` Every row and statement is current-round-only. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. If reconciliation fails, return the inconsistency to the clean Chair or regenerate Stage S; never improvise.
 
 ## Fresh re-review and optional prior-issue closure
 
 ```markdown
 ## Fresh category and defense recommendation — freeze before any prior ledger is opened
 - Decision regime: institutional / skill-default
-- Official category, recommendation, and governing source: required under `institutional`; otherwise N/A
+- Official category: required under `institutional`; otherwise N/A
+- Official defense recommendation: required under `institutional`; otherwise N/A
+- Governing source: required under `institutional`; otherwise N/A
 - Academic grade: A / B / C / D — required under `skill-default`; otherwise N/A
-- Defense recommendation: exact Chinese action conclusion
+- Defense recommendation: exact skill-default Chinese action conclusion; otherwise N/A
 - Confidence:
 - Rationale for the newly frozen artifact:
 
@@ -511,13 +572,23 @@ Only after all fresh R reports, the clean chair outputs, and `93-user-facing-sum
 
 ```markdown
 # Post-freeze prior-issue closure verification
-- Current frozen PDF and round:
-- Current fresh reports/chair/summary already frozen:
-- Specifically allowlisted prior ledger/author response:
-- Prior frozen AI-style report identity/hash, only if longitudinal style comparison requested: not run / ...
-- Full regression baseline: not run / prior frozen PDF hash plus prior inventory/page/bibliography/citation ledger identities and hashes
-- Fresh-context and input-receipt/access declarations:
-- Frozen current PDF SHA-256 at start and end:
+
+## Boundary and frozen-current-round identity
+- Actor ID: V
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
+- Current frozen PDF and round: round_id=<round_id> ; retry_id=<retry_id> ; file=<frozen_pdf_file> ; sha256=<current PDF SHA-256>
+- Current fresh reports/chair/summary already frozen: <canonical ordered basename@SHA-256 list for current 00 page/bibliography/citation inventories, 02/03/04 CSV masters, every current R report, 05, 90, 91 Markdown/CSVs, 92 Markdown/CSV, and 93 Markdown/CSVs>
+- Hash-bound prior-issues CSV: <exactly one *prior-issues.csv basename@SHA-256>
+- Additional allowlisted prior artifacts: none / <duplicate-free basename@SHA-256 list of copied author responses or other specifically authorized prior artifacts>
+- Prior frozen AI-style report identity/hash, only if longitudinal style comparison requested: not run / <basename@SHA-256>
+- Full regression baseline: not run / run with complete prior baseline ; prior_pdf=<basename@SHA-256> ; prior_page_inventory=<basename@SHA-256> ; prior_page_ledger=<basename@SHA-256> ; prior_bibliography_inventory=<basename@SHA-256> ; prior_bibliography_ledger=<basename@SHA-256> ; prior_citation_inventory=<basename@SHA-256> ; prior_citation_ledger=<basename@SHA-256>
+- Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
+- Operational prompt SHA-256: <exact process actor_prompt_sha256.V>
+- Input-receipt/access declaration: received=[operational prompt]; opened=[00-process-parameters.json; SKILL.md; clean-room-orchestration.md; grading-and-verdicts.md; report-template.md; ai-style-audit.md; ledger-validation.md; <frozen_pdf_file>; every current identity above; then the prior-issues CSV, additional prior artifacts, prior AI report when run, and seven baseline artifacts when run, all as exact basenames in canonical order]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Frozen PDF SHA-256 at start and end: <current start hash> / <current end hash>
+
+## Prior-issue closure
 
 | Prior finding | Status | Evidence in revised PDF | Regression check | Current-round related finding, if any |
 |---|---|---|---|---|
@@ -539,17 +610,26 @@ Only after all fresh R reports, the clean chair outputs, and `93-user-facing-sum
 - Demonstrated regressions on comparable objects:
 - Current fresh findings whose introduction time is not verifiable:
 - Limitations:
+
+## Iterative completion checklist
+- Final page-ledger re-entry: inventory_rows=<current 00 page rows> ; ledger_rows=<current 02 rows> ; expected=<process physical_page_count> ; missing_or_extra_page_ids=<current count> ; unchecked_or_unresolved=<current count>
+- Final page and affected-neighbor recheck: rows_missing_neighbor_record=<current count>
+- Final bibliography/citation re-entry and re-verification: bibliography_inventory_rows=<current 00 rows> ; bibliography_audit_rows=<current 03 rows> ; bibliography_missing_or_extra_ids=<current count> ; bibliography_mismatch=<current 03 count> ; bibliography_unverifiable=<current 03 count> ; citation_inventory_rows=<current 00 rows> ; citation_audit_rows=<current 04 rows> ; citation_missing_or_extra_ids=<current count> ; citation_support_mismatch=<current 04 count> ; citation_support_unverifiable=<current 04 count> ; citation_metadata_mismatch=<current 04 count> ; citation_metadata_unverifiable=<current 04 count>
+- Empty S0--S3 status across all current reviewers: yes / no ; reviewer_s0_s3=<current report count> ; open_academic_rows=<current 91 CSV count>
+- Fresh isolated AI assessment status/signal/material remainder: run ; signal=<exact current AI-style signal> ; open_material_or_local_rows=<current 91 AI CSV count>
+- Remaining S4 suggestions or review limitations:
+- Prior unresolved or not-verifiable findings: count=<current Stage-V closure count>
+- Iterative-loop completion gate: pass / fail
 ```
+
+Stage O copies every specifically authorized prior input byte-for-byte into the exact `stage-v-inputs/` directory before launching V; V never discovers inputs by enumerating an old round. The directory contains exactly the basenames declared in the Stage-V boundary, with no unallowlisted file or nested directory. Every declared artifact must exist there as a regular file and match its declared SHA-256. The required prior-ID master is one UTF-8 CSV whose basename ends in `prior-issues.csv` and whose exact schema is `PriorFindingID,PriorPDFSHA256,PriorPDFAnchor,Finding,RequiredClosureEvidence`. It has at least one row; every field is nonblank and non-placeholder; `PriorFindingID` is unique; every row binds to the same 64-hex prior PDF hash and a positive physical-page anchor. The `Prior-issue closure` table contains exactly that CSV's ID sequence in the same order—no missing, extra, duplicate, or invented ID. An author response may be an additional hash-bound locator but never replaces this CSV or defines the tracked ID universe.
+
+This optional artifact is accepted only when `review_mode=fresh-rereview`. Its H1 and five H2 sections are an exact closed sequence. Its actor/round/retry fields and operational-prompt hash exactly project the process envelope. The current artifact list is recomputed from current file bytes. The receipt uses exactly `received=[operational prompt]`, `public_endpoints=[none]`, and an `opened=[...]` sequence equal to the canonical current/prior basename list with no extra, missing, duplicate, substring, or reorder. Prior-finding statuses are limited to `resolved`, `unresolved`, `not verifiable`, `rejected`, or `superseded by current finding`; every row needs a current physical-page anchor. Regression values are limited to `not assessed`, `no regression visible`, `regression visible`, or `not comparable`. Without the complete seven-artifact baseline above, every row says `not assessed`, the regression section says `Status: not run`, and its limitations contain the exact phrase `global regression not assessed`. Current-related IDs must be current `Rn-Fxx`, `C-Fxx`, or `AI-Fxx` IDs, or `none`.
+
+Every deterministic checklist value is recomputed from the current `02`, `03`, `04`, `91`, reviewer, and AI artifacts. `Iterative-loop completion gate` is `pass` only when page coverage is complete with no unresolved page/neighbor record, bibliography/citation mismatch and unverifiable counts are zero, and current reviewer `S0`--`S3`, open academic rows, open material/local AI rows, and prior `unresolved`/`not verifiable` rows are all zero. The remaining-S4/limitations line is a disclosure and does not alter that computed result.
 
 This optional longitudinal artifact cannot edit or reinterpret the current independent reports, grades, chair decision, revision ledger, or clean user-facing summary.
 
 An author response is only a locator and record of the author's claim. Mark `resolved` only when the current frozen PDF visibly supplies the closure evidence; an author statement alone cannot close an item. Without the full prior baseline named above, Stage V performs prior-finding closure only and must state `global regression not assessed`; it may not infer that a current fresh finding was introduced by revision merely because an old issue ledger omitted it.
 
-When Stage V is run for an iterative review--revision loop, `94-post-freeze-prior-issue-closure.md` or a separate Stage-O process-completion record must additionally state the following. Never append these fields to or edit any frozen R, C, or S artifact:
-
-- whether every physical page was re-entered in the page ledger after the last edit;
-- whether every physical page and all affected neighboring pages were rechecked in the final PDF;
-- whether every bibliography entry was re-entered in the bibliography ledger, all citation--source pairs were re-entered in the citation-claim ledger, and every changed or repeated source use was reverified;
-- whether every reviewer returned an empty actionable `S0`--`S3` Findings section;
-- whether a fresh isolated `05-ai-style-assessment.md` was run on the final frozen artifact, its signal level, and whether any material prose-polish finding remains;
-- whether any `S4` suggestion or review limitation remains.
+The exact checklist above records the iterative-loop facts. Never append those fields to or edit any frozen R, C, or S artifact.
