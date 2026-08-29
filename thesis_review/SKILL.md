@@ -46,7 +46,7 @@ An independent blind-review or fresh independent re-review round evaluates exact
 
 The packet builder, panel reviewers, AI-style assessor, and chair must not receive, recall, open, or search:
 
-- conversation or thread history beyond a minimal operational prompt, including hidden memory, compaction summaries, prior assistant reasoning, previous answers, status reports, or problem tables;
+- conversation or thread history beyond a minimal operational prompt, including hidden memory or compaction summaries inherited from before the clean actor launch, prior assistant reasoning, previous answers, status reports, or problem tables; system-owned tool/environment metadata and same-clean-turn compaction are governed by the narrow exceptions in `references/clean-room-orchestration.md`, never permit inherited thesis assertions or old-task content, and permit current-round thesis assertions only when the actor newly derives them from allowlisted inputs during that same clean turn;
 - user explanations, corrections, rebuttals, desired interpretations, claimed implementation facts, or statements about companion materials that are not visible in the frozen PDF;
 - messages or artifacts from another current or completed actor unless the current stage's input matrix explicitly permits them;
 - the LaTeX/DOCX source tree, `.bib` files, build logs, auxiliary files, comments, or inactive branches;

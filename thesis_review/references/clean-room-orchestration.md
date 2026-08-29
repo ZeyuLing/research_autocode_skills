@@ -8,11 +8,36 @@ The substantive review chain must be built from fresh, stage-specific contexts. 
 
 The operational prompt may provide only the stage role, exact allowlisted input and output paths, the frozen PDF identity, the neutral process-parameter record defined below, output language, and the instruction to follow this skill. Reviewer-visible paths and filenames must be neutral and must not disclose an author, project, laboratory, paper title, or repository identity that is absent from the PDF; Stage O should make a byte-identical frozen copy in a neutral round location. The prompt must not convey substantive assertions about the thesis, remembered defects, desired grades, author explanations, rebuttal arguments, or conclusions from another task.
 
+The fresh-context boundary concerns **substantive task input**, not system-owned
+execution metadata. A platform-generated capability or environment envelope that
+contains only tool descriptions, operating-system/current-time metadata, permission
+state, model/runtime availability, recommended-plugin metadata, and a neutral stage
+working directory is infrastructure, not an inherited user/task turn. Current-
+directory metadata qualifies only when it names the actor's neutral stage directory
+inside the closed neutral round root and no path segment conveys an author, project,
+laboratory, paper, repository, or thesis identity; Stage O must launch the actor from
+such a directory. An identity-bearing or non-stage current directory is prohibited
+context. Qualifying infrastructure is not listed in `received=[...]` or `opened=[...]`
+and does not invalidate the canonical fresh-context declaration. This exception is
+closed: if an envelope carries any thesis assertion, author explanation, requested
+interpretation, prior finding, old-task summary, or instruction that changes the
+review, it is substantive prohibited context and the actor must stop.
+
+Likewise, transport compaction during the actor's **same current clean turn** is
+not a new input when the compacted state is derived exclusively from the exact
+operational prompt, allowlisted inputs/endpoints, and that actor's own current-turn
+reasoning or tool results. It is a continuation of the same clean process and must
+not expand the allowlist or be reported as contamination merely because compaction
+occurred. A summary inherited from before actor launch, or any compacted state that
+contains another task, prior review, user explanation, unlisted artifact, or other
+prohibited assertion, is contamination. When provenance is uncertain, stop and
+quarantine rather than assume the exception.
+
 Stage O may create `00-process-parameters.json` as a closed administrative envelope. It may contain only: round/retry ID; neutral frozen-PDF filename, SHA-256, mechanically measured physical-page count, and the actual ISO-8601 timestamp with timezone at which the neutral copy was frozen (`frozen_at`); degree level and academic/professional type; institution; school/department; discipline; expected submission year; artifact type (`author-copy` or `blind-copy`); requested review mode; output language; exact governing-rule URL(s); neutral copied local rule/template filename(s), official title(s), and original-byte SHA-256; decision-regime selection status; and a closed `actor_prompt_sha256` map computed from each exact operational prompt before launch. The map contains `P`, every degree-appropriate `R` actor, `AI`, `C`, and `S`; it contains `V` if and only if `94-post-freeze-prior-issue-closure.md` is launched, and every value is a distinct 64-hex digest. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and other filesystem aliases are invalid. A governing-file basename and the frozen-PDF basename must also be mutually distinct and must not reuse any skill-reference basename, generated round-artifact basename (including `P####.png`), or closed-root directory name; otherwise basename-only input receipts are ambiguous. Stage O copies every allowlisted local rule/template into the neutral round under a neutral filename and verifies byte identity; only the orchestration log may retain the original path. These neutral process parameters may come from an explicit current operational request even when they are intentionally absent from a blind PDF. The envelope must not contain an original identity-bearing path, author name/identifier, technical assertion, implementation fact, revision explanation, old issue ID, desired conclusion, or any evaluation of the thesis. A missing field remains `unknown`; never infer it from an identity-bearing workspace path or old conversation.
 
 For each substantive stage, require both:
 
-- a **fresh-context declaration** whose own single-line value states that the actor received no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt; the required sentence cannot be supplied elsewhere in the report as compensation. In Codex multi-agent execution, use `fork_turns: "none"`, and use an equivalent empty-context process elsewhere;
+- a **fresh-context declaration** whose own single-line value states that the actor received no inherited substantive user/thread/task turns beyond system/developer instructions and the exact operational prompt; the required canonical sentence remains unchanged and cannot be supplied elsewhere in the report as compensation. The infrastructure-metadata and same-clean-turn-compaction rules above define what is not a substantive inherited turn. In Codex multi-agent execution, use `fork_turns: "none"`, and use an equivalent empty-context process elsewhere;
 - an **input-receipt and access declaration** whose own mechanically parsed single-line value uses this closed clause order exactly once: `received=[operational prompt]; opened=[...]; public_endpoints=[...]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated`. Duplicate keys, reordered or unknown clauses, trailing additions, and compensating prose elsewhere are invalid. It lists every local artifact opened in the actor's exact canonical order and every public endpoint accessed. Every artifact also records exact `Actor ID`, `Review round ID`, and `Review retry ID`. The operational-prompt SHA-256 is process-bound to that actor, not merely shape-checked.
 
 The validator derives the canonical local allowlists, rather than trusting prose. P opens the process envelope, `SKILL.md`, the ten required reference files in their documented order, process-bound governing files, and the frozen PDF. Each R actor opens that same rule/PDF prefix plus the seven current packet/policy/inventory artifacts and no peer output. AI opens only the process envelope, `SKILL.md`, clean-room/report/AI rules, frozen PDF, manifest, and page inventory. C opens the complete current rule/PDF/packet prefix followed by `02`--`04`, every current R report, and the current AI report. S opens only the exact current summary-source sequence. A missing, extra, duplicated, reordered, or substring-only basename invalidates the stage. Public endpoints are a duplicate-free subset of that actor's current policy/citation authority; AI and S use `[none]`.
@@ -23,8 +48,8 @@ If a truly fresh context is unavailable, do not claim a complete independent rev
 
 No packet builder, reviewer, AI-style assessor, or chair may receive, recall, search, or open:
 
-- the current conversation or thread history beyond the minimal operational prompt;
-- hidden or visible memory, conversation-compaction summaries, system-generated task summaries, or earlier assistant reasoning;
+- the current conversation or thread history beyond the minimal operational prompt, excluding only the qualifying system-owned infrastructure envelope defined in Section 1;
+- hidden or visible memory, pre-launch or other-task conversation-compaction summaries, system-generated task summaries from outside the actor's same current clean turn, or assistant reasoning inherited from before actor launch; qualifying same-current-clean-turn transport compaction defined in Section 1 is not included in this prohibition;
 - previous assistant answers, status reports, problem tables, diagnoses, or claimed closure lists;
 - user explanations, corrections, rebuttals, intended interpretations, claimed implementation facts, or statements about what a companion paper/repository contains unless the same fact is visible in the frozen PDF;
 - prior review rounds, reviewer reports, chair syntheses, issue ledgers, source-sync reports, provenance audits, figure-origin checks, implementation audits, or author responses;
