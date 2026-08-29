@@ -29,6 +29,14 @@ from typing import Any, Iterable
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
 PUBLIC_URL_RE = re.compile(r"https?://[^\s;,]+", re.IGNORECASE)
+BIB_MISMATCH_EXEMPTION_RE = re.compile(
+    r"(?<![A-Za-z0-9])(?:"
+    r"none|clean|n[./]?a|"
+    r"no[ -]+(?:(?:actionable[ -]+)?findings?|issues?|action(?:[ -]+required)?)|"
+    r"non[ -]+findings?|not[ -]+(?:applicable|required|a[ -]+finding)"
+    r")(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 SOURCE_LOCATOR_RE = re.compile(
     r"(?:"
     r"\b(?:p{1,2}\.?|pages?|section|sec\.?|table|figure|equation|"
@@ -6572,13 +6580,13 @@ def main(argv: list[str] | None = None) -> int:
                 "verified verdict lacks authoritative evidence endpoint"
             )
         if (
-            verdict != "unverifiable"
-            and row["EvidenceEndpoint"]
-            and not PUBLIC_URL_RE.search(row["EvidenceEndpoint"])
+            row["EvidenceEndpoint"]
+            and not PUBLIC_URL_RE.fullmatch(row["EvidenceEndpoint"])
         ):
             errors.append(
                 f"03-bibliography-audit-ledger.csv:{line}: "
-                "EvidenceEndpoint lacks an http(s) authoritative record"
+                "EvidenceEndpoint lacks an http(s) authoritative record or "
+                "contains material outside one complete URL"
             )
         if not validate_iso_date(row["CheckedAt"]):
             errors.append(
@@ -6608,14 +6616,22 @@ def main(argv: list[str] | None = None) -> int:
                 f"03-bibliography-audit-ledger.csv:{line}: "
                 "unverifiable row lacks attempted-route note"
             )
-        if verdict == "mismatch" and not bibliography_link_re.search(
-            row["FindingDisposition"]
-        ):
-            errors.append(
-                f"03-bibliography-audit-ledger.csv:{line}: {verdict} row must "
-                f"link an owning-reviewer R{bibliography_owner}-Fxx or "
-                f"R{bibliography_owner}-Qxx disposition"
+        if verdict == "mismatch":
+            has_bibliography_link = bool(
+                bibliography_link_re.search(row["FindingDisposition"])
             )
+            if not has_bibliography_link:
+                errors.append(
+                    f"03-bibliography-audit-ledger.csv:{line}: {verdict} row must "
+                    f"link an owning-reviewer R{bibliography_owner}-Fxx or "
+                    f"R{bibliography_owner}-Qxx disposition"
+                )
+            elif BIB_MISMATCH_EXEMPTION_RE.search(row["FindingDisposition"]):
+                errors.append(
+                    f"03-bibliography-audit-ledger.csv:{line}: mismatch "
+                    "FindingDisposition cannot mix an owning-reviewer link with "
+                    "a non-finding exemption phrase"
+                )
     duplicate_bib_keys = sorted(
         key for key, count in bib_keys.items() if count > 1
     )

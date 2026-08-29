@@ -1526,6 +1526,53 @@ class ValidateReviewBundleTests(unittest.TestCase):
             command, text=True, capture_output=True, check=False
         )
 
+    def set_bibliography_mismatch(
+        self, root: Path, finding_disposition: str
+    ) -> None:
+        process = json.loads(
+            (root / "00-process-parameters.json").read_text(encoding="utf-8")
+        )
+        digest = str(process["selected_pdf_sha256"])
+        _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+        row = next(
+            item for item in bib_rows
+            if item["Field"] == "retraction_withdrawal_correction_superseding"
+        )
+        row["Verdict"] = "mismatch"
+        row["CanonicalValue"] = "corrected record exists"
+        row["FindingDisposition"] = finding_disposition
+        write_csv(
+            root / "03-bibliography-audit-ledger.csv",
+            BIB_LEDGER_COLUMNS,
+            bib_rows,
+        )
+        _, inventory = read_csv(root / "00-bibliography-inventory.csv")
+        (root / "03-bibliography-audit-ledger.md").write_text(
+            "# Bibliography ledger\n\n"
+            + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+            + markdown_table(
+                BIB_MARKDOWN_HEADERS,
+                bibliography_markdown_rows(inventory, bib_rows),
+            ),
+            encoding="utf-8",
+        )
+        reviewer = root / "R3-comprehensive-review.md"
+        reviewer_text = reviewer.read_text(encoding="utf-8")
+        old_count = (
+            "- Retraction/withdrawal/correction/superseding-status fields "
+            "verified / mismatched / legitimate N/A / unverifiable: 1 / 0 / 0 / 0"
+        )
+        self.assertIn(old_count, reviewer_text)
+        reviewer.write_text(
+            reviewer_text.replace(
+                old_count,
+                "- Retraction/withdrawal/correction/superseding-status fields "
+                "verified / mismatched / legitimate N/A / unverifiable: 0 / 1 / 0 / 0",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
     def assert_fails(self, root: Path, needle: str) -> None:
         result = self.run_validator(root)
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1894,6 +1941,58 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertIn("ExactSourceLocator lacks a page/section", result.stdout)
             self.assertIn("RenderDPI must be an integer in", result.stdout)
             self.assertIn("RenderArtifactIDHash must be a 64-hex hash", result.stdout)
+
+    def test_bibliography_endpoint_must_be_one_complete_url_for_all_verdicts(
+        self,
+    ) -> None:
+        cases = (
+            ("leading text", f"checked {BIB_ENDPOINT}", "exact"),
+            ("trailing text", f"{BIB_ENDPOINT} checked", "exact"),
+            (
+                "two URLs",
+                f"{BIB_ENDPOINT} https://example.org/second",
+                "exact",
+            ),
+            ("unverifiable row", f"attempted {BIB_ENDPOINT}", "unverifiable"),
+        )
+        for label, endpoint, verdict in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                digest = self.build_bundle(root)
+                process = json.loads(
+                    (root / "00-process-parameters.json").read_text(encoding="utf-8")
+                )
+                _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
+                row = next(item for item in bib_rows if item["Field"] == "type")
+                row["EvidenceEndpoint"] = endpoint
+                if verdict == "unverifiable":
+                    row["Verdict"] = verdict
+                    row["CanonicalValue"] = "not established"
+                    row["EndpointType"] = "official route inaccessible"
+                    row["EvidenceNote"] = (
+                        "Attempted the official route, but no authoritative record "
+                        "could be opened."
+                    )
+                write_csv(
+                    root / "03-bibliography-audit-ledger.csv",
+                    BIB_LEDGER_COLUMNS,
+                    bib_rows,
+                )
+                _, inventory = read_csv(root / "00-bibliography-inventory.csv")
+                (root / "03-bibliography-audit-ledger.md").write_text(
+                    "# Bibliography ledger\n\n"
+                    + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+                    + markdown_table(
+                        BIB_MARKDOWN_HEADERS,
+                        bibliography_markdown_rows(inventory, bib_rows),
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "EvidenceEndpoint lacks an http(s) authoritative record or "
+                    "contains material outside one complete URL",
+                )
 
     def test_chair_citation_gate_cannot_pass_unresolved_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4024,38 +4123,68 @@ class ValidateReviewBundleTests(unittest.TestCase):
     def test_bibliography_mismatch_cannot_have_no_disposition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            digest = self.build_bundle(root)
-            process = json.loads(
-                (root / "00-process-parameters.json").read_text(encoding="utf-8")
-            )
-            _, bib_rows = read_csv(root / "03-bibliography-audit-ledger.csv")
-            row = next(
-                item for item in bib_rows
-                if item["Field"] == "retraction_withdrawal_correction_superseding"
-            )
-            row["Verdict"] = "mismatch"
-            row["CanonicalValue"] = "corrected record exists"
-            row["FindingDisposition"] = "none"
-            write_csv(
-                root / "03-bibliography-audit-ledger.csv",
-                BIB_LEDGER_COLUMNS,
-                bib_rows,
-            )
-            _, inventory = read_csv(root / "00-bibliography-inventory.csv")
-            (root / "03-bibliography-audit-ledger.md").write_text(
-                "# Bibliography ledger\n\n"
-                + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
-                + markdown_table(
-                    BIB_MARKDOWN_HEADERS,
-                    bibliography_markdown_rows(inventory, bib_rows),
-                ),
-                encoding="utf-8",
-            )
+            self.build_bundle(root)
+            self.set_bibliography_mismatch(root, "none")
             self.assert_fails(
                 root,
                 "mismatch row must link an owning-reviewer R3-Fxx or "
                 "R3-Qxx disposition",
             )
+
+    def test_bibliography_mismatch_accepts_real_current_owner_link(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.set_bibliography_mismatch(root, "R3-F01")
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("**PASS**", result.stdout)
+
+    def test_bibliography_mismatch_rejects_link_mixed_with_exemption(self) -> None:
+        for exemption in (
+            "none", "clean", "no finding", "no-findings", "no issue",
+            "no actionable finding", "no action required", "non-finding",
+            "N/A", "N.A.", "NA", "not applicable", "not-required",
+            "not a finding",
+        ):
+            with (
+                self.subTest(exemption=exemption),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                self.build_bundle(root)
+                self.set_bibliography_mismatch(
+                    root, f"R3-F01; {exemption}"
+                )
+                self.assert_fails(
+                    root,
+                    "mismatch FindingDisposition cannot mix an owning-reviewer "
+                    "link with a non-finding exemption phrase",
+                )
+
+    def test_bibliography_mismatch_link_must_resolve_to_current_owner_item(
+        self,
+    ) -> None:
+        cases = (
+            (
+                "wrong current reviewer",
+                "R2-F01",
+                "mismatch row must link an owning-reviewer R3-Fxx or "
+                "R3-Qxx disposition",
+            ),
+            (
+                "unknown owner item",
+                "R3-F99",
+                "03/04 audit ledgers reference unknown current owning-reviewer "
+                "finding/question IDs ['R3-F99']",
+            ),
+        )
+        for label, disposition, error in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                self.set_bibliography_mismatch(root, disposition)
+                self.assert_fails(root, error)
 
     def test_citation_mismatch_cannot_have_none_as_disposition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
