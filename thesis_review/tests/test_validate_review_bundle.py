@@ -2555,6 +2555,23 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertIn("Bibliography entries rendered", result.stdout)
             self.assertIn("Active citation occurrences", result.stdout)
 
+    def test_gate_i_nonlayout_finding_does_not_inflate_layout_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R3-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Primary gate: H",
+                    "- Primary gate: I",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("**PASS**", result.stdout)
+
     def test_reviewer_persona_cannot_be_copied_from_another_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4308,6 +4325,54 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     "input receipt must use the exact closed grammar with one "
                     "received, one opened, one public_endpoints",
                 )
+
+    def test_hardening_public_endpoints_none_is_exclusive(self) -> None:
+        endpoint = "https://example.test"
+        cases = (
+            ([], set(), set(), []),
+            ([endpoint], {endpoint}, {endpoint}, []),
+            (
+                ["none", endpoint],
+                {endpoint},
+                {endpoint},
+                [
+                    "receipt.md: public_endpoints=[none] must not be combined "
+                    "with endpoint tokens"
+                ],
+            ),
+        )
+        for endpoints, allowed, required, expected_errors in cases:
+            with (
+                self.subTest(endpoints=endpoints),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                root = Path(directory)
+                digest = self.build_bundle(root)
+                process = json.loads(
+                    (root / "00-process-parameters.json").read_text(encoding="utf-8")
+                )
+                receipt_path = root / "receipt.md"
+                receipt_path.write_text(
+                    self.declaration(digest, process, "R1", endpoints),
+                    encoding="utf-8",
+                )
+                errors: list[str] = []
+                VALIDATOR_MODULE.validate_declarations(
+                    receipt_path,
+                    digest,
+                    errors,
+                    process=process,
+                    actor_id="R1",
+                    reviewer_count=3,
+                    allowed_public_endpoints=allowed,
+                    required_public_endpoints=required,
+                )
+                self.assertEqual(errors, expected_errors)
+
+    def test_count_vector_accepts_standard_thousands_separators(self) -> None:
+        parse = VALIDATOR_MODULE.parse_nonnegative_integer_vector
+        self.assertEqual(parse("3,264 / 0"), (3264, 0))
+        self.assertEqual(parse("90 / 0 / 74; reference [144]"), (90, 0, 74, 144))
 
     def test_hardening_closed_round_root_rejects_old_review_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -1717,6 +1717,14 @@ def validate_declarations(
         )
         if public_items is None:
             public_items = []
+        if (
+            any(value.casefold() == "none" for value in public_items)
+            and public_items != ["none"]
+        ):
+            errors.append(
+                f"{path.name}: public_endpoints=[none] must not be combined "
+                "with endpoint tokens"
+            )
         normalized_public = [
             value for value in public_items if value.casefold() != "none"
         ]
@@ -2010,6 +2018,16 @@ def parse_reviewer_questions(
     if numbers != list(range(1, len(numbers) + 1)):
         errors.append(f"{filename}: reviewer question IDs must be continuous from Q01")
     return result
+
+
+def parse_nonnegative_integer_vector(value: str) -> tuple[int, ...]:
+    """Extract counts while treating standard thousands separators atomically."""
+
+    tokens = re.findall(
+        r"(?<![A-Za-z0-9])(?:\d{1,3}(?:,\d{3})+|\d+)(?![A-Za-z0-9])",
+        value,
+    )
+    return tuple(int(token.replace(",", "")) for token in tokens)
 
 
 def validate_reviewer_report(
@@ -2322,9 +2340,7 @@ def validate_reviewer_report(
         for label in count_labels:
             value = labeled_value(section, label)
             expected_vector = owner_expected_vectors.get(heading, {}).get(label)
-            observed_vector = tuple(
-                int(item) for item in re.findall(r"(?<![A-Za-z])\d+(?![A-Za-z])", value or "")
-            )
+            observed_vector = parse_nonnegative_integer_vector(value or "")
             if value is None or expected_vector is None:
                 errors.append(
                     f"{path.name}: missing concrete {heading!r} count {label!r}"
@@ -2341,9 +2357,7 @@ def validate_reviewer_report(
                     f"{path.name}: missing concrete {heading!r} field {label!r}"
                 )
         master = labeled_value(section, "Machine-readable master")
-        master_counts = tuple(
-            int(item) for item in re.findall(r"(?<![A-Za-z])\d+(?![A-Za-z])", master or "")
-        )[-3:]
+        master_counts = parse_nonnegative_integer_vector(master or "")[-3:]
         if (
             master is None or master_filename not in master
             or master_counts != (0, 0, 0)
@@ -2393,17 +2407,6 @@ def validate_reviewer_report(
             "04-citation-claim-audit-ledger.csv",
         )
     if owns_page_and_bib:
-        layout_actionable = sum(
-            fields.get("Severity", "").casefold() in {"s0", "s1", "s2", "s3"}
-            and (
-                fields.get("Primary gate", "").upper() == "I"
-                or bool(re.search(r"(?<![A-Z])I(?![A-Z])", fields.get("Secondary gates", "").upper()))
-            )
-            for fields in findings.values()
-        )
-        owner_expected_vectors.setdefault("Full rendered-page audit", {})[
-            "Actionable layout findings"
-        ] = (layout_actionable,)
         check_owner_section(
             "Full rendered-page audit",
             page_count_labels,
@@ -5743,6 +5746,7 @@ def build_owner_expected_vectors(
     """Derive every owner-report count from its authoritative CSV rows."""
     suspect_pages = 0
     unresolved_pages = 0
+    actionable_layout_finding_ids: set[str] = set()
     page_inventory_by_id = {
         row.get("PageID", ""): row for row in page_inventory
     }
@@ -5761,6 +5765,14 @@ def build_owner_expected_vectors(
             for token in ("pending", "unchecked", "recheck", "open", "unresolved")
         ):
             unresolved_pages += 1
+        actionable_layout_finding_ids.update(
+            match.upper()
+            for match in re.findall(
+                r"(?i)(?<![A-Za-z0-9])finding[ \t]+"
+                r"([A-Z][A-Z0-9]*-F\d{2,4})(?![A-Za-z0-9])",
+                row.get("Disposition", ""),
+            )
+        )
 
     def bib_counts(fields: tuple[str, ...], include_na: bool) -> tuple[int, ...]:
         rows = [row for row in bibliography_ledger if row.get("Field") in fields]
@@ -5817,8 +5829,12 @@ def build_owner_expected_vectors(
             "Suspect-page signals / resolved / unresolved": (
                 suspect_pages, suspect_pages - unresolved_pages, unresolved_pages,
             ),
-            # Filled from the owning reviewer's Gate-I findings before validation.
-            "Actionable layout findings": (0,),
+            # The page ledger is authoritative. Gate I also covers equations,
+            # citations, and references, so Gate-I report findings cannot be
+            # treated as layout findings unless a page disposition links them.
+            "Actionable layout findings": (
+                len(actionable_layout_finding_ids),
+            ),
         },
         "Full bibliography-integrity audit": {
             "Bibliography entries rendered in the frozen PDF": (
