@@ -245,19 +245,24 @@ def _mark_delivered(workspace: Path, channels: list[str], delivered_at: str) -> 
     selection, candidate_payload = _validate_delivery_run(workspace)
     state_path = workspace / "state.json"
     state = _load_valid_state(workspace)
-    titles = {item["canonical_id"]: item.get("title") for item in candidate_payload.get("candidates", [])}
+    candidates = {item["canonical_id"]: item for item in candidate_payload.get("candidates", [])}
     decisions = {identifier: "highlight" for identifier in selection.get("highlight_ids", [])}
     decisions.update({identifier: "watchlist" for identifier in selection.get("watchlist_ids", [])})
     seen = state.setdefault("seen", {})
     for identifier, decision in decisions.items():
         previous = seen.get(identifier, {}) if isinstance(seen.get(identifier, {}), dict) else {}
+        candidate = candidates.get(identifier, {})
         seen[identifier] = {
             **previous,
             "first_seen_at": previous.get("first_seen_at", delivered_at),
             "last_seen_at": delivered_at,
             "first_delivered_at": previous.get("first_delivered_at", delivered_at),
             "last_delivered_at": delivered_at,
-            "title": titles.get(identifier) or previous.get("title"),
+            "title": candidate.get("title") or previous.get("title"),
+            "artifact_type": candidate.get("artifact_type", previous.get("artifact_type", "paper")),
+            "lane": candidate.get("lane", previous.get("lane", "recent-paper")),
+            "entity_id": candidate.get("entity_id") or previous.get("entity_id") or identifier,
+            "event_id": candidate.get("event_id") or previous.get("event_id") or identifier,
             "decision": decision,
             "delivery_mode": "external",
             "channels": channels,

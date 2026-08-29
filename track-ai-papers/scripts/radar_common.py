@@ -11,6 +11,7 @@ import re
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
@@ -21,6 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 SKILL_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_PROFILE = SKILL_ROOT / "assets" / "default-profile.json"
 USER_AGENT = "track-ai-papers/1.0 (+https://github.com/ZeyuLing/research_autocode_skills)"
+SUPPORTED_PROFILE_VERSIONS = {1, 2}
 ARXIV_ID_RE = re.compile(
     r"(?:(?:arxiv\.org/(?:abs|pdf|html)/)|(?:arxiv:))?"
     r"(?P<id>(?:\d{4}\.\d{4,5}|[a-z-]+(?:\.[A-Z]{2})?/\d{7})(?:v\d+)?)",
@@ -128,8 +130,8 @@ def validate_profile(profile: dict[str, Any]) -> None:
     missing = sorted(required - set(profile))
     if missing:
         raise RadarError(f"Profile is missing fields: {', '.join(missing)}")
-    if profile["profile_version"] != 1 or isinstance(profile["profile_version"], bool):
-        raise RadarError("Only profile_version 1 is supported")
+    if profile["profile_version"] not in SUPPORTED_PROFILE_VERSIONS or isinstance(profile["profile_version"], bool):
+        raise RadarError("profile_version must be 1 or 2")
     if not isinstance(profile["name"], str) or not profile["name"].strip():
         raise RadarError("name must be a non-empty string")
     if not isinstance(profile["language"], str) or profile["language"] not in {"zh-CN", "en"}:
@@ -166,6 +168,18 @@ def validate_profile(profile: dict[str, Any]) -> None:
                 raise RadarError(f"Topic {topic_id}.{field} must not be empty")
             if any(not isinstance(value, str) or not value.strip() for value in values):
                 raise RadarError(f"Topic {topic_id}.{field} must contain only non-empty strings")
+        include_all_groups = topic.get("include_all_groups", [])
+        if not isinstance(include_all_groups, list):
+            raise RadarError(f"Topic {topic_id}.include_all_groups must be a list")
+        for group_index, group in enumerate(include_all_groups):
+            if (
+                not isinstance(group, list)
+                or not group
+                or any(not isinstance(value, str) or not value.strip() for value in group)
+            ):
+                raise RadarError(
+                    f"Topic {topic_id}.include_all_groups[{group_index}] must contain non-empty strings"
+                )
     for field in (
         "lookback_days",
         "max_candidates_per_topic",
@@ -189,6 +203,117 @@ def validate_profile(profile: dict[str, Any]) -> None:
     expected_overall = {"relevance", "intrinsic_quality", "external_signal"}
     _validate_weights(policy.get("intrinsic_weights"), expected_intrinsic, "intrinsic_weights")
     _validate_weights(policy.get("overall_weights"), expected_overall, "overall_weights")
+    if profile["profile_version"] == 2:
+        _validate_v2_profile(profile, ids)
+
+
+def _validate_v2_profile(profile: dict[str, Any], topic_ids: set[str]) -> None:
+    lanes = profile.get("lanes")
+    if not isinstance(lanes, list) or not lanes:
+        raise RadarError("profile_version 2 requires a non-empty lanes list")
+    lane_ids: set[str] = set()
+    minimum_total = 0
+    for index, lane in enumerate(lanes):
+        if not isinstance(lane, dict):
+            raise RadarError(f"Lane {index} must be an object")
+        needed = {"id", "label", "artifact_types", "min_digest_items", "max_digest_items"}
+        missing = sorted(needed - set(lane))
+        if missing:
+            raise RadarError(f"Lane {index} is missing fields: {', '.join(missing)}")
+        lane_id = lane["id"]
+        if not isinstance(lane_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]*", lane_id):
+            raise RadarError(f"Invalid lane id: {lane_id!r}")
+        if lane_id in lane_ids:
+            raise RadarError(f"Duplicate lane id: {lane_id}")
+        lane_ids.add(lane_id)
+        if not isinstance(lane["label"], str) or not lane["label"].strip():
+            raise RadarError(f"Lane {lane_id}.label must be a non-empty string")
+        artifact_types = lane["artifact_types"]
+        if (
+            not isinstance(artifact_types, list)
+            or not artifact_types
+            or any(value not in {"paper", "model-release"} for value in artifact_types)
+        ):
+            raise RadarError(f"Lane {lane_id}.artifact_types is invalid")
+        minimum = lane["min_digest_items"]
+        maximum = lane["max_digest_items"]
+        if (
+            not isinstance(minimum, int)
+            or isinstance(minimum, bool)
+            or minimum < 0
+            or not isinstance(maximum, int)
+            or isinstance(maximum, bool)
+            or maximum <= 0
+            or minimum > maximum
+        ):
+            raise RadarError(f"Lane {lane_id} must satisfy 0 <= min_digest_items <= max_digest_items")
+        if "lookback_days" in lane and (
+            not isinstance(lane["lookback_days"], int)
+            or isinstance(lane["lookback_days"], bool)
+            or lane["lookback_days"] <= 0
+        ):
+            raise RadarError(f"Lane {lane_id}.lookback_days must be a positive integer")
+        minimum_total += minimum
+    required_lanes = {"recent-paper", "classic-foundation", "open-model"}
+    if not required_lanes.issubset(lane_ids):
+        raise RadarError("profile_version 2 must define recent-paper, classic-foundation, and open-model lanes")
+    if minimum_total > int(profile["max_digest_papers"]):
+        raise RadarError("Lane minimums exceed max_digest_papers")
+    topic_quotas = profile.get("topic_quotas")
+    if not isinstance(topic_quotas, dict):
+        raise RadarError("profile_version 2 requires a topic_quotas object")
+    for topic_id, quota in topic_quotas.items():
+        if topic_id not in topic_ids or not isinstance(quota, dict):
+            raise RadarError(f"Invalid topic quota: {topic_id}")
+        minimum = quota.get("min_if_eligible")
+        if not isinstance(minimum, int) or isinstance(minimum, bool) or minimum <= 0:
+            raise RadarError(f"Topic quota {topic_id}.min_if_eligible must be a positive integer")
+        artifact_types = quota.get("artifact_types")
+        if artifact_types is not None and (
+            not isinstance(artifact_types, list)
+            or not artifact_types
+            or any(value not in {"paper", "model-release"} for value in artifact_types)
+        ):
+            raise RadarError(f"Topic quota {topic_id}.artifact_types is invalid")
+        quota_lanes = quota.get("lanes")
+        if quota_lanes is not None and (
+            not isinstance(quota_lanes, list)
+            or not quota_lanes
+            or any(value not in lane_ids for value in quota_lanes)
+        ):
+            raise RadarError(f"Topic quota {topic_id}.lanes is invalid")
+        require_primary = quota.get("require_primary_topic", False)
+        if not isinstance(require_primary, bool):
+            raise RadarError(f"Topic quota {topic_id}.require_primary_topic must be a boolean")
+    source_config = profile.get("source_config")
+    if not isinstance(source_config, dict):
+        raise RadarError("profile_version 2 requires a source_config object")
+    hf_models = source_config.get("hf_models")
+    if not isinstance(hf_models, dict):
+        raise RadarError("source_config.hf_models must be an object")
+    for field in ("limit", "lookback_days"):
+        value = hf_models.get(field)
+        if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
+            raise RadarError(f"source_config.hf_models.{field} must be a positive integer")
+    for field in ("require_weights", "require_explicit_license", "require_open_source_license", "allow_restrictive_open_weights"):
+        if field in hf_models and not isinstance(hf_models[field], bool):
+            raise RadarError(f"source_config.hf_models.{field} must be a boolean")
+    fallback_topic = hf_models.get("fallback_topic")
+    if not isinstance(fallback_topic, str) or fallback_topic not in topic_ids:
+        raise RadarError("source_config.hf_models.fallback_topic must name a configured topic")
+    include_any = hf_models.get("include_any")
+    if (
+        not isinstance(include_any, list)
+        or not include_any
+        or any(not isinstance(value, str) or not value.strip() for value in include_any)
+    ):
+        raise RadarError("source_config.hf_models.include_any must contain non-empty strings")
+    exclude_any = hf_models.get("exclude_any", [])
+    if (
+        not isinstance(exclude_any, list)
+        or any(not isinstance(value, str) or not value.strip() for value in exclude_any)
+    ):
+        raise RadarError("source_config.hf_models.exclude_any must contain only non-empty strings")
 
 
 def _validate_weights(weights: Any, expected: set[str], name: str) -> None:
@@ -237,6 +362,12 @@ def normalized_title(value: str) -> str:
 
 
 def canonical_record_id(record: dict[str, Any]) -> str:
+    artifact_type = clean_text(record.get("artifact_type") or "paper").lower()
+    if artifact_type == "model-release":
+        model_id = clean_text(record.get("model_id") or record.get("id"))
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*/[A-Za-z0-9][A-Za-z0-9._-]*", model_id):
+            raise RadarError("Cannot create a model-release canonical ID without a namespaced model_id")
+        return f"hf-model:{model_id.lower()}"
     arxiv_id = canonical_arxiv_id(
         str(record.get("arxiv_id") or record.get("id") or record.get("abs_url") or record.get("pdf_url") or "")
     )
@@ -279,22 +410,111 @@ def clean_authors(value: Any) -> list[str]:
     return authors
 
 
+def normalized_match_text(value: Any) -> str:
+    lowered = clean_text(value).lower()
+    lowered = re.sub(r"[-_/]+", " ", lowered)
+    return re.sub(r"[^\w]+", " ", lowered, flags=re.UNICODE).strip()
+
+
 def match_topic(record: dict[str, Any], topic: dict[str, Any]) -> tuple[bool, list[str]]:
-    haystack = f"{record.get('title', '')} {record.get('abstract', '')}".lower()
-    exclusions = [term for term in topic.get("exclude_any", []) if term.lower() in haystack]
+    searchable_parts: list[Any] = [
+        record.get("title", ""),
+        record.get("abstract", ""),
+        record.get("model_id", ""),
+        record.get("organization", ""),
+        record.get("curation_summary", ""),
+    ]
+    tags = record.get("tags")
+    if isinstance(tags, list):
+        searchable_parts.extend(tags)
+    haystack = normalized_match_text(" ".join(str(value or "") for value in searchable_parts))
+    exclusions = [
+        term for term in topic.get("exclude_any", []) if normalized_match_text(term) in haystack
+    ]
     if exclusions:
         return False, [f"excluded:{term}" for term in exclusions]
     phrases = list(topic.get("include_any", [])) + list(topic.get("query_terms", []))
     matched = []
     for phrase in phrases:
-        lowered = phrase.lower().strip()
+        lowered = normalized_match_text(phrase)
         if lowered and lowered in haystack and lowered not in matched:
             matched.append(lowered)
-    return bool(matched), matched
+    groups = topic.get("include_all_groups", [])
+    group_matches: list[str] = []
+    if groups:
+        for group in groups:
+            hit = next((normalized_match_text(term) for term in group if normalized_match_text(term) in haystack), None)
+            if not hit:
+                group_matches = []
+                break
+            group_matches.append(hit)
+    for term in group_matches:
+        if term not in matched:
+            matched.append(term)
+    return bool(matched or group_matches), matched
+
+
+def matches_topic_quota_scope(record: dict[str, Any], topic_id: str, quota: dict[str, Any]) -> bool:
+    """Return whether an artifact is in the configured topic-quota population.
+
+    Primary-topic enforcement is intentionally left to the reviewed-item selector,
+    because raw discovery candidates do not yet have a reviewer-assigned primary topic.
+    """
+    if topic_id not in record.get("topics", []):
+        return False
+    artifact_types = quota.get("artifact_types")
+    if artifact_types and record.get("artifact_type", "paper") not in artifact_types:
+        return False
+    lanes = quota.get("lanes")
+    if lanes and record.get("lane", "recent-paper") not in lanes:
+        return False
+    return True
+
+
+def safe_nonnegative_int(value: Any) -> int:
+    if isinstance(value, bool):
+        return 0
+    try:
+        return max(0, int(value))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def safe_nonnegative_float(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0.0
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+    return max(0.0, parsed) if math.isfinite(parsed) else 0.0
 
 
 def merge_candidate(target: dict[str, Any], incoming: dict[str, Any]) -> dict[str, Any]:
-    for field in ("title", "abstract", "published", "updated", "abs_url", "pdf_url", "project_url", "code_url"):
+    for field in (
+        "title",
+        "abstract",
+        "published",
+        "updated",
+        "abs_url",
+        "pdf_url",
+        "project_url",
+        "code_url",
+        "artifact_type",
+        "lane",
+        "entity_id",
+        "event_id",
+        "model_id",
+        "organization",
+        "released_at",
+        "version_sha",
+        "model_card_url",
+        "weights_url",
+        "license_id",
+        "license_url",
+        "openness_class",
+        "pipeline_tag",
+    ):
         current = target.get(field)
         proposed = incoming.get(field)
         if not current or (field in {"title", "abstract"} and len(str(proposed or "")) > len(str(current))):
@@ -304,6 +524,9 @@ def merge_candidate(target: dict[str, Any], incoming: dict[str, Any]) -> dict[st
     target["categories"] = sorted(set(target.get("categories", [])) | set(incoming.get("categories", [])))
     target["topics"] = sorted(set(target.get("topics", [])) | set(incoming.get("topics", [])))
     target["sources"] = sorted(set(target.get("sources", [])) | set(incoming.get("sources", [])))
+    target_tags = target.get("tags") if isinstance(target.get("tags"), list) else []
+    incoming_tags = incoming.get("tags") if isinstance(incoming.get("tags"), list) else []
+    target["tags"] = sorted(set(target_tags) | set(incoming_tags))
     target.setdefault("topic_match_terms", {})
     for topic_id, terms in incoming.get("topic_match_terms", {}).items():
         target["topic_match_terms"][topic_id] = sorted(
@@ -311,8 +534,13 @@ def merge_candidate(target: dict[str, Any], incoming: dict[str, Any]) -> dict[st
         )
     external = target.setdefault("external", {})
     incoming_external = incoming.get("external", {})
-    external["hf_upvotes"] = max(int(external.get("hf_upvotes") or 0), int(incoming_external.get("hf_upvotes") or 0))
+    for field in ("hf_upvotes", "hf_model_likes", "hf_model_downloads"):
+        external[field] = max(safe_nonnegative_int(external.get(field)), safe_nonnegative_int(incoming_external.get(field)))
     external["hf_featured"] = bool(external.get("hf_featured") or incoming_external.get("hf_featured"))
+    external["hf_trending_score"] = max(
+        safe_nonnegative_float(external.get("hf_trending_score")),
+        safe_nonnegative_float(incoming_external.get("hf_trending_score")),
+    )
     return target
 
 
@@ -369,7 +597,17 @@ def validate_score(value: Any, field: str) -> float:
 
 def derive_external_signal(candidate: dict[str, Any]) -> float:
     external = candidate.get("external", {})
-    upvotes = max(0, int(external.get("hf_upvotes") or 0))
+    if candidate.get("artifact_type") == "model-release":
+        likes = safe_nonnegative_int(external.get("hf_model_likes"))
+        downloads = safe_nonnegative_int(external.get("hf_model_downloads"))
+        trending = safe_nonnegative_float(external.get("hf_trending_score"))
+        score = min(40.0, trending * 8.0)
+        score += min(25.0, math.log2(likes + 1) * 3.0)
+        score += min(20.0, math.log10(downloads + 1) * 4.0)
+        if candidate.get("weights_url") and candidate.get("license_id"):
+            score += 15.0
+        return round(min(100.0, score), 1)
+    upvotes = safe_nonnegative_int(external.get("hf_upvotes"))
     score = min(55.0, math.log2(upvotes + 1) * 9.0)
     if external.get("hf_featured"):
         score += 15

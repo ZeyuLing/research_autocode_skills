@@ -15,6 +15,7 @@ from radar_common import (
     RadarError,
     derive_external_signal,
     load_json,
+    matches_topic_quota_scope,
     load_state,
     profile_digest,
     safe_http_url,
@@ -69,6 +70,8 @@ def evaluate_review(
     review: dict[str, Any], candidate: dict[str, Any], profile: dict[str, Any]
 ) -> dict[str, Any]:
     canonical_id = candidate["canonical_id"]
+    artifact_type = candidate.get("artifact_type", "paper")
+    lane = candidate.get("lane", "recent-paper")
     values: dict[str, float] = {}
     errors: list[str] = []
     for field in SCORE_FIELDS:
@@ -100,7 +103,7 @@ def evaluate_review(
     ):
         errors.append(f"{canonical_id}.matched_topics must be a candidate-topic subset containing primary_topic")
     evidence_level = review.get("evidence_level")
-    if evidence_level not in {"full-text", "partial-text", "abstract"}:
+    if evidence_level not in {"full-text", "partial-text", "abstract", "official-artifacts"}:
         errors.append(f"{canonical_id}.evidence_level is invalid")
     confidence = review.get("confidence")
     if confidence not in {"high", "medium", "low"}:
@@ -114,6 +117,8 @@ def evaluate_review(
             "decision": "reject",
             "decision_reasons": ["incomplete_or_invalid_review"] + errors,
             "primary_topic": primary_topic if primary_topic in topic_ids else (candidate.get("topics") or [""])[0],
+            "artifact_type": artifact_type,
+            "lane": lane,
             "scores": None,
         }
 
@@ -140,8 +145,16 @@ def evaluate_review(
         highlight_reasons.append("below_relevance_threshold")
     if intrinsic < float(profile["quality_threshold"]):
         highlight_reasons.append("below_quality_threshold")
-    if evidence_level != "full-text":
-        highlight_reasons.append("not_full_text")
+    required_evidence = "official-artifacts" if artifact_type == "model-release" else "full-text"
+    if evidence_level != required_evidence:
+        highlight_reasons.append(f"requires_{required_evidence}")
+    if artifact_type == "model-release":
+        if candidate.get("openness_class") not in {"open-source", "open-weights"}:
+            highlight_reasons.append("unverified_openness")
+        if not candidate.get("license_id"):
+            highlight_reasons.append("missing_model_license")
+        if not candidate.get("weights_url") or not candidate.get("weight_files"):
+            highlight_reasons.append("missing_downloadable_weights")
     if confidence == "low":
         highlight_reasons.append("low_confidence")
     if fatal:
@@ -170,6 +183,8 @@ def evaluate_review(
         "decision": decision,
         "decision_reasons": reasons,
         "primary_topic": primary_topic,
+        "artifact_type": artifact_type,
+        "lane": lane,
         "scores": scores,
     }
 
@@ -180,6 +195,8 @@ def _diverse_select(
     total_limit: int,
     per_topic_limit: int,
     initial_counts: Counter[str] | None = None,
+    lane_limits: dict[str, int] | None = None,
+    initial_lane_counts: Counter[str] | None = None,
 ) -> list[dict[str, Any]]:
     buckets: dict[str, list[dict[str, Any]]] = {}
     for topic_id in topic_ids:
@@ -187,19 +204,155 @@ def _diverse_select(
         buckets[topic_id] = sorted(bucket, key=lambda item: item["scores"]["overall"], reverse=True)
     selected: list[dict[str, Any]] = []
     counts: Counter[str] = Counter(initial_counts or {})
+    lane_counts: Counter[str] = Counter(initial_lane_counts or {})
     while len(selected) < total_limit:
         progressed = False
         for topic_id in topic_ids:
             if counts[topic_id] >= per_topic_limit or not buckets[topic_id]:
                 continue
-            selected.append(buckets[topic_id].pop(0))
+            candidate_index = next(
+                (
+                    index
+                    for index, item in enumerate(buckets[topic_id])
+                    if lane_limits is None
+                    or lane_counts[item.get("lane", "recent-paper")]
+                    < lane_limits.get(item.get("lane", "recent-paper"), total_limit)
+                ),
+                None,
+            )
+            if candidate_index is None:
+                continue
+            candidate = buckets[topic_id].pop(candidate_index)
+            selected.append(candidate)
             counts[topic_id] += 1
+            lane_counts[candidate.get("lane", "recent-paper")] += 1
             progressed = True
             if len(selected) >= total_limit:
                 break
         if not progressed:
             break
     return selected
+
+
+def _quota_select_highlights(
+    eligible: list[dict[str, Any]], profile: dict[str, Any]
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    topic_ids = [topic["id"] for topic in profile["topics"]]
+    total_limit = int(profile["max_digest_papers"])
+    per_topic_limit = int(profile["max_per_topic"])
+    if profile.get("profile_version") != 2:
+        return (
+            _diverse_select(eligible, topic_ids, total_limit, per_topic_limit),
+            {"profile_version": 1, "lanes": {}, "topics": {}},
+        )
+
+    ranked = sorted(eligible, key=lambda item: item["scores"]["overall"], reverse=True)
+    lane_config = {lane["id"]: lane for lane in profile.get("lanes", [])}
+    selected: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    lane_counts: Counter[str] = Counter()
+    topic_counts: Counter[str] = Counter()
+
+    def can_take(item: dict[str, Any], *, enforce_topic_cap: bool = True) -> bool:
+        if len(selected) >= total_limit or item["canonical_id"] in selected_ids:
+            return False
+        lane_id = item.get("lane", "recent-paper")
+        lane = lane_config.get(lane_id)
+        if lane and lane_counts[lane_id] >= int(lane["max_digest_items"]):
+            return False
+        if enforce_topic_cap and topic_counts[item["primary_topic"]] >= per_topic_limit:
+            return False
+        return True
+
+    def take(item: dict[str, Any]) -> None:
+        selected.append(item)
+        selected_ids.add(item["canonical_id"])
+        lane_counts[item.get("lane", "recent-paper")] += 1
+        topic_counts[item["primary_topic"]] += 1
+
+    def fill(predicate: Any, target_count: int, current_count: Any) -> None:
+        for item in ranked:
+            if len(selected) >= total_limit or current_count() >= target_count:
+                return
+            if predicate(item) and can_take(item, enforce_topic_cap=True):
+                take(item)
+
+    def topic_quota_match(item: dict[str, Any], topic_id: str, quota: dict[str, Any]) -> bool:
+        if not matches_topic_quota_scope(item["candidate"], topic_id, quota):
+            return False
+        return not quota.get("require_primary_topic", False) or item["primary_topic"] == topic_id
+
+    for topic_id, quota in profile.get("topic_quotas", {}).items():
+        minimum = int(quota["min_if_eligible"])
+        fill(
+            lambda item, topic_id=topic_id, quota=quota: topic_quota_match(item, topic_id, quota),
+            minimum,
+            lambda topic_id=topic_id: sum(
+                1
+                for item in selected
+                if topic_quota_match(item, topic_id, profile["topic_quotas"][topic_id])
+            ),
+        )
+
+    for lane_id, lane in lane_config.items():
+        minimum = int(lane["min_digest_items"])
+        fill(
+            lambda item, lane_id=lane_id: item.get("lane", "recent-paper") == lane_id,
+            minimum,
+            lambda lane_id=lane_id: lane_counts[lane_id],
+        )
+
+    while len(selected) < total_limit:
+        progressed = False
+        for topic_id in topic_ids:
+            candidate = next(
+                (
+                    item
+                    for item in ranked
+                    if item["primary_topic"] == topic_id and can_take(item, enforce_topic_cap=True)
+                ),
+                None,
+            )
+            if candidate is None:
+                continue
+            take(candidate)
+            progressed = True
+            if len(selected) >= total_limit:
+                break
+        if not progressed:
+            break
+
+    quota_report = {
+        "profile_version": 2,
+        "lanes": {
+            lane_id: {
+                "eligible": sum(1 for item in eligible if item.get("lane", "recent-paper") == lane_id),
+                "selected": lane_counts[lane_id],
+                "minimum": int(lane["min_digest_items"]),
+                "maximum": int(lane["max_digest_items"]),
+                "minimum_met": lane_counts[lane_id] >= int(lane["min_digest_items"]),
+            }
+            for lane_id, lane in lane_config.items()
+        },
+        "topics": {
+            topic_id: {
+                "eligible": sum(
+                    1 for item in eligible if topic_quota_match(item, topic_id, quota)
+                ),
+                "selected": sum(
+                    1 for item in selected if topic_quota_match(item, topic_id, quota)
+                ),
+                "minimum_if_eligible": int(quota["min_if_eligible"]),
+                "minimum_met": (
+                    not any(topic_quota_match(item, topic_id, quota) for item in eligible)
+                    or sum(1 for item in selected if topic_quota_match(item, topic_id, quota))
+                    >= int(quota["min_if_eligible"])
+                ),
+            }
+            for topic_id, quota in profile.get("topic_quotas", {}).items()
+        },
+    }
+    return selected, quota_report
 
 
 def _md_cell(value: Any) -> str:
@@ -216,26 +369,32 @@ def _authors(candidate: dict[str, Any], unknown: str = "Unknown") -> str:
 
 TEXT = {
     "zh-CN": {
-        "title_suffix": "高质量论文雷达",
+        "title_suffix": "高质量研究雷达",
         "generated": "生成时间",
         "window": "检索窗口",
         "past_days": "过去 {days} 天",
         "pool": "候选池：{candidates} 篇；已完成结构化评审：{reviewed} 篇；未评审：{unreviewed} 篇",
-        "selection": "重点推荐：{highlights} 篇；摘要观察：{watchlist} 篇",
+        "selection": "重点推荐：{highlights} 条；证据观察：{watchlist} 条",
         "coverage": "来源覆盖",
-        "score_note": "评分说明：总分 = 45% 相关性 + 45% 论文内在质量 + 10% 外部信号；外部热度不是质量替代品。",
-        "shortlist": "覆盖声明：本轮是经过全文核查的 shortlist，不是对候选池的穷尽式质量排序。",
+        "score_note": "评分说明：总分 = 45% 相关性 + 45% 内在质量 + 10% 外部信号；外部热度不是质量替代品。",
+        "shortlist": "覆盖声明：本轮是经过对应证据核查的 shortlist，不是对候选池的穷尽式质量排序。",
         "today": "今日结论",
-        "passed": "共有 {count} 篇通过相关性、内在质量和全文证据三重门槛：{coverage}。",
-        "none_passed": "本轮没有论文同时通过相关性、内在质量和全文证据门槛；不要为了凑数降低标准。",
+        "passed": "共有 {count} 条研究条目通过相关性、内在质量和对应证据门槛：{coverage}。",
+        "none_passed": "本轮没有条目同时通过相关性、内在质量和对应证据门槛；不要为了凑数降低标准。",
         "paper_count": "{label} {count} 篇",
         "authors": "作者",
         "unknown": "未知",
         "date": "日期",
+        "artifact": "类型 / 通道",
+        "paper_artifact": "论文",
+        "model_artifact": "开放模型发布",
+        "model_meta": "模型：{model_id}；开放性：{openness}；许可：{license}；版本：{version}",
         "scores": "分数：总分 **{overall:.1f}**；相关性 {relevance:.1f}；内在质量 {quality:.1f}；外部信号 {external:.1f}",
         "evidence": "证据级别：`{level}`；置信度：`{confidence}`；来源：{sources}",
         "project": "项目页",
         "code": "代码 / 开放资产",
+        "weights": "模型权重",
+        "license_link": "许可原文",
         "problem": "科学问题",
         "prior": "为什么 previous work 不够",
         "modules": "模块 / 策略与其解决的问题",
@@ -244,7 +403,7 @@ TEXT = {
         "limitations": "局限",
         "why_read": "为什么值得读",
         "missing": "未填写",
-        "watch": "摘要级观察区（不等同于高质量认证）",
+        "watch": "证据不足观察区（不等同于高质量认证）",
         "none": "无。",
         "watch_line": "总分 {overall:.1f}，证据 `{level}`，置信度 `{confidence}`。观察原因：{reasons}。",
         "gaps": "来源与缺口",
@@ -257,26 +416,32 @@ TEXT = {
         "truncation_warning": "存在可能在当前时间窗内被查询上限截断的来源；本轮不能声称穷尽覆盖。",
     },
     "en": {
-        "title_suffix": "High-Quality Paper Radar",
+        "title_suffix": "High-Quality Research Radar",
         "generated": "Generated",
         "window": "Screening window",
         "past_days": "past {days} days",
         "pool": "Candidate pool: {candidates}; structured reviews: {reviewed}; unreviewed: {unreviewed}",
-        "selection": "Highlights: {highlights}; abstract watchlist: {watchlist}",
+        "selection": "Highlights: {highlights}; evidence watchlist: {watchlist}",
         "coverage": "Source coverage",
         "score_note": "Scoring: 45% relevance + 45% intrinsic quality + 10% external signal. Popularity is not a substitute for quality.",
-        "shortlist": "Coverage note: this is a full-text-verified shortlist, not an exhaustive quality ranking of the candidate pool.",
+        "shortlist": "Coverage note: this is an evidence-verified shortlist, not an exhaustive quality ranking of the candidate pool.",
         "today": "Summary",
-        "passed": "{count} papers passed the relevance, intrinsic-quality, and full-text-evidence gates: {coverage}.",
-        "none_passed": "No paper passed all three gates in this run; do not lower the standard to fill a quota.",
+        "passed": "{count} research items passed the relevance, intrinsic-quality, and applicable evidence gates: {coverage}.",
+        "none_passed": "No item passed all applicable gates in this run; do not lower the standard to fill a quota.",
         "paper_count": "{label}: {count}",
         "authors": "Authors",
         "unknown": "Unknown",
         "date": "Date",
+        "artifact": "Artifact / lane",
+        "paper_artifact": "Paper",
+        "model_artifact": "Open-model release",
+        "model_meta": "Model: {model_id}; openness: {openness}; license: {license}; version: {version}",
         "scores": "Scores: overall **{overall:.1f}**; relevance {relevance:.1f}; intrinsic quality {quality:.1f}; external signal {external:.1f}",
         "evidence": "Evidence: `{level}`; confidence: `{confidence}`; sources: {sources}",
         "project": "Project",
         "code": "Code / open artifacts",
+        "weights": "Model weights",
+        "license_link": "License text",
         "problem": "Scientific problem",
         "prior": "Why previous work falls short",
         "modules": "Module / strategy to problem mapping",
@@ -285,7 +450,7 @@ TEXT = {
         "limitations": "Limitations",
         "why_read": "Why read it",
         "missing": "Not provided",
-        "watch": "Abstract-level watchlist (not a quality certification)",
+        "watch": "Insufficient-evidence watchlist (not a quality certification)",
         "none": "None.",
         "watch_line": "Overall {overall:.1f}; evidence `{level}`; confidence `{confidence}`. Reasons: {reasons}.",
         "gaps": "Source coverage and gaps",
@@ -366,16 +531,34 @@ def render_markdown(
                     "",
                     f"- {s['authors']}: {_authors(candidate, s['unknown'])}",
                     f"- {s['date']}: {candidate.get('published') or 'unknown'}",
+                    f"- {s['artifact']}: {s['model_artifact'] if candidate.get('artifact_type') == 'model-release' else s['paper_artifact']} / `{candidate.get('lane', 'recent-paper')}`",
                     "- " + s["scores"].format(overall=scores["overall"], relevance=scores["relevance"], quality=scores["intrinsic_quality"], external=scores["external_signal"]),
                     "- " + s["evidence"].format(level=review.get("evidence_level"), confidence=review.get("confidence"), sources=", ".join(candidate.get("sources", []))),
                 ]
             )
+            if candidate.get("artifact_type") == "model-release":
+                lines.append(
+                    "- "
+                    + s["model_meta"].format(
+                        model_id=candidate.get("model_id") or s["unknown"],
+                        openness=candidate.get("openness_class") or s["unknown"],
+                        license=candidate.get("license_id") or s["unknown"],
+                        version=candidate.get("version_sha") or s["unknown"],
+                    )
+                )
             project_url = safe_http_url(review.get("project_url")) or safe_http_url(candidate.get("project_url"))
             code_url = safe_http_url(review.get("code_url")) or safe_http_url(candidate.get("code_url"))
             if project_url:
                 lines.append(f"- {s['project']}: {project_url}")
             if code_url:
                 lines.append(f"- {s['code']}: {code_url}")
+            if candidate.get("artifact_type") == "model-release":
+                weights_url = safe_http_url(candidate.get("weights_url"))
+                license_url = safe_http_url(candidate.get("license_url"))
+                if weights_url:
+                    lines.append(f"- {s['weights']}: {weights_url}")
+                if license_url:
+                    lines.append(f"- {s['license_link']}: {license_url}")
             lines.extend(["", f"**{s['problem']}**", "", str(review.get("scientific_problem") or s["missing"]), "", f"**{s['prior']}**", ""])
             for gap in unique_strings(review.get("previous_work_gap", [])):
                 lines.append(f"- {gap}")
@@ -413,7 +596,7 @@ def render_markdown(
         )
     lines.extend(["", f"## {s['gaps']}", "", f"- {_source_summary(source_log, s)}"])
     for failure in source_log.get("failures", []):
-        lines.append("- " + s["failure"].format(source=failure.get("source"), scope=failure.get("topic") or failure.get("date") or "unknown", error=truncate(str(failure.get("error")), 400)))
+        lines.append("- " + s["failure"].format(source=failure.get("source"), scope=failure.get("topic") or failure.get("date") or failure.get("lane") or "unknown", error=truncate(str(failure.get("error")), 400)))
     truncated_queries = [
         entry for entry in source_log.get("queries", []) if entry.get("potentially_truncated_window")
     ]
@@ -422,7 +605,7 @@ def render_markdown(
             "- "
             + s["truncation"].format(
                 source=entry.get("source"),
-                scope=entry.get("topic") or entry.get("date") or "unknown",
+                scope=entry.get("topic") or entry.get("date") or entry.get("lane") or "unknown",
                 raw=entry.get("raw_returned", "unknown"),
                 limit=entry.get("requested_limit", "unknown"),
                 total=entry.get("total_results") if entry.get("total_results") is not None else "unknown",
@@ -486,12 +669,38 @@ def render_html(
                 resource_links.append(
                     f'<a href="{html.escape(str(code_url), quote=True)}">{html.escape(s["code"])}</a>'
                 )
+            if candidate.get("artifact_type") == "model-release":
+                weights_url = safe_http_url(candidate.get("weights_url"))
+                license_url = safe_http_url(candidate.get("license_url"))
+                if weights_url:
+                    resource_links.append(
+                        f'<a href="{html.escape(str(weights_url), quote=True)}">{html.escape(s["weights"])}</a>'
+                    )
+                if license_url:
+                    resource_links.append(
+                        f'<a href="{html.escape(str(license_url), quote=True)}">{html.escape(s["license_link"])}</a>'
+                    )
             resources = f'<p class="meta">{" · ".join(resource_links)}</p>' if resource_links else ""
             module_headers = "".join(f"<th>{html.escape(label)}</th>" for label in s["module_headers"])
+            artifact_label = s["model_artifact"] if candidate.get("artifact_type") == "model-release" else s["paper_artifact"]
+            artifact_meta = (
+                "<br>"
+                + html.escape(
+                    s["model_meta"].format(
+                        model_id=candidate.get("model_id") or s["unknown"],
+                        openness=candidate.get("openness_class") or s["unknown"],
+                        license=candidate.get("license_id") or s["unknown"],
+                        version=candidate.get("version_sha") or s["unknown"],
+                    )
+                )
+                if candidate.get("artifact_type") == "model-release"
+                else ""
+            )
             cards.append(
                 f"<article><h3><a href=\"{link}\">{html.escape(candidate.get('title', 'Untitled'))}</a></h3>"
                 f"<p class=\"meta\">{html.escape(s['authors'])}: {html.escape(_authors(candidate, s['unknown']))} · "
                 f"{html.escape(s['date'])}: {html.escape(candidate.get('published') or s['unknown'])}<br>"
+                f"{html.escape(s['artifact'])}: {html.escape(artifact_label)} / {html.escape(candidate.get('lane', 'recent-paper'))}{artifact_meta}<br>"
                 f"{html.escape(s['scores'].format(overall=scores['overall'], relevance=scores['relevance'], quality=scores['intrinsic_quality'], external=scores['external_signal']).replace('**', ''))}<br>"
                 f"{html.escape(s['evidence'].format(level=review.get('evidence_level'), confidence=review.get('confidence'), sources=', '.join(candidate.get('sources', []))).replace('`', ''))}</p>"
                 f"{resources}<p><strong>{html.escape(s['problem'])}:</strong> {html.escape(str(review.get('scientific_problem') or s['missing']))}</p>"
@@ -511,7 +720,7 @@ def render_html(
         for item in watchlist
     ) or f"<li>{html.escape(s['none'])}</li>"
     failure_items = "".join(
-        f"<li>{html.escape(str(item.get('source')))} / {html.escape(str(item.get('topic') or item.get('date') or 'unknown'))}: "
+        f"<li>{html.escape(str(item.get('source')))} / {html.escape(str(item.get('topic') or item.get('date') or item.get('lane') or 'unknown'))}: "
         f"{html.escape(truncate(str(item.get('error')), 400))}</li>"
         for item in source_log.get("failures", [])
     )
@@ -523,7 +732,7 @@ def render_html(
         + html.escape(
             s["truncation"].format(
                 source=item.get("source"),
-                scope=item.get("topic") or item.get("date") or "unknown",
+                scope=item.get("topic") or item.get("date") or item.get("lane") or "unknown",
                 raw=item.get("raw_returned", "unknown"),
                 limit=item.get("requested_limit", "unknown"),
                 total=item.get("total_results") if item.get("total_results") is not None else "unknown",
@@ -601,6 +810,8 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
                     "decision": "reject",
                     "decision_reasons": ["candidate_missing_from_candidates_json"],
                     "primary_topic": review.get("primary_topic", ""),
+                    "artifact_type": review.get("artifact_type", "paper"),
+                    "lane": review.get("lane", "recent-paper"),
                     "scores": None,
                 }
             )
@@ -620,11 +831,9 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
         entry for entry in source_log.get("queries", []) if entry.get("potentially_truncated_window")
     ]
     topic_ids = [topic["id"] for topic in profile["topics"]]
-    highlights = _diverse_select(
+    highlights, quota_report = _quota_select_highlights(
         [item for item in evaluations if item["decision"] == "eligible-highlight"],
-        topic_ids,
-        int(profile["max_digest_papers"]),
-        int(profile["max_per_topic"]),
+        profile,
     )
     selected_ids = {item["canonical_id"] for item in highlights}
     watch_eligible = [
@@ -632,13 +841,25 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
         for item in evaluations
         if item["decision"] == "eligible-watchlist" and item["canonical_id"] not in selected_ids and item["scores"]
     ]
+    lane_limits = None
+    initial_lane_counts = None
+    if profile.get("profile_version") == 2:
+        lane_limits = {lane["id"]: int(lane["max_digest_items"]) for lane in profile.get("lanes", [])}
+        initial_lane_counts = Counter(item.get("lane", "recent-paper") for item in highlights)
     watchlist = _diverse_select(
         watch_eligible,
         topic_ids,
         max(0, int(profile["max_digest_papers"]) - len(highlights)),
         int(profile["max_per_topic"]),
         Counter(item["primary_topic"] for item in highlights),
+        lane_limits,
+        initial_lane_counts,
     )
+    if profile.get("profile_version") == 2:
+        digest_lane_counts = Counter(item.get("lane", "recent-paper") for item in highlights + watchlist)
+        for lane_id, lane_status in quota_report["lanes"].items():
+            lane_status["digest_selected"] = digest_lane_counts[lane_id]
+            lane_status["maximum_met"] = digest_lane_counts[lane_id] <= int(lane_status["maximum"])
     generated_at = utc_now()
     markdown_output = render_markdown(
         profile,
@@ -682,6 +903,7 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
         },
         "highlight_ids": [item["canonical_id"] for item in highlights],
         "watchlist_ids": [item["canonical_id"] for item in watchlist],
+        "quota_fulfillment": quota_report,
         "screening_coverage": {
             "exhaustive": not unreviewed_ids,
             "unreviewed_count": len(unreviewed_ids),
@@ -709,6 +931,8 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
                     else item["decision"]
                 ),
                 "primary_topic": item["primary_topic"],
+                "artifact_type": item.get("artifact_type", "paper"),
+                "lane": item.get("lane", "recent-paper"),
                 "scores": item["scores"],
                 "reasons": item["decision_reasons"],
             }
@@ -728,6 +952,10 @@ def build_digest(workspace: Path, mark_seen: bool = False) -> dict[str, Any]:
                 "first_seen_at": seen.get(item["canonical_id"], {}).get("first_seen_at", generated_at),
                 "last_seen_at": generated_at,
                 "title": item["candidate"].get("title"),
+                "artifact_type": item["candidate"].get("artifact_type", "paper"),
+                "lane": item["candidate"].get("lane", "recent-paper"),
+                "entity_id": item["candidate"].get("entity_id") or item["canonical_id"],
+                "event_id": item["candidate"].get("event_id") or item["canonical_id"],
                 "decision": "highlight" if item in highlights else "watchlist",
                 "delivery_mode": "local-acknowledged",
             }

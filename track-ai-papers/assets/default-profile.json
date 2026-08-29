@@ -1,6 +1,6 @@
 {
-  "profile_version": 1,
-  "name": "Motion, Video, World Models, Agents and VLA Radar",
+  "profile_version": 2,
+  "name": "Broad AI Research and Open-Model Radar",
   "language": "zh-CN",
   "timezone": "Asia/Shanghai",
   "lookback_days": 7,
@@ -11,6 +11,60 @@
   "relevance_threshold": 70,
   "quality_threshold": 65,
   "watch_threshold": 62,
+  "lanes": [
+    {
+      "id": "recent-paper",
+      "label": "近期研究论文",
+      "artifact_types": ["paper"],
+      "min_digest_items": 0,
+      "max_digest_items": 7,
+      "lookback_days": 7
+    },
+    {
+      "id": "classic-foundation",
+      "label": "经典基础论文",
+      "artifact_types": ["paper"],
+      "min_digest_items": 1,
+      "max_digest_items": 1
+    },
+    {
+      "id": "open-model",
+      "label": "近期热门开放模型",
+      "artifact_types": ["model-release"],
+      "min_digest_items": 1,
+      "max_digest_items": 2,
+      "lookback_days": 45
+    }
+  ],
+  "topic_quotas": {
+    "audiovisual-generation": {
+      "min_if_eligible": 1,
+      "artifact_types": ["paper"],
+      "lanes": ["recent-paper"],
+      "require_primary_topic": true
+    }
+  },
+  "source_config": {
+    "classic_catalog": "classic-foundations.json",
+    "hf_models": {
+      "limit": 100,
+      "lookback_days": 45,
+      "require_weights": true,
+      "require_explicit_license": true,
+      "require_open_source_license": false,
+      "allow_restrictive_open_weights": true,
+      "fallback_topic": "open-model-releases",
+      "include_any": [
+        "text-generation", "text2text-generation", "image-to-video", "text-to-video",
+        "text-to-image", "audio-to-audio", "text-to-audio", "video-to-audio",
+        "text-to-speech", "automatic-speech-recognition", "image-text-to-text",
+        "multimodal", "vision-language", "robotics", "reinforcement-learning", "code"
+      ],
+      "exclude_any": [
+        "base_model", "adapter", "lora", "loras", "merge", "gguf", "controlnet", "abliterated"
+      ]
+    }
+  },
   "topics": [
     {
       "id": "human-embodied-motion",
@@ -56,6 +110,73 @@
         "generative video", "autoregressive video", "controllable video", "video editing"
       ],
       "exclude_any": ["video compression", "video retrieval only", "video captioning only"]
+    },
+    {
+      "id": "audiovisual-generation",
+      "label": "音视频联合生成",
+      "arxiv_categories": ["cs.CV", "cs.MM", "cs.SD", "eess.AS", "cs.LG"],
+      "query_terms": [
+        "joint audio video generation",
+        "audio visual generation",
+        "audiovisual generation",
+        "text to audio video",
+        "video to audio generation",
+        "audio driven video generation",
+        "sound guided video generation",
+        "synchronized audio video generation",
+        "joint audiovisual synthesis"
+      ],
+      "include_any": [
+        "audio video generation", "audio visual generation", "audiovisual generation",
+        "text to audio video generation", "video to audio generation",
+        "audio driven video generation", "sound guided video generation",
+        "synchronized audio video generation", "joint audiovisual synthesis"
+      ],
+      "include_all_groups": [
+        ["audio", "sound", "acoustic", "speech", "music"],
+        ["video", "visual", "audiovisual", "frame", "animation"],
+        ["generation", "generative", "generate", "synthesis", "synthesize", "diffusion", "flow", "autoregressive"],
+        ["joint", "synchronized", "coupled", "co generation", "audio driven", "sound guided", "video to audio", "audio to video", "from video", "from audio"]
+      ],
+      "exclude_any": [
+        "audio visual retrieval", "audio visual classification", "audio visual localization",
+        "audio visual event classification", "audiovisual event classification",
+        "audio visual speech recognition", "visual speech recognition",
+        "audio visual source separation", "audiovisual source separation", "source separation",
+        "sound source localization", "audio visual segmentation",
+        "video captioning only", "audio separation only", "audio based metric", "audio metric"
+      ]
+    },
+    {
+      "id": "open-model-releases",
+      "label": "开放模型发布",
+      "arxiv_categories": ["cs.AI", "cs.LG", "cs.CV", "cs.CL", "cs.RO", "cs.MM"],
+      "query_terms": [
+        "open model release", "open weight model", "open source foundation model",
+        "open multimodal model", "open video generation model", "open audio generation model"
+      ],
+      "include_any": [
+        "open model release", "open weight model", "open weights", "open source model",
+        "open foundation model", "released model weights", "public model weights"
+      ],
+      "exclude_any": ["model extraction attack", "open set recognition"]
+    },
+    {
+      "id": "generative-foundations",
+      "label": "生成式建模基础方法",
+      "arxiv_categories": ["cs.LG", "stat.ML", "cs.CV", "cs.CL", "cs.AI"],
+      "query_terms": [
+        "flow matching", "rectified flow", "score based generative modeling",
+        "diffusion probabilistic model", "consistency model", "consistency training",
+        "stochastic interpolant", "normalizing flow", "generative neural ode",
+        "diffusion transformer"
+      ],
+      "include_any": [
+        "flow matching", "rectified flow", "score based generative", "diffusion probabilistic",
+        "consistency model", "consistency training", "stochastic interpolant",
+        "normalizing flow", "generative neural ode", "diffusion transformer"
+      ],
+      "exclude_any": ["optical flow matching", "traffic flow matching", "power flow matching"]
     },
     {
       "id": "video-3d-world-models",

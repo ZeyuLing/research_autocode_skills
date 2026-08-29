@@ -79,9 +79,31 @@ External signal is a tie-breaker capped at 10% of the overall score. Consider:
 
 Never infer quality from author fame, institution, or social-media popularity.
 
+For Hugging Face model releases, the source ordering by `trendingScore`, likes, and downloads is a discovery signal, not evidence that the model's capability claims are true. Keep the trend score separate from benchmark provenance and artifact quality. The v2 minimum closed loop records a point-in-time snapshot; do not describe cumulative downloads or likes as daily growth.
+
+## Artifact-specific review
+
+### Foundational classics
+
+The curated catalog establishes identity and curriculum membership, not a guaranteed highlight. Read the primary paper and apply the same full-text quality gate as any other paper. Explain its foundational mechanism, what later line of work it enabled, and which assumptions or limitations remain important. The `classic-foundation` quota is satisfied only by an eligible full-text review; never promote an abstract-only classic to fill the daily slot.
+
+### Open-model releases
+
+Verify all of the following from the official Hugging Face repository and linked primary artifacts:
+
+- the model ID, organization, release date, and version SHA
+- publicly downloadable, ungated weight files rather than only inference access or wrapper code
+- an explicit license; distinguish permissive `open-source` from restrictive, research-only, non-commercial, or otherwise non-permissive `open-weights` licenses, and never collapse the latter into the former
+- model-card claims, linked code/paper, architecture and training disclosure when available
+- benchmark names, protocols, baselines, and whether results are first-party or independently reproduced
+- hardware, context, modality, safety, and usage constraints when disclosed
+
+A public repository is not proof of open weights. Missing weights, an absent license, gating, a metadata mismatch, or an unverifiable identity is a highlight-blocking concern. Popularity cannot repair these failures. Interpret the existing score fields for a release as: problem importance = value of the capability/use case; method novelty = disclosed technical novelty; evidence strength = benchmark and provenance strength; reproducibility = weights, license, code, documentation, and runnable detail.
+
 ## Evidence levels and gates
 
 - `full-text`: Method and Experiments inspected; concrete anchors captured. Eligible for highlights.
+- `official-artifacts`: official model card, weight inventory, license, linked code/paper, and benchmark provenance inspected. Eligible only for `model-release` highlights.
 - `partial-text`: more than abstract read, but experiments or method remain incomplete. Watchlist only.
 - `abstract`: title/abstract/metadata only. Watchlist only.
 
@@ -89,7 +111,7 @@ Highlight gates:
 
 - relevance at or above the profile threshold
 - intrinsic quality at or above the profile threshold
-- `evidence_level == "full-text"`
+- paper: `evidence_level == "full-text"`; model release: `evidence_level == "official-artifacts"`
 - no unresolved fatal concern, retraction, metadata mismatch, or unverifiable paper identity
 
 Watchlist gates:

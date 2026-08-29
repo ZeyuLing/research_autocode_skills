@@ -1,0 +1,78 @@
+{
+  "schema_version": 1,
+  "description": "Versioned, primary-source-identified seeds for the daily generative-foundations classic lane.",
+  "papers": [
+    {
+      "arxiv_id": "1312.6114",
+      "title": "Auto-Encoding Variational Bayes",
+      "authors": ["Diederik P. Kingma", "Max Welling"],
+      "published": "2013-12-20T00:00:00Z",
+      "family": "variational-generative-models",
+      "curation_summary": "Introduces the reparameterized variational lower-bound estimator that made scalable gradient-based learning of latent-variable generative models practical.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "1406.2661",
+      "title": "Generative Adversarial Nets",
+      "authors": ["Ian J. Goodfellow", "Jean Pouget-Abadie", "Mehdi Mirza", "Bing Xu", "David Warde-Farley", "Sherjil Ozair", "Aaron Courville", "Yoshua Bengio"],
+      "published": "2014-06-10T00:00:00Z",
+      "family": "adversarial-generative-models",
+      "curation_summary": "Frames generative learning as a minimax game between a generator and a discriminator, establishing the modern adversarial generation paradigm.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2006.11239",
+      "title": "Denoising Diffusion Probabilistic Models",
+      "authors": ["Jonathan Ho", "Ajay Jain", "Pieter Abbeel"],
+      "published": "2020-06-19T00:00:00Z",
+      "family": "diffusion-models",
+      "curation_summary": "Establishes a high-quality diffusion generative model through denoising score matching and a weighted variational objective.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2010.02502",
+      "title": "Denoising Diffusion Implicit Models",
+      "authors": ["Jiaming Song", "Chenlin Meng", "Stefano Ermon"],
+      "published": "2020-10-06T00:00:00Z",
+      "family": "diffusion-sampling",
+      "curation_summary": "Shows that the DDPM training objective admits non-Markovian implicit samplers, enabling much faster deterministic or stochastic generation.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2011.13456",
+      "title": "Score-Based Generative Modeling through Stochastic Differential Equations",
+      "authors": ["Yang Song", "Jascha Sohl-Dickstein", "Diederik P. Kingma", "Abhishek Kumar", "Stefano Ermon", "Ben Poole"],
+      "published": "2020-11-26T00:00:00Z",
+      "family": "score-sde",
+      "curation_summary": "Unifies score-based and diffusion models with forward and reverse-time SDEs, predictor-corrector sampling, and an equivalent probability-flow ODE.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2209.03003",
+      "title": "Flow Straight and Fast: Learning to Generate and Transfer Data with Rectified Flow",
+      "authors": ["Xingchao Liu", "Chengyue Gong", "Qiang Liu"],
+      "published": "2022-09-07T00:00:00Z",
+      "family": "rectified-flow",
+      "curation_summary": "Introduces rectified flow, which learns ODE transports along increasingly straight paths to reduce discretization error and accelerate sampling.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2210.02747",
+      "title": "Flow Matching for Generative Modeling",
+      "authors": ["Yaron Lipman", "Ricky T. Q. Chen", "Heli Ben-Hamu", "Maximilian Nickel", "Matt Le"],
+      "published": "2022-10-06T00:00:00Z",
+      "family": "flow-matching",
+      "curation_summary": "Introduces simulation-free conditional vector-field regression for continuous normalizing flows and connects diffusion paths with optimal-transport paths.",
+      "topics": ["generative-foundations"]
+    },
+    {
+      "arxiv_id": "2303.01469",
+      "title": "Consistency Models",
+      "authors": ["Yang Song", "Prafulla Dhariwal", "Mark Chen", "Ilya Sutskever"],
+      "published": "2023-03-02T00:00:00Z",
+      "family": "consistency-models",
+      "curation_summary": "Introduces models that map points on a probability-flow trajectory to a consistent endpoint, enabling one-step or few-step generation.",
+      "topics": ["generative-foundations"]
+    }
+  ]
+}

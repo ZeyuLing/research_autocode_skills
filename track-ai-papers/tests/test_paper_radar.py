@@ -14,13 +14,22 @@ SCRIPT_DIR = Path(__file__).resolve().parents[1] / "scripts"
 sys.path.insert(0, str(SCRIPT_DIR))
 
 from build_digest import build_digest  # noqa: E402
-from fetch_papers import fetch, fetch_arxiv_topic, is_recent, new_run_id  # noqa: E402
+from fetch_papers import (  # noqa: E402
+    _normalize_hf_model,
+    fetch,
+    fetch_arxiv_topic,
+    fetch_classics,
+    is_recent,
+    main as fetch_main,
+    new_run_id,
+)
 from notify_digest import _chunks, _validate_webhook_response, deliver  # noqa: E402
 from prepare_review import prepare  # noqa: E402
 from radar_common import (  # noqa: E402
     DEFAULT_PROFILE,
     RadarError,
     canonical_arxiv_id,
+    canonical_record_id,
     load_json,
     match_topic,
     merge_candidate,
@@ -33,6 +42,8 @@ from radar_common import (  # noqa: E402
 
 def candidate(identifier: str, topic: str, title: str) -> dict:
     return {
+        "artifact_type": "paper",
+        "lane": "recent-paper",
         "canonical_id": f"arxiv:{identifier}",
         "arxiv_id": identifier,
         "title": title,
@@ -83,6 +94,58 @@ def review(identifier: str, topic: str, evidence_level: str = "full-text", score
         "why_read": "Strong evidence for the mechanism.",
         "fatal_concerns": [],
         "notes": "",
+    }
+
+
+def review_for(candidate_record: dict, evidence_level: str = "full-text", score: int = 82) -> dict:
+    result = review("2608.99999", candidate_record["topics"][0], evidence_level=evidence_level, score=score)
+    result["canonical_id"] = candidate_record["canonical_id"]
+    result["artifact_type"] = candidate_record.get("artifact_type", "paper")
+    result["lane"] = candidate_record.get("lane", "recent-paper")
+    return result
+
+
+def model_candidate(identifier: str, topic: str, score_seed: int = 10) -> dict:
+    model_id = f"example/{identifier}"
+    canonical_id = f"hf-model:{model_id.lower()}"
+    return {
+        "artifact_type": "model-release",
+        "lane": "open-model",
+        "canonical_id": canonical_id,
+        "entity_id": canonical_id,
+        "event_id": f"{canonical_id}@abcdef123456",
+        "model_id": model_id,
+        "organization": "example",
+        "title": model_id,
+        "abstract": "An open multimodal generative model.",
+        "authors": ["example"],
+        "published": "2026-08-28T00:00:00Z",
+        "released_at": "2026-08-28T00:00:00Z",
+        "updated": "2026-08-28T00:00:00Z",
+        "version_sha": "abcdef1234567890",
+        "categories": [],
+        "primary_category": None,
+        "topics": [topic],
+        "sources": ["huggingface-models"],
+        "abs_url": f"https://huggingface.co/{model_id}",
+        "pdf_url": None,
+        "project_url": f"https://huggingface.co/{model_id}",
+        "code_url": None,
+        "model_card_url": f"https://huggingface.co/{model_id}",
+        "weights_url": f"https://huggingface.co/{model_id}/tree/main",
+        "weight_files": ["model.safetensors"],
+        "license_id": "apache-2.0",
+        "openness_class": "open-source",
+        "pipeline_tag": "text-generation",
+        "tags": ["text-generation"],
+        "topic_match_terms": {topic: ["text generation"]},
+        "external": {
+            "hf_upvotes": 0,
+            "hf_featured": False,
+            "hf_model_likes": score_seed,
+            "hf_model_downloads": score_seed * 100,
+            "hf_trending_score": score_seed / 10,
+        },
     }
 
 
@@ -177,7 +240,165 @@ class PaperRadarTests(unittest.TestCase):
         right["external"] = {"hf_upvotes": 17, "hf_featured": True}
         merge_candidate(left, right)
         self.assertEqual(left["sources"], ["arxiv", "huggingface"])
-        self.assertEqual(left["external"], {"hf_upvotes": 17, "hf_featured": True})
+        self.assertEqual(left["external"]["hf_upvotes"], 17)
+        self.assertTrue(left["external"]["hf_featured"])
+
+    def test_audiovisual_topic_requires_joint_generation_semantics(self) -> None:
+        profile = load_json(DEFAULT_PROFILE)
+        topic = next(item for item in profile["topics"] if item["id"] == "audiovisual-generation")
+        matched, terms = match_topic(
+            {
+                "title": "A Unified Diffusion System",
+                "abstract": "The model jointly synthesizes synchronized sound and visual frames from text.",
+            },
+            topic,
+        )
+        self.assertTrue(matched)
+        self.assertIn("sound", terms)
+        self.assertIn("visual", terms)
+        self.assertTrue(any(term in terms for term in ("diffusion", "synthesize", "synthesis")))
+        self.assertFalse(
+            match_topic(
+                {"title": "Audio-Visual Retrieval", "abstract": "Cross-modal classification and localization."},
+                topic,
+            )[0]
+        )
+        self.assertTrue(
+            match_topic(
+                {"title": "Video-to-Audio Generation", "abstract": "We generate synchronized sound from video."},
+                topic,
+            )[0]
+        )
+        hard_negatives = [
+            ("Audio-Visual Event Classification", "Diffusion augmentation improves classification."),
+            ("Visual Speech Recognition", "A generative diffusion prior improves lip reading."),
+            ("Audio-Visual Source Separation", "A coupled diffusion model separates sound sources."),
+            ("Video Generation Evaluation", "We use an audio-based metric to score generated videos."),
+        ]
+        for title, abstract in hard_negatives:
+            with self.subTest(title=title):
+                self.assertFalse(match_topic({"title": title, "abstract": abstract}, topic)[0])
+
+    def test_v1_profile_remains_valid_without_lane_fields(self) -> None:
+        profile = load_json(DEFAULT_PROFILE)
+        profile["profile_version"] = 1
+        profile.pop("lanes")
+        profile.pop("topic_quotas")
+        profile.pop("source_config")
+        validate_profile(profile)
+        write_json(self.workspace / "profile.json", profile)
+        with patch("fetch_papers.fetch", return_value={}) as fetcher:
+            self.assertEqual(fetch_main(["fetch", "--workspace", str(self.workspace)]), 0)
+        self.assertEqual(fetcher.call_args.args[3], {"arxiv", "huggingface"})
+
+    def test_v2_cli_defaults_to_all_configured_sources(self) -> None:
+        with patch("fetch_papers.fetch", return_value={}) as fetcher:
+            self.assertEqual(fetch_main(["fetch", "--workspace", str(self.workspace)]), 0)
+        self.assertEqual(fetcher.call_args.args[3], {"arxiv", "huggingface", "classics", "hf-models"})
+
+    def test_classic_catalog_bypasses_recent_window_and_seen_state(self) -> None:
+        records, _, metadata = fetch_classics(load_json(DEFAULT_PROFILE))
+        rectified = next(item for item in records if item["arxiv_id"] == "2209.03003")
+        self.assertEqual(rectified["lane"], "classic-foundation")
+        self.assertEqual(metadata["raw_returned"], len(records))
+        result = fetch(self.workspace, None, None, {"classics"}, False, 0)
+        payload = load_json(self.workspace / "candidates.json")
+        self.assertIn(rectified["canonical_id"], {item["canonical_id"] for item in payload["candidates"]})
+        state = load_json(self.workspace / "state.json")
+        state["seen"][rectified["canonical_id"]] = {"first_seen_at": "2026-08-01T00:00:00Z"}
+        write_json(self.workspace / "state.json", state)
+        fetch(self.workspace, None, None, {"classics"}, False, 0)
+        refreshed = load_json(self.workspace / "candidates.json")
+        self.assertNotIn(rectified["canonical_id"], {item["canonical_id"] for item in refreshed["candidates"]})
+        self.assertEqual(result["source_failures"], 0)
+
+    def test_hf_open_model_normalization_requires_weights_and_license(self) -> None:
+        profile = load_json(DEFAULT_PROFILE)
+        cutoff = datetime(2026, 8, 1, tzinfo=timezone.utc)
+        item = {
+            "id": "Example/AV-Generator",
+            "author": "Example",
+            "createdAt": "2026-08-28T00:00:00Z",
+            "lastModified": "2026-08-29T00:00:00Z",
+            "sha": "0123456789abcdef",
+            "pipeline_tag": "image-to-video",
+            "tags": ["image-to-video", "audio", "license:apache-2.0"],
+            "siblings": [{"rfilename": "model.safetensors"}, {"rfilename": "README.md"}],
+            "likes": 42,
+            "downloads": 12000,
+            "trendingScore": 7.5,
+            "private": False,
+            "gated": False,
+        }
+        normalized = _normalize_hf_model(item, profile, cutoff)
+        self.assertIsNotNone(normalized)
+        assert normalized is not None
+        self.assertEqual(normalized["canonical_id"], "hf-model:example/av-generator")
+        self.assertEqual(normalized["artifact_type"], "model-release")
+        self.assertEqual(normalized["openness_class"], "open-source")
+        self.assertTrue(normalized["event_id"].endswith("@0123456789ab"))
+        missing_license = {**item, "tags": ["image-to-video", "audio"]}
+        self.assertIsNone(_normalize_hf_model(missing_license, profile, cutoff))
+        missing_weights = {**item, "siblings": [{"rfilename": "README.md"}]}
+        self.assertIsNone(_normalize_hf_model(missing_weights, profile, cutoff))
+        auxiliary_binary_only = {**item, "siblings": [{"rfilename": "training_args.bin"}]}
+        self.assertIsNone(_normalize_hf_model(auxiliary_binary_only, profile, cutoff))
+        gated = {**item, "gated": "manual"}
+        self.assertIsNone(_normalize_hf_model(gated, profile, cutoff))
+        named_custom_license = {
+            **item,
+            "tags": ["image-to-video", "audio", "license:other"],
+            "cardData": {
+                "license": "other",
+                "license_name": "example-community-1.0",
+                "license_link": "LICENSE",
+            },
+        }
+        custom = _normalize_hf_model(named_custom_license, profile, cutoff)
+        self.assertIsNotNone(custom)
+        assert custom is not None
+        self.assertEqual(custom["license_id"], "example-community-1.0")
+        self.assertEqual(custom["openness_class"], "open-weights")
+        self.assertTrue(custom["license_url"].endswith("/LICENSE"))
+        strict_profile = load_json(DEFAULT_PROFILE)
+        strict_profile["source_config"]["hf_models"]["require_open_source_license"] = True
+        self.assertIsNone(_normalize_hf_model(named_custom_license, strict_profile, cutoff))
+        permissive_only_profile = load_json(DEFAULT_PROFILE)
+        permissive_only_profile["source_config"]["hf_models"]["allow_restrictive_open_weights"] = False
+        self.assertIsNone(_normalize_hf_model(named_custom_license, permissive_only_profile, cutoff))
+        derivative = {**item, "tags": [*item["tags"], "base_model:Example/Base"]}
+        self.assertIsNone(_normalize_hf_model(derivative, profile, cutoff))
+        unsafe_id = {**item, "id": "Example/../../escape"}
+        self.assertIsNone(_normalize_hf_model(unsafe_id, profile, cutoff))
+        malformed_metrics = {
+            **item,
+            "id": "Example/Bad-Metrics",
+            "likes": "not-a-number",
+            "downloads": {"unexpected": 1},
+            "trendingScore": float("inf"),
+        }
+        safe_metrics = _normalize_hf_model(malformed_metrics, profile, cutoff)
+        self.assertIsNotNone(safe_metrics)
+        assert safe_metrics is not None
+        self.assertEqual(safe_metrics["external"]["hf_model_likes"], 0)
+        self.assertEqual(safe_metrics["external"]["hf_model_downloads"], 0)
+        self.assertEqual(safe_metrics["external"]["hf_trending_score"], 0.0)
+        fallback_item = {
+            **item,
+            "id": "Example/Generic-Text-Model",
+            "pipeline_tag": "text-generation",
+            "tags": ["text-generation", "license:apache-2.0"],
+        }
+        fallback_model = _normalize_hf_model(fallback_item, profile, cutoff)
+        self.assertIsNotNone(fallback_model)
+        assert fallback_model is not None
+        self.assertEqual(fallback_model["topics"], ["open-model-releases"])
+
+    def test_artifact_aware_model_ids_are_stable_across_versions(self) -> None:
+        first = canonical_record_id({"artifact_type": "model-release", "model_id": "Org/Model", "version_sha": "a"})
+        second = canonical_record_id({"artifact_type": "model-release", "model_id": "org/model", "version_sha": "b"})
+        self.assertEqual(first, "hf-model:org/model")
+        self.assertEqual(first, second)
 
     def test_all_sources_obey_publication_window(self) -> None:
         cutoff = datetime(2026, 7, 27, tzinfo=timezone.utc)
@@ -219,6 +440,140 @@ class PaperRadarTests(unittest.TestCase):
         build_digest(self.workspace, mark_seen=True)
         seen = load_json(self.workspace / "state.json")["seen"]
         self.assertEqual(set(seen), {"arxiv:2608.00001", "arxiv:2608.00003"})
+
+    def test_v2_lane_quotas_and_audiovisual_reservation_only_use_eligible_items(self) -> None:
+        profile = load_json(self.workspace / "profile.json")
+        profile["max_digest_papers"] = 5
+        profile["max_per_topic"] = 2
+        for lane in profile["lanes"]:
+            lane["max_digest_items"] = {
+                "recent-paper": 2,
+                "classic-foundation": 1,
+                "open-model": 2,
+            }[lane["id"]]
+        self.profile_digest = profile_digest(profile)
+        write_json(self.workspace / "profile.json", profile)
+        source_log = load_json(self.workspace / "source-log.json")
+        source_log["profile_digest"] = self.profile_digest
+        write_json(self.workspace / "source-log.json", source_log)
+
+        audio = candidate("2608.20001", "audiovisual-generation", "Joint Sound and Video")
+        agent = candidate("2608.20002", "llm-agents", "Higher Scoring Agent")
+        classic_one = candidate("2209.03003", "generative-foundations", "Rectified Flow")
+        classic_one["lane"] = "classic-foundation"
+        classic_two = candidate("2210.02747", "generative-foundations", "Flow Matching")
+        classic_two["lane"] = "classic-foundation"
+        model_one = model_candidate("agent-model", "llm-agents", score_seed=20)
+        model_two = model_candidate("video-model", "video-generation", score_seed=15)
+        candidates = [audio, agent, classic_one, classic_two, model_one, model_two]
+        reviews = [
+            review_for(audio, score=72),
+            review_for(agent, score=95),
+            review_for(classic_one, score=84),
+            review_for(classic_two, score=83),
+            review_for(model_one, evidence_level="official-artifacts", score=86),
+            review_for(model_two, evidence_level="official-artifacts", score=85),
+        ]
+        self.write_review_run(candidates, reviews)
+        build_digest(self.workspace)
+        report = load_json(self.workspace / "selection-report.json")
+        selected = set(report["highlight_ids"])
+        self.assertEqual(len(selected), 5)
+        self.assertIn(audio["canonical_id"], selected)
+        self.assertEqual(len(selected & {classic_one["canonical_id"], classic_two["canonical_id"]}), 1)
+        self.assertIn(model_one["canonical_id"], selected)
+        self.assertIn(model_two["canonical_id"], selected)
+        quotas = report["quota_fulfillment"]
+        self.assertTrue(quotas["lanes"]["classic-foundation"]["minimum_met"])
+        self.assertTrue(quotas["lanes"]["open-model"]["minimum_met"])
+        self.assertTrue(quotas["topics"]["audiovisual-generation"]["minimum_met"])
+        markdown = (self.workspace / "digest.md").read_text(encoding="utf-8")
+        self.assertIn("开放模型发布", markdown)
+        self.assertIn("apache-2.0", markdown)
+
+    def test_open_model_quota_does_not_promote_a_low_quality_release(self) -> None:
+        model = model_candidate("weak-model", "generative-foundations")
+        judged = review_for(model, evidence_level="official-artifacts", score=0)
+        self.write_review_run([model], [judged])
+        build_digest(self.workspace)
+        report = load_json(self.workspace / "selection-report.json")
+        self.assertEqual(report["highlight_ids"], [])
+        self.assertEqual(report["watchlist_ids"], [])
+        self.assertFalse(report["quota_fulfillment"]["lanes"]["open-model"]["minimum_met"])
+        self.assertEqual(report["evaluations"][0]["decision"], "reject")
+
+    def test_audiovisual_quota_counts_only_recent_primary_topic_papers(self) -> None:
+        profile = load_json(self.workspace / "profile.json")
+        profile["max_per_topic"] = 2
+        self.profile_digest = profile_digest(profile)
+        write_json(self.workspace / "profile.json", profile)
+        source_log = load_json(self.workspace / "source-log.json")
+        source_log["profile_digest"] = self.profile_digest
+        write_json(self.workspace / "source-log.json", source_log)
+        paper = candidate("2608.21001", "audiovisual-generation", "Joint Audio Video Paper")
+        model = model_candidate("av-model", "audiovisual-generation", score_seed=50)
+        self.write_review_run(
+            [paper, model],
+            [
+                review_for(paper, score=72),
+                review_for(model, evidence_level="official-artifacts", score=95),
+            ],
+        )
+        build_digest(self.workspace)
+        report = load_json(self.workspace / "selection-report.json")
+        quota = report["quota_fulfillment"]["topics"]["audiovisual-generation"]
+        self.assertEqual(quota["eligible"], 1)
+        self.assertEqual(quota["selected"], 1)
+        self.assertIn(paper["canonical_id"], report["highlight_ids"])
+
+    def test_lane_minimum_never_overrides_hard_per_topic_cap(self) -> None:
+        classic = candidate("2209.03003", "generative-foundations", "Rectified Flow")
+        classic["lane"] = "classic-foundation"
+        model = model_candidate("foundation-model", "generative-foundations", score_seed=50)
+        self.write_review_run(
+            [classic, model],
+            [
+                review_for(classic, score=90),
+                review_for(model, evidence_level="official-artifacts", score=89),
+            ],
+        )
+        build_digest(self.workspace)
+        report = load_json(self.workspace / "selection-report.json")
+        self.assertEqual(len(report["highlight_ids"]), 1)
+        self.assertEqual(
+            sum(item["primary_topic"] == "generative-foundations" for item in report["evaluations"] if item["canonical_id"] in report["highlight_ids"]),
+            1,
+        )
+        self.assertFalse(report["quota_fulfillment"]["lanes"]["open-model"]["minimum_met"])
+
+    def test_watchlist_respects_lane_maximum_after_highlights(self) -> None:
+        profile = load_json(self.workspace / "profile.json")
+        profile["max_per_topic"] = 3
+        self.profile_digest = profile_digest(profile)
+        write_json(self.workspace / "profile.json", profile)
+        source_log = load_json(self.workspace / "source-log.json")
+        source_log["profile_digest"] = self.profile_digest
+        write_json(self.workspace / "source-log.json", source_log)
+        classic_highlight = candidate("2209.03003", "generative-foundations", "Classic Highlight")
+        classic_highlight["lane"] = "classic-foundation"
+        classic_watch = candidate("2210.02747", "generative-foundations", "Classic Watch")
+        classic_watch["lane"] = "classic-foundation"
+        recent_watch = candidate("2608.21002", "llm-agents", "Recent Watch")
+        self.write_review_run(
+            [classic_highlight, classic_watch, recent_watch],
+            [
+                review_for(classic_highlight, score=90),
+                review_for(classic_watch, evidence_level="abstract", score=80),
+                review_for(recent_watch, evidence_level="abstract", score=80),
+            ],
+        )
+        build_digest(self.workspace)
+        report = load_json(self.workspace / "selection-report.json")
+        self.assertNotIn(classic_watch["canonical_id"], report["watchlist_ids"])
+        self.assertIn(recent_watch["canonical_id"], report["watchlist_ids"])
+        lane = report["quota_fulfillment"]["lanes"]["classic-foundation"]
+        self.assertEqual(lane["digest_selected"], 1)
+        self.assertTrue(lane["maximum_met"])
 
     def test_invalid_score_is_rejected_without_crash(self) -> None:
         item = candidate("2608.10000", "llm-agents", "Invalid Review")
@@ -295,7 +650,7 @@ class PaperRadarTests(unittest.TestCase):
         build_digest(self.workspace)
         markdown = (self.workspace / "digest.md").read_text(encoding="utf-8")
         rendered_html = (self.workspace / "digest.html").read_text(encoding="utf-8")
-        self.assertIn("High-Quality Paper Radar", markdown)
+        self.assertIn("High-Quality Research Radar", markdown)
         self.assertIn('lang="en"', rendered_html)
         self.assertIn("Why previous work falls short", rendered_html)
 
@@ -366,6 +721,38 @@ class PaperRadarTests(unittest.TestCase):
         refreshed = load_json(self.workspace / "reviewed.json")
         self.assertEqual(refreshed["run_id"], "new-run")
         self.assertIsNone(refreshed["reviews"][0]["scope_match"])
+
+    def test_prepare_reserves_review_slots_for_audio_classics_and_open_models(self) -> None:
+        audio = candidate("2608.30001", "audiovisual-generation", "Joint Audio Video")
+        audio["topics"] = ["video-generation", "audiovisual-generation"]
+        audio["topic_match_terms"]["video-generation"] = ["video generation"]
+        classic = candidate("2209.03003", "generative-foundations", "Rectified Flow")
+        classic["lane"] = "classic-foundation"
+        model = model_candidate("new-model", "llm-agents")
+        recent = [
+            candidate(f"2608.3000{index}", "llm-agents", f"Recent Agent {index}")
+            for index in range(2, 6)
+        ]
+        write_json(
+            self.workspace / "candidates.json",
+            {
+                "profile_digest": self.profile_digest,
+                "run_id": self.run_id,
+                "candidates": recent + [audio, classic, model],
+            },
+        )
+        prepare(self.workspace, limit=3)
+        queued = load_json(self.workspace / "reviewed.json")["reviews"]
+        self.assertEqual(
+            {item["canonical_id"] for item in queued},
+            {audio["canonical_id"], classic["canonical_id"], model["canonical_id"]},
+        )
+        self.assertEqual({item["lane"] for item in queued}, {"recent-paper", "classic-foundation", "open-model"})
+        audio_review = next(item for item in queued if item["canonical_id"] == audio["canonical_id"])
+        self.assertEqual(audio_review["primary_topic"], "audiovisual-generation")
+        packets = (self.workspace / "review-packets.md").read_text(encoding="utf-8")
+        self.assertIn("License: apache-2.0", packets)
+        self.assertIn("official-artifacts", packets)
 
     def test_notification_dry_run_reports_missing_configuration(self) -> None:
         (self.workspace / "digest.md").write_text("# Digest\n\nHello", encoding="utf-8")

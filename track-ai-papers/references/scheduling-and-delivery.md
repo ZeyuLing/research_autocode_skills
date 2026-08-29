@@ -10,13 +10,14 @@ When running inside Codex, use the host application's recurring automation facil
 - maximum papers per topic
 - delivery channels
 - instruction to disclose source failures and keep abstract-only items in the watchlist
+- for v2 profiles, instruction to preserve the classic/open-model lane quotas and the audiovisual minimum without lowering any quality or evidence gate
 
 Do not silently create a recurring task. Confirm the cadence and external delivery target unless the user already specified them.
 
 Example task prompt:
 
 ```text
-Use $track-ai-papers every weekday. Fetch the last 3 local calendar days for the profile in <workspace>/profile.json, deep-read candidates that can clear the quality gate, render the digest, and deliver it to the configured Telegram channel with --mark-seen. Report source or delivery failures, and consume papers only after every requested channel succeeds.
+Use $track-ai-papers every weekday. Fetch the configured recent-paper window plus the v2 classic and open-model lanes for <workspace>/profile.json, review candidates that can clear the artifact-appropriate quality gate, preserve lane/topic quotas only among eligible highlights, render the digest, and deliver it to the configured Telegram channel with --mark-seen. Report source or delivery failures, and consume artifacts only after every requested channel succeeds.
 ```
 
 ## Supported channels

@@ -18,5 +18,7 @@ This skill is an original implementation informed by a GitHub survey. No upstrea
 - explicit source-failure and query-cap coverage accounting
 - seen-state mutation only after an acknowledged local delivery or successful delivery to every requested external channel
 - structured source, selection, and delivery reports
+- v2 artifact lanes for recent papers, curated foundational classics, and verified Hugging Face open-model releases
+- high-precision audiovisual relationship matching plus artifact-, lane-, and primary-topic-scoped post-quality quotas that never lower evidence gates or override hard caps
 
 Check upstream licenses and behavior again before copying code or adding new vendored components. Links and license observations were verified during initial development in August 2026.
