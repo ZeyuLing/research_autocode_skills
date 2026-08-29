@@ -5,7 +5,7 @@ description: Find, verify, deep-read, rank, and deliver AI research papers, foun
 
 # Track AI Papers
 
-Build a reproducible research radar that separates topical relevance, intrinsic quality, evidence strength, openness, and popularity. The default v2 profile combines recent papers, a rotating catalog of foundational classics, and verified recent Hugging Face model releases. Review candidates using artifact-appropriate evidence, then render a deduplicated, lane- and topic-balanced Markdown/HTML digest. If the queue cap truncates a larger pool, disclose the unscreened remainder and call the result a shortlist.
+Build a reproducible research radar that separates topical relevance, intrinsic quality, evidence strength, openness, and popularity. The default v2 profile combines recent papers, a rotating catalog of foundational classics, and verified recent open-model releases. Discover model releases through both model repositories and first-party organization channels; review candidates using artifact-appropriate evidence, then render a deduplicated, lane- and topic-balanced Markdown/HTML digest. If the queue cap truncates a larger pool, disclose the unscreened remainder and call the result a shortlist.
 
 ## Non-negotiable rules
 
@@ -40,12 +40,14 @@ Existing v1 workspace profiles remain valid and retain the original paper-only b
 python scripts/fetch_papers.py fetch --workspace <workspace> --lookback-days 7
 ```
 
-For a v2 profile this queries arXiv, Hugging Face Daily Papers, the bundled curated-classic catalog, and recent trending Hugging Face models. It normalizes paper and model identities, verifies that model entries expose weights and an explicit license, applies local topic gates, uses lane-specific time windows, excludes already-seen artifacts, and writes:
+For a v2 profile the bundled script queries arXiv, Hugging Face Daily Papers, the curated-classic catalog, and recent trending Hugging Face models. In a deployed radar, also monitor first-party organization sitemaps/feeds, official release blogs, and official GitHub repositories as an independent release lane. A model-repository ranking is not a complete discovery index. Reconcile entries by the canonical model repository and retain the official announcement, repository, weights, license, and runtime links as separate evidence.
+
+The model-repository collector normalizes paper and model identities, verifies that entries expose weights and an explicit license, considers either repository creation or recent substantive modification for the 45-day catch-up window, applies local topic gates, uses lane-specific time windows, excludes already-seen artifacts, and writes:
 
 - `candidates.json`: normalized candidate records
 - `source-log.json`: source/query counts, timestamps, and failures
 
-The classic lane is independent of the recent-paper window; its versioned catalog contains primary-source-identified foundations and rotates through unseen entries. The open-model lane accepts publicly downloadable, ungated weights with an explicit license and distinguishes permissive `open-source` licenses from restrictive or non-permissive `open-weights` licenses. The default accepts both classes but never renames an open-weight release as open source; profile flags can require only the permissive class. Unmatched releases use the dedicated `open-model-releases` topic, never `generative-foundations`. Popularity is not evidence of capability quality.
+The classic lane is independent of the recent-paper window; its versioned catalog contains primary-source-identified foundations and rotates through unseen entries. The open-model lane accepts publicly downloadable, ungated weights with an explicit license and distinguishes permissive `open-source` licenses from restrictive, community, or non-permissive `open-weights` licenses. The default accepts both classes but never renames an open-weight release as open source; profile flags can require only the permissive class. For `license: other`, read the model-card `license_name` and license file instead of publishing `other` as the license. Do not use repository creation time as the formal release date when an official announcement supplies a different date. Unmatched releases use the dedicated `open-model-releases` topic, never `generative-foundations`. Popularity is not evidence of capability quality, but high-download or high-like candidates outside a small top-N prefetch must receive reserved deep-review capacity so a truncated hot list does not silently discard them.
 
 If a source fails or a query may have hit its result cap, continue with available records and disclose the coverage gap. Use `$ai-literature-survey` for an exhaustive historical survey; the classic lane is a daily curriculum, not an exhaustive search.
 

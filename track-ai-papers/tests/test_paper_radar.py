@@ -360,6 +360,23 @@ class PaperRadarTests(unittest.TestCase):
         self.assertEqual(custom["license_id"], "example-community-1.0")
         self.assertEqual(custom["openness_class"], "open-weights")
         self.assertTrue(custom["license_url"].endswith("/LICENSE"))
+        recently_updated = {
+            **item,
+            "id": "Example/Recently-Updated-Generator",
+            "createdAt": "2026-06-01T00:00:00Z",
+            "lastModified": "2026-08-28T00:00:00Z",
+        }
+        updated_model = _normalize_hf_model(recently_updated, profile, cutoff)
+        self.assertIsNotNone(updated_model)
+        assert updated_model is not None
+        self.assertEqual(updated_model["released_at"], "2026-06-01T00:00:00Z")
+        self.assertEqual(updated_model["discovery_activity_at"], "2026-08-28T00:00:00Z")
+        stale_model = {
+            **recently_updated,
+            "id": "Example/Stale-Generator",
+            "lastModified": "2026-06-15T00:00:00Z",
+        }
+        self.assertIsNone(_normalize_hf_model(stale_model, profile, cutoff))
         strict_profile = load_json(DEFAULT_PROFILE)
         strict_profile["source_config"]["hf_models"]["require_open_source_license"] = True
         self.assertIsNone(_normalize_hf_model(named_custom_license, strict_profile, cutoff))

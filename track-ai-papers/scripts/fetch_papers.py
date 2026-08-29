@@ -407,8 +407,14 @@ def _normalize_hf_model(
     if any(term and f" {term} " in padded_searchable for term in excluded_terms):
         return None
     created_at = clean_text(item.get("createdAt") or item.get("created_at"))
-    released = parse_datetime(created_at)
-    if released is None or released < cutoff:
+    updated_at = clean_text(item.get("lastModified") or item.get("last_modified"))
+    created = parse_datetime(created_at)
+    updated = parse_datetime(updated_at)
+    discovery_activity = max(
+        (value for value in (created, updated) if value is not None),
+        default=None,
+    )
+    if discovery_activity is None or discovery_activity < cutoff:
         return None
     card_data = item.get("cardData") if isinstance(item.get("cardData"), dict) else {}
     summary = clean_text(
@@ -433,9 +439,13 @@ def _normalize_hf_model(
         "title": model_id,
         "abstract": summary,
         "authors": [organization],
-        "published": created_at,
-        "released_at": created_at,
-        "updated": clean_text(item.get("lastModified") or item.get("last_modified") or created_at),
+        "published": created_at or updated_at,
+        "released_at": created_at or None,
+        "repository_created_at": created_at or None,
+        "repository_updated_at": updated_at or created_at or None,
+        "discovery_activity_at": discovery_activity.isoformat().replace("+00:00", "Z"),
+        "release_date_source": "repository-created-at" if created_at else "repository-updated-at-fallback",
+        "updated": updated_at or created_at,
         "version_sha": version_sha or None,
         "categories": [],
         "primary_category": None,
