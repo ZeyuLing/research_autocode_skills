@@ -34,6 +34,7 @@ VALIDATOR = Path(__file__).with_name("validate_review_bundle.py")
 PACKET_VALIDATOR = Path(__file__).with_name("validate_r5_output.py")
 VALIDATOR_RULE_INPUTS = (
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_r5_output.py",
     "rules/scripts/validate_master_r3_output.py",
 )
@@ -401,6 +402,7 @@ def validate_page_outputs(
         errors,
         required_headers=set(module.PAGE_MARKDOWN_HEADERS),
         same_row_id_headers={"Render artifact ID/hash"},
+        reference_id_headers={"Neighbor pages checked", "Evidence"},
     )
     module.validate_markdown_csv_projection(
         root / "02-page-layout-ledger.md",
@@ -432,6 +434,9 @@ def validate_bibliography_outputs(
         module.BIB_LEDGER_COLUMNS,
         errors,
         blank_allowed={"EvidenceEndpoint"},
+    )
+    module.validate_bibliography_endpoint_records(
+        bibliography_ledger, "03-bibliography-audit-ledger.csv", errors
     )
     module.validate_reference_ids_only_in_id_column(
         bibliography_ledger, "03-bibliography-audit-ledger.csv", errors
@@ -949,11 +954,9 @@ def validate_master_r3(
         for value in process.get("governing_rule_urls", [])
         if isinstance(value, str)
     }
-    bibliography_endpoints = {
-        row.get("EvidenceEndpoint", "")
-        for row in bibliography_ledger
-        if row.get("EvidenceEndpoint", "")
-    }
+    bibliography_endpoints = module.bibliography_ledger_public_endpoints(
+        bibliography_ledger
+    )
     citation_endpoints = module.citation_ledger_public_endpoints(
         citation_ledger
     )

@@ -137,11 +137,13 @@ Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same c
 For every R actor, immediately after `ai-style-audit.md`, insert exactly one role-specific validator sequence before process-ordered governing local files, `<frozen_pdf_file>`, the seven Stage-P packet artifacts, and any recipient helper provenance/outputs:
 
 - ordinary doctoral/master's reviewer: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_reviewer_output.py`;
-- doctoral R4: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_r4_output.py`;
-- doctoral R5: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py`;
-- master's R3: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_master_r3_output.py`.
+- doctoral R4: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_r4_output.py`;
+- doctoral R5: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py`;
+- master's R3: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_master_r3_output.py`;
+- Chair C: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_chair_output.py`;
+- Stage S: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_summary_output.py`.
 
-`validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete sequence appears byte-for-byte in every Markdown artifact signed by that reviewer. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, run the exact role command in `ledger-validation.md` to PASS; do not rename any H2, label, field, or table header in the closed reviewer template.
+`materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
 
 ## Independent reviewer report
 
@@ -365,7 +367,7 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 
 ## Chair synthesis
 
-Before freeze, run `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. The command's explicit pre-Stage-S mode requires every current upstream/Chair artifact and forbids `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, process/rule input, or PDF returns control to Stage O for a global retry.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and forbids `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, process/rule input, or PDF returns control to Stage O for a global retry.
 
 ```markdown
 # Chair synthesis
@@ -375,7 +377,7 @@ Before freeze, run `python rules/scripts/validate_chair_output.py <exact-round-r
 - Review round ID: <exact process round_id>
 - Review retry ID: <exact process retry_id>
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Chair input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded allowlist above in the same order]; public_endpoints=[a duplicate-free subset of current process-rule URLs and current 03/04 evidence/content endpoints, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
@@ -478,6 +480,12 @@ Prioritize by risk, not by chapter order.
 
 Every current reviewer `S0`--`S3` finding enters chair adjudication exactly once: either as its own row or as one member of a supported deduplicated row. `Source reviewer finding IDs` is a duplicate-free canonical comma-space list in reviewer/finding-number order; no current actionable finding may disappear, recur in two rows, or point to another round. `Ledger ID` and `Chair finding ID` are unique continuous `L01...` and `C-F01...` sequences. Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
 
+When one action depends on another ledger row, `Dependency` names the existing
+`Lnn` foreign key(s) directly. Do not use the current row's own ID, repeat an
+ID, create a cycle, or invent a phantom ID. Validated dependency IDs may recur
+only in this column; this is the intentional foreign-key exception to the
+otherwise unique Ledger-ID Markdown projection.
+
 In the same `91-revision-ledger.md`, add the following separate table, mirrored exactly by `91-ai-actionable-ledger.csv`:
 
 ```markdown
@@ -510,7 +518,7 @@ The W/E/P table is the exact ledger-order projection of every open current `91-r
 
 Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
 
-Before freeze, run `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. This scoped command opens only the process/summary rules, full and Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. It never opens the PDF, Stage-P packet, `02`--`04`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. They never open the PDF, Stage-P packet, `02`--`04`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
 
 The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
 
@@ -523,7 +531,7 @@ The validated Markdown dialect permits ATX headings with zero to three leading s
 - Review retry ID: <exact process retry_id>
 - Frozen PDF path and SHA-256: file=<frozen_pdf_file> ; sha256=<selected_pdf_sha256>
 - Summary fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; rules/scripts/validate_review_bundle.py; rules/scripts/validate_summary_output.py; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md; 92-new-evidence-or-experiments.csv (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_summary_output.py; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md; 92-new-evidence-or-experiments.csv (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Summary input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded current-round input allowlist above in the same order]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Frozen PDF SHA-256 at start and end: <copy selected_pdf_sha256> / <copy selected_pdf_sha256> (Stage S does not open or hash the PDF; both identity projections remain on this one line)

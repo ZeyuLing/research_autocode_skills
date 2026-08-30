@@ -22,14 +22,30 @@ the exact CSV string after CRLF/CR normalization to LF and JSON string escaping
 with Unicode retained, but with the surrounding JSON quotes omitted. Thus
 ordinary values remain ordinary text, a real newline becomes `\n`, and a
 literal backslash remains distinguishable from that newline escape. After this
-serialization, escape each literal Markdown table delimiter `|` as `\|` in the
-Markdown source; the validator decodes only that table escape before comparing.
+serialization, encode each literal Markdown table delimiter with the production
+materializer. An ordinary literal pipe is written as `\|`; when the logical
+cell has `k` consecutive backslashes immediately before that pipe, the source
+uses `2k+1` backslashes so parsing preserves both the backslashes and the pipe.
+The validator decodes only this table-source escape before comparing.
 Markdown table padding is not data, so authoritative CSV values that depend on
 leading or trailing whitespace cannot reconcile. Headers are case-sensitive and
 must use the documented spelling and order. Rows use deterministic ID order,
 and every projected non-hash cell is compared, not only the ID. `PDFSHA256` is
 bound by the Markdown checksum declaration and validated on every authoritative
 CSV row rather than duplicated as a table column.
+
+Ledger owners do not hand-build these deterministic pipe tables. After every
+owned-CSV change and before the read-only owner gate, doctoral R4/R5 or master's
+R3 runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> <actor-id>`
+in the same fresh actor turn. Exit `0` and first nonempty stdout
+`MATERIALIZED` mean only that the owned Markdown projections and duplicate-free
+endpoint receipt lists were rebuilt; the command does not validate or change a
+semantic CSV value. The actor inspects the result and then runs its scoped gate
+to `PASS`. The materializer is a staged rule input, never thesis evidence, and
+Stage O must not run it after the owner freezes. It may deduplicate an endpoint
+already present in the authoritative access fields, but it fails rather than
+silently erasing a receipt-only URL: the actor must first record a route it
+actually opened with the closed marker, or remove a false declaration.
 
 ## 2. Required machine-readable contracts
 
@@ -55,7 +71,7 @@ The Stage-P citation inventory is mechanical after candidate disambiguation. Cit
 
 - `02-page-layout-ledger.csv`: `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence,PDFSHA256`
 
-The Page-ID set must exactly equal `00-page-inventory.csv`; `PhysicalPage` must form `1..N` with no gaps or duplicates; and `Pnnnn` must map to physical page `nnnn` in both inventories. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode. A final `Disposition` is exactly `clean`, `intentional`, or `finding Rn-Fxx` for the assigned page owner; `recheck after edit`, `pending`, `unchecked`, `open`, and `unresolved` are invalid final states. Every finding reference resolves to an actual current owner finding. The owner report's actionable layout count is the number of distinct referenced finding IDs, so repeated page rows for one finding count once. `RenderDPI` normally follows the 160--200 dpi audit target; the validator accepts 120--600 only as a mechanical sanity range. Retain one decodable PNG as `page-renders/<PageID>.png`; its dimensions must match the frozen PDF page at the declared DPI, and `RenderArtifactIDHash` is that file's exact 64-hex SHA-256, optionally prefixed by the matching PageID. The `02` Markdown table uses exactly the twelve headers in `rendered-pagination-audit.md`, sorts by `PageID`, and projects `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence` field by field. Each Markdown master must contain exactly one complete pipe table with its documented ID header, an immediately following separator row, consistent column counts, and every corresponding CSV ID exactly once in that table's ID column. Ledger IDs must not recur in prose, code fences, or an unrelated table/column; the matching PageID prefix inside its own `Render artifact ID/hash` cell is the sole permitted repetition. Prose mentions and standalone pipe rows do not count as ledger rows and invalidate the projection.
+The Page-ID set must exactly equal `00-page-inventory.csv`; `PhysicalPage` must form `1..N` with no gaps or duplicates; and `Pnnnn` must map to physical page `nnnn` in both inventories. Every suspect page uses `full-scale`; every page has a non-empty disposition and inspection mode. A final `Disposition` is exactly `clean`, `intentional`, or `finding Rn-Fxx` for the assigned page owner; `recheck after edit`, `pending`, `unchecked`, `open`, and `unresolved` are invalid final states. Every finding reference resolves to an actual current owner finding. The owner report's actionable layout count is the number of distinct referenced finding IDs, so repeated page rows for one finding count once. `RenderDPI` normally follows the 160--200 dpi audit target; the validator accepts 120--600 only as a mechanical sanity range. Retain one decodable PNG as `page-renders/<PageID>.png`; its dimensions must match the frozen PDF page at the declared DPI, and `RenderArtifactIDHash` is that file's exact 64-hex SHA-256, optionally prefixed by the matching PageID. The `02` Markdown table uses exactly the twelve headers in `rendered-pagination-audit.md`, sorts by `PageID`, and projects `PageID,PhysicalPage,PrintedPage,Region,DominantContent,Signals,InspectionModeScale,RenderDPI,RenderArtifactIDHash,NeighborPagesChecked,Disposition,Evidence` field by field. Each Markdown master must contain exactly one complete pipe table with its documented ID header, an immediately following separator row, consistent column counts, and every corresponding CSV ID exactly once in that table's ID column. The ID column remains the unique primary-key projection. The matching current row's PageID may recur as the prefix of its own `Render artifact ID/hash`; existing current-round PageIDs may also occur as explicit cross-references in `Neighbor pages checked` and `Evidence`. Every such cross-reference must belong to the current Page-ID set. Page IDs remain forbidden in every other column, prose, code fence, or unrelated table, and an unknown `Pnnnn` is invalid even in a permitted cross-reference column. Prose mentions and standalone pipe rows do not count as ledger rows and invalidate the projection.
 
 ### Bibliography audit
 
@@ -65,7 +81,7 @@ For each `ReferenceID`, the `(ReferenceID,Field)` key is unique and the mandator
 
 `type,title,ordered_authors,year,venue,publication_status,volume,issue,pages_or_article_number,doi,arxiv_id,arxiv_version,url,access_date,isbn_or_other_persistent_id,existence,retraction_withdrawal_correction_superseding`.
 
-`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records one complete `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. For `mismatch`, the entire `FindingDisposition` cell is exactly one current owning-reviewer `Rn-Fxx` or `Rn-Qxx` ID—no prefix, suffix, free prose, second ID, `none`, `N/A`, or mixture with any exemption phrase. Canonical `REFnnnn` tokens occur only in the `ReferenceID` column/cell; they never recur in another CSV field, prose, code fence, or unrelated Markdown column.
+`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records one complete `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. Any redirect, failed official route, or fallback actually opened in addition to `EvidenceEndpoint` is retained inside `EvidenceNote` with the closed marker `accessed endpoint: <URL>`; the marker begins the field or follows a semicolon/newline, and the URL ends at a semicolon, newline, or field end. Every HTTP(S) URL in `EvidenceNote` must use that marker. The authoritative bibliography access set is the duplicate-free union of all nonblank `EvidenceEndpoint` values and all valid marked endpoints, in first-observed CSV order. For `mismatch`, the entire `FindingDisposition` cell is exactly one current owning-reviewer `Rn-Fxx` or `Rn-Qxx` ID—no prefix, suffix, free prose, second ID, `none`, `N/A`, or mixture with any exemption phrase. Canonical `REFnnnn` tokens occur only in the `ReferenceID` column/cell; they never recur in another CSV field, prose, code fence, or unrelated Markdown column.
 
 The `03` Markdown projection sorts by `ReferenceID` and uses the exact fifteen
 headers in `citation-audit.md`. Its first three cells project `ReferenceID`,
@@ -93,7 +109,7 @@ deterministic signed Markdown projection.
 
 The Pair-ID set and row order must exactly equal `00-citation-inventory.csv`; ordering is numeric by occurrence/source ordinal, so `S99` precedes `S100`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`, and `MetadataStatus` is one of `verified`, `mismatch`, or `unverifiable`. A substantive support verdict other than `unverifiable` requires an `http(s)` content endpoint in `ContentSourceOpened` and a structured locator such as `page 14`, `section 3.2`, `Table 2`, `Figure 4`, `Equation 7`, `Abstract`, or `publisher record: DOI ...`; a bare word such as `section` is invalid. Publication metadata alone is acceptable only when the attached proposition is publication metadata. A `ReferenceID` absent from the rendered bibliography uses exactly `Support=unverifiable`, `MetadataStatus=mismatch`, `PublicIdentifier=no rendered bibliography entry`, blank `ContentSourceOpened`/`ExactSourceLocator`, and a current owning-reviewer finding/question link. The Markdown projection uses the exact twelve headers in `citation-audit.md`, sorts by numeric Pair-ID ordinals, and compares every projected field. `Displayed label` is the exact `00-bibliography-inventory.csv` label for an existing row; for a dangling `REFnnnn`, it is `[n]` derived from the frozen PDF marker. `Content source opened and exact locator` is compact JSON with exact key order `{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`; all other non-hash CSV fields map one-to-one to their named Markdown column. Every CSV PairID must occur exactly once as a complete table cell.
 
-The owning audit artifact and owning review report must list in their `public_endpoints=[...]` receipt every nonblank authoritative endpoint that their bibliography or citation master says was opened. Declaring `[none]` while `EvidenceEndpoint` or `ContentSourceOpened` contains a source is an invalid access record. A documented `unverifiable` row may leave the endpoint blank only under the explicit inaccessible-route contract; it creates no fictional receipt entry.
+The owning audit artifact and owning review report must list in their `public_endpoints=[...]` receipt every authoritative endpoint that their bibliography or citation master says was opened, including every valid marked auxiliary route. Each exact endpoint occurs once in the receipt. Declaring `[none]` while `EvidenceEndpoint`, `ContentSourceOpened`, or a valid `accessed endpoint:` marker contains a source is an invalid access record. A receipt-only endpoint is equally invalid. A documented `unverifiable` row may leave the endpoint blank only under the explicit inaccessible-route contract; it creates no fictional receipt entry.
 
 ### Chair and summary reconciliation
 
@@ -110,6 +126,14 @@ The matching rows agree losslessly field by field: both `93` CSV schemas are ide
 Current-round academic and AI ledger `Status` values are limited to `open`, `closed`, `resolved`, `not required`, `not applicable`, or `N/A`; any other value is invalid. `91-revision-ledger.csv` additionally limits `Priority` to `P0`--`P3`, `Severity` to `S0`--`S3`, `Remedy` to `W/E/N/P`, and `EvidenceStatus` to `verified`, `partially verified`, `not verifiable from submitted PDF`, `rejected`, `deduplicated`, or `disputed`. `91-ai-actionable-ledger.csv` limits `Impact` to `material` or `local`; optional AI findings do not enter this CSV.
 
 `LedgerID` and `ChairFindingID` are unique continuous sequences from `L01` and `C-F01`. `SourceReviewerFindingIDs` is a canonical duplicate-free comma-space list sorted by reviewer number and finding number. Across all `91` rows, every current reviewer `S0`--`S3` finding ID occurs exactly once—neither disappearance nor repeated adjudication is allowed. The chair's `Adjudicated findings` table is an exact field projection of the CSV, including `EvidenceStatus`. Rejected, disputed, and not-verifiable dispositions also appear in the chair's disagreement table. Every disagreement `Source item IDs` token must identify an actual current reviewer question or an actual current `ChairFindingID`; phantom `Rn-Qxx` and phantom `C-Fxx` values are invalid.
+
+`Dependency` may name one or more current `LedgerID` values as explicit foreign
+keys. Each referenced `Lnn` must exist in the same `91` master, must occur at
+most once in that cell, and must not be the row's own ID; dependency cycles are
+invalid. These validated LedgerID tokens are permitted only in the `Dependency`
+column of the `91` and corresponding `93` academic tables. They remain forbidden
+in unrelated columns or prose, so a real dependency is expressible without
+weakening primary-key projection checks.
 
 The chair citation cross-ledger gate is a real join, not a self-reported count. It has exactly the cited `ReferenceID` set, projects displayed labels and affected Pair IDs, serializes each citation identity/source and the fixed bibliography canonical-identity field list deterministically, derives agreement/conflict/resolution from `03`, `04`, and linked current `C-Fxx` rows, and recomputes all seven counts. A nonexistent reference, wrong Pair ID, unlinked conflict, or count drift invalidates the gate.
 
@@ -133,7 +157,23 @@ Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these to
 
 ## 3. Mandatory stage gates and final validation
 
-Every substantive actor runs its exact read-only gate before freezing or exiting:
+Every actor with deterministic cross-artifact projections first runs the same
+production pre-freeze materializer:
+
+| Actor | Mandatory materialization command | Files it may rewrite mechanically |
+|---|---|---|
+| Doctoral R4 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R4` | `04-citation-claim-audit-ledger.md`, `R4-comprehensive-review.md` receipt endpoint list |
+| Doctoral R5 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R5` | `02-page-layout-ledger.md`, `03-bibliography-audit-ledger.md`, `R5-comprehensive-review.md` receipt endpoint list |
+| Master's R3 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R3` | `02`, `03`, `04` Markdown masters and `R3-comprehensive-review.md` receipt endpoint list |
+| C | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
+| S | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` | all three wholly derived `93` outputs, including both open-row CSV subsets and every closed Markdown projection |
+
+The materializer must exit `0` with first nonempty stdout `MATERIALIZED`. It is
+run after every owned-CSV edit. It neither replaces nor wraps the following
+read-only gate. Chair reruns it after any semantic `90`--`92` source change;
+Stage S uses it to construct, rather than hand-copy, its three projection outputs.
+
+Every substantive actor then runs its exact read-only gate before freezing or exiting:
 
 | Actor | Mandatory command | Outputs the actor may correct before rerunning |
 |---|---|---|
@@ -150,9 +190,18 @@ Each gate passes only when it exits `0` and its first nonempty stdout line is ex
 
 For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P packet or any other frozen input. A packet/frozen-input diagnostic requires R5 to stop and report failure to Stage O; it is never repaired inside the R5 stage.
 
-The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. The Chair gate uses the full validator's explicit `--pre-stage-s` mode: `93`, `94`, and `95` are forbidden, and no diagnostic is waived by message matching. The Stage-S gate opens only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; it never opens the PDF, packet, `02`--`04`, helpers, prior artifacts, or `95`. All scoped commands are read-only and create no `95-bundle-validation.md`.
+The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Chair materialization and its gate use the closed C allowlist; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; neither opens the PDF, packet, `02`--`04`, helpers, prior artifacts, or `95`. All validators are read-only and create no `95-bundle-validation.md`.
 
 The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
+
+The R5/master's-R3 bibliography access receipt uses the same closure rule.
+`EvidenceEndpoint` is the primary authoritative record for one field verdict;
+every additional opened redirect, fallback, or failed route is marked in
+`EvidenceNote` as `accessed endpoint: <URL>`. Bare URLs in rendered/canonical
+metadata or unmarked notes do not authorize a receipt entry. The materializer
+derives the exact duplicate-free receipt list from these authoritative fields;
+the scoped and full gates reject both an extra receipt-only URL and an omitted
+recorded URL.
 
 Validator scripts and stdout are mechanical rule infrastructure only. They are never thesis/citation evidence, never decide whether a proposition is supported, and never replace packet neutrality, reviewer semantic judgment, page-level visual inspection, or Chair adjudication.
 

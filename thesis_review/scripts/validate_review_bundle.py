@@ -58,10 +58,58 @@ SOURCE_LOCATOR_RE = re.compile(
 )
 
 
-def citation_ledger_public_endpoints(
-    citation_ledger: Iterable[dict[str, Any]],
+def ordered_unique(values: Iterable[str]) -> list[str]:
+    """Return exact non-empty strings once, preserving first-observed order."""
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        if value and value not in seen:
+            seen.add(value)
+            result.append(value)
+    return result
+
+
+def governing_rule_public_endpoint_sequence(process: dict[str, Any]) -> list[str]:
+    """Return process-bound governing URLs in deterministic receipt order."""
+
+    values = process.get("governing_rule_urls", [])
+    if not isinstance(values, list):
+        return []
+    return ordered_unique(value for value in values if isinstance(value, str))
+
+
+def bibliography_ledger_public_endpoint_sequence(
+    bibliography_ledger: Iterable[dict[str, Any]],
+) -> list[str]:
+    """Return bibliography access endpoints in authoritative CSV row order."""
+
+    endpoints: list[str] = []
+    for row in bibliography_ledger:
+        endpoint = row.get("EvidenceEndpoint", "")
+        if isinstance(endpoint, str) and endpoint.strip():
+            endpoints.append(endpoint.strip())
+        note = row.get("EvidenceNote", "")
+        if isinstance(note, str):
+            endpoints.extend(
+                match.group(1)
+                for match in ACCESS_ENDPOINT_MARKER_RE.finditer(note)
+            )
+    return ordered_unique(endpoints)
+
+
+def bibliography_ledger_public_endpoints(
+    bibliography_ledger: Iterable[dict[str, Any]],
 ) -> set[str]:
-    """Return endpoints explicitly recorded as opened in canonical ``04`` fields.
+    """Return the exact set form used by bibliography receipt validation."""
+
+    return set(bibliography_ledger_public_endpoint_sequence(bibliography_ledger))
+
+
+def citation_ledger_public_endpoint_sequence(
+    citation_ledger: Iterable[dict[str, Any]],
+) -> list[str]:
+    """Return endpoints explicitly recorded as opened in canonical ``04`` order.
 
     ``ContentSourceOpened`` stores the one source endpoint used for the support
     verdict.  Redirects, failed official routes, and fallback attempts are
@@ -71,20 +119,66 @@ def citation_ledger_public_endpoints(
     The Markdown receipt is never scanned, so it cannot authorize itself.
     """
 
-    endpoints: set[str] = set()
+    endpoints: list[str] = []
     for row in citation_ledger:
         content = row.get("ContentSourceOpened", "")
         if isinstance(content, str):
             content = content.strip()
             if content and PUBLIC_URL_RE.fullmatch(content):
-                endpoints.add(content)
+                endpoints.append(content)
         disposition = row.get("DispositionEvidence", "")
         if isinstance(disposition, str):
-            endpoints.update(
+            endpoints.extend(
                 match.group(1)
                 for match in ACCESS_ENDPOINT_MARKER_RE.finditer(disposition)
             )
-    return endpoints
+    return ordered_unique(endpoints)
+
+
+def citation_ledger_public_endpoints(
+    citation_ledger: Iterable[dict[str, Any]],
+) -> set[str]:
+    """Return the exact set form used by citation receipt validation."""
+
+    return set(citation_ledger_public_endpoint_sequence(citation_ledger))
+
+
+def validate_bibliography_endpoint_records(
+    bibliography_ledger: Iterable[dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Validate auxiliary bibliography routes recorded in ``EvidenceNote``.
+
+    ``EvidenceEndpoint`` remains the authoritative endpoint for the field
+    verdict. Any additional redirect, failed official route, or fallback that
+    was actually opened is written with the same closed marker used by the
+    citation ledger: ``accessed endpoint: <URL>``. This makes the actor receipt
+    mechanically derivable without treating arbitrary metadata URLs as access.
+    """
+
+    for line, row in enumerate(bibliography_ledger, start=2):
+        note = row.get("EvidenceNote", "")
+        if not isinstance(note, str):
+            continue
+        marked = [
+            match.group(1)
+            for match in ACCESS_ENDPOINT_MARKER_RE.finditer(note)
+        ]
+        marker_count = len(re.findall(r"(?i)accessed\s+endpoint\s*:", note))
+        if marker_count != len(marked):
+            errors.append(
+                f"{filename}:{line}: every 'accessed endpoint:' marker in "
+                "EvidenceNote must contain one complete http(s) URL and be "
+                "delimited by the start of the field, a semicolon, or a newline"
+            )
+        note_urls = {match.group(0) for match in PUBLIC_URL_RE.finditer(note)}
+        unmarked = sorted(note_urls - set(marked))
+        if unmarked:
+            errors.append(
+                f"{filename}:{line}: EvidenceNote URL(s) must use the closed "
+                f"'accessed endpoint: <URL>' marker; unmarked={unmarked}"
+            )
 
 
 def validate_citation_endpoint_records(
@@ -371,6 +465,7 @@ SKILL_REFERENCE_FILES = [
 ]
 R5_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_r5_output.py",
 ]
 ORDINARY_REVIEWER_VALIDATOR_RULE_INPUTS = [
@@ -379,11 +474,13 @@ ORDINARY_REVIEWER_VALIDATOR_RULE_INPUTS = [
 ]
 R4_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_r5_output.py",
     "rules/scripts/validate_r4_output.py",
 ]
 MASTER_R3_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_r5_output.py",
     "rules/scripts/validate_master_r3_output.py",
 ]
@@ -393,10 +490,12 @@ AI_VALIDATOR_RULE_INPUTS = [
 ]
 CHAIR_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_chair_output.py",
 ]
 SUMMARY_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/materialize_owner_outputs.py",
     "rules/scripts/validate_summary_output.py",
 ]
 P_VALIDATOR_RULE_INPUTS = [
@@ -975,6 +1074,42 @@ def validate_iso_date(value: str) -> bool:
     return True
 
 
+def parse_markdown_pipe_row(line: str) -> list[str] | None:
+    """Parse one pipe-table source row using backslash-parity escaping.
+
+    A pipe is a delimiter when preceded by an even number of consecutive
+    backslashes and a literal cell character when preceded by an odd number.
+    For an escaped pipe, the canonical source encoding uses ``2k+1``
+    backslashes to preserve ``k`` logical backslashes immediately before that
+    pipe. This round-trips even the otherwise ambiguous ``\\|`` value.
+    """
+
+    stripped = line.strip()
+    if not (stripped.startswith("|") and stripped.endswith("|")):
+        return None
+    source = stripped[1:-1]
+    cells: list[str] = []
+    current: list[str] = []
+    for character in source:
+        if character != "|":
+            current.append(character)
+            continue
+        preceding_backslashes = 0
+        for previous in reversed(current):
+            if previous != "\\":
+                break
+            preceding_backslashes += 1
+        if preceding_backslashes % 2:
+            del current[-preceding_backslashes:]
+            current.extend("\\" for _ in range((preceding_backslashes - 1) // 2))
+            current.append("|")
+            continue
+        cells.append("".join(current).strip())
+        current = []
+    cells.append("".join(current).strip())
+    return cells
+
+
 def validate_markdown_id_projection(
     path: Path,
     expected_ids: set[str],
@@ -985,6 +1120,8 @@ def validate_markdown_id_projection(
     *,
     required_headers: set[str] | None = None,
     same_row_id_headers: set[str] | None = None,
+    reference_id_headers: set[str] | None = None,
+    reference_id_values: set[str] | None = None,
     section_heading: str | None = None,
 ) -> None:
     try:
@@ -1005,15 +1142,6 @@ def validate_markdown_id_projection(
     if len(text.strip()) < 32:
         errors.append(f"{path.name}: Markdown master is empty or shell-only")
 
-    def parse_pipe_row(line: str) -> list[str] | None:
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return None
-        return [
-            cell.replace(r"\|", "|").strip()
-            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
-        ]
-
     def is_separator_row(cells: list[str], width: int) -> bool:
         return (
             len(cells) == width
@@ -1024,8 +1152,8 @@ def validate_markdown_id_projection(
     target_tables: list[tuple[int, list[str], int]] = []
     folded_aliases = {alias.casefold() for alias in id_header_aliases}
     for index in range(len(lines) - 1):
-        header = parse_pipe_row(lines[index])
-        separator = parse_pipe_row(lines[index + 1])
+        header = parse_markdown_pipe_row(lines[index])
+        separator = parse_markdown_pipe_row(lines[index + 1])
         if header is None or separator is None or not is_separator_row(separator, len(header)):
             continue
         id_columns = [
@@ -1056,10 +1184,16 @@ def validate_markdown_id_projection(
                 f"headers {missing_headers}"
             )
     row_counts: Counter[str] = Counter()
+    folded_same_row_headers = {
+        value.casefold() for value in (same_row_id_headers or set())
+    }
+    folded_reference_headers = {
+        value.casefold() for value in (reference_id_headers or set())
+    }
     data_row_count = 0
     target_data_lines: set[int] = set()
     for line_number in range(header_index + 2, len(lines)):
-        cells = parse_pipe_row(lines[line_number])
+        cells = parse_markdown_pipe_row(lines[line_number])
         if cells is None:
             break
         target_data_lines.add(line_number)
@@ -1084,11 +1218,23 @@ def validate_markdown_id_projection(
             misplaced = sorted(set(id_pattern.findall(cell)))
             if (
                 misplaced
-                and same_row_id_headers is not None
-                and header[column].casefold()
-                in {value.casefold() for value in same_row_id_headers}
+                and header[column].casefold() in folded_same_row_headers
                 and misplaced == [identifier]
             ):
+                continue
+            if misplaced and header[column].casefold() in folded_reference_headers:
+                allowed_references = (
+                    expected_ids
+                    if reference_id_values is None
+                    else reference_id_values
+                )
+                unknown = sorted(set(misplaced) - allowed_references)
+                if not unknown:
+                    continue
+                errors.append(
+                    f"{path.name}:{line_number + 1}: cross-reference column "
+                    f"contains unknown IDs {unknown}"
+                )
                 continue
             if misplaced:
                 errors.append(
@@ -1115,6 +1261,68 @@ def validate_markdown_id_projection(
         )
 
 
+def validate_academic_dependency_references(
+    rows: list[dict[str, str]], filename: str, errors: list[str]
+) -> None:
+    """Treat ``Dependency`` LedgerIDs as closed, non-self, acyclic foreign keys."""
+
+    known = {row.get("LedgerID", "") for row in rows if row.get("LedgerID", "")}
+    token_pattern = re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])")
+    graph: dict[str, set[str]] = {identifier: set() for identifier in known}
+    for line, row in enumerate(rows, start=2):
+        ledger_id = row.get("LedgerID", "")
+        tokens = token_pattern.findall(row.get("Dependency", ""))
+        unknown = sorted(set(tokens) - known)
+        if unknown:
+            errors.append(
+                f"{filename}:{line}: Dependency contains unknown LedgerID "
+                f"references {unknown}"
+            )
+        if ledger_id and ledger_id in tokens:
+            errors.append(
+                f"{filename}:{line}: Dependency cannot reference its own "
+                f"LedgerID {ledger_id}"
+            )
+        repeated = sorted(
+            identifier for identifier, count in Counter(tokens).items() if count > 1
+        )
+        if repeated:
+            errors.append(
+                f"{filename}:{line}: Dependency repeats LedgerID references "
+                f"{repeated}"
+            )
+        if ledger_id in graph:
+            graph[ledger_id].update(
+                token for token in tokens
+                if token in known and token != ledger_id
+            )
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(identifier: str, trail: list[str]) -> None:
+        if identifier in visited:
+            return
+        if identifier in visiting:
+            start = trail.index(identifier) if identifier in trail else 0
+            cycle = [*trail[start:], identifier]
+            errors.append(
+                f"{filename}: Dependency cycle is forbidden: "
+                + " -> ".join(cycle)
+            )
+            return
+        visiting.add(identifier)
+        trail.append(identifier)
+        for dependency in sorted(graph.get(identifier, set())):
+            visit(dependency, trail)
+        trail.pop()
+        visiting.discard(identifier)
+        visited.add(identifier)
+
+    for identifier in sorted(graph):
+        visit(identifier, [])
+
+
 def parse_markdown_table_by_header(
     text: str,
     required_first_header: str,
@@ -1123,20 +1331,11 @@ def parse_markdown_table_by_header(
 ) -> tuple[list[str], list[list[str]]] | None:
     """Return one exact pipe table selected by its first header cell."""
 
-    def parse_row(line: str) -> list[str] | None:
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return None
-        return [
-            cell.replace(r"\|", "|").strip()
-            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
-        ]
-
     lines = markdown_visible_text(text).splitlines()
     matches: list[tuple[list[str], list[list[str]]]] = []
     for index in range(len(lines) - 1):
-        header = parse_row(lines[index])
-        separator = parse_row(lines[index + 1])
+        header = parse_markdown_pipe_row(lines[index])
+        separator = parse_markdown_pipe_row(lines[index + 1])
         if (
             not header
             or header[0].casefold() != required_first_header.casefold()
@@ -1147,7 +1346,7 @@ def parse_markdown_table_by_header(
             continue
         rows: list[list[str]] = []
         for row_line in lines[index + 2:]:
-            row = parse_row(row_line)
+            row = parse_markdown_pipe_row(row_line)
             if row is None:
                 break
             rows.append(row)
@@ -1178,15 +1377,6 @@ def parse_markdown_table_by_exact_headers(
 ) -> list[list[str]] | None:
     """Select exactly one pipe table by its complete ordered header schema."""
 
-    def parse_row(line: str) -> list[str] | None:
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return None
-        return [
-            cell.replace(r"\|", "|").strip()
-            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
-        ]
-
     expected_schema = (
         expected_headers
         if case_sensitive
@@ -1195,8 +1385,8 @@ def parse_markdown_table_by_exact_headers(
     lines = markdown_visible_text(text).splitlines()
     matches: list[list[list[str]]] = []
     for index in range(len(lines) - 1):
-        header = parse_row(lines[index])
-        separator = parse_row(lines[index + 1])
+        header = parse_markdown_pipe_row(lines[index])
+        separator = parse_markdown_pipe_row(lines[index + 1])
         if (
             header is None
             or (
@@ -1211,7 +1401,7 @@ def parse_markdown_table_by_exact_headers(
             continue
         rows: list[list[str]] = []
         for row_line in lines[index + 2:]:
-            row = parse_row(row_line)
+            row = parse_markdown_pipe_row(row_line)
             if row is None:
                 break
             rows.append(row)
@@ -1240,21 +1430,12 @@ def validate_declarations_before_main_table(
 ) -> None:
     """Require every owned-ledger declaration above its canonical main table."""
 
-    def parse_row(line: str) -> list[str] | None:
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return None
-        return [
-            cell.replace(r"\|", "|").strip()
-            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
-        ]
-
     visible = markdown_visible_text(text)
     expected_schema = [value.casefold() for value in expected_headers]
     table_offset: int | None = None
     offset = 0
     for line in visible.splitlines(keepends=True):
-        row = parse_row(line)
+        row = parse_markdown_pipe_row(line)
         if row is not None and [value.casefold() for value in row] == expected_schema:
             table_offset = offset
             break
@@ -1294,20 +1475,11 @@ def validate_declarations_before_main_table(
 def count_complete_markdown_pipe_tables(text: str) -> int:
     """Count rendered pipe tables with a header and separator row."""
 
-    def parse_row(line: str) -> list[str] | None:
-        stripped = line.strip()
-        if not (stripped.startswith("|") and stripped.endswith("|")):
-            return None
-        return [
-            cell.replace(r"\|", "|").strip()
-            for cell in re.split(r"(?<!\\)\|", stripped[1:-1])
-        ]
-
     lines = markdown_visible_text(text).splitlines()
     count = 0
     for index in range(len(lines) - 1):
-        header = parse_row(lines[index])
-        separator = parse_row(lines[index + 1])
+        header = parse_markdown_pipe_row(lines[index])
+        separator = parse_markdown_pipe_row(lines[index + 1])
         if (
             header is not None
             and separator is not None
@@ -1324,9 +1496,73 @@ def markdown_projection_scalar(value: str) -> str:
     normalized = value.replace("\r\n", "\n").replace("\r", "\n")
     # JSON string escaping, without the surrounding quotes, distinguishes real
     # line breaks/backslashes from literal ``\\n`` text while retaining readable
-    # ordinary values. Markdown source must additionally escape ``|`` as ``\|``;
-    # the pipe-table parser decodes that Markdown-only escape before comparison.
+    # ordinary values. This is a logical cell value; source-delimiter escaping is
+    # deliberately performed only by ``render_markdown_pipe_table`` below.
     return json.dumps(normalized, ensure_ascii=False)[1:-1]
+
+
+def markdown_projection_row(
+    row: dict[str, str], fields: Iterable[str],
+) -> list[str]:
+    """Project one authoritative CSV row into logical Markdown cells."""
+
+    return [markdown_projection_scalar(row.get(field, "")) for field in fields]
+
+
+def markdown_projection_rows(
+    rows: Iterable[dict[str, str]], fields: Iterable[str],
+) -> list[list[str]]:
+    """Project authoritative CSV rows without changing their source order."""
+
+    ordered_fields = tuple(fields)
+    return [markdown_projection_row(row, ordered_fields) for row in rows]
+
+
+def render_markdown_pipe_table(
+    headers: list[str], rows: Iterable[Iterable[str]],
+) -> str:
+    """Render one canonical pipe table from logical cell values.
+
+    The parser decodes the canonical odd-backslash escape back to a literal
+    pipe while preserving any logical backslashes immediately before it.
+    Keeping this source transformation in production code prevents a pipe
+    inside a title, author list, URL, or evidence note from changing the table
+    width.
+    """
+
+    rendered_rows = [list(row) for row in rows]
+    width = len(headers)
+    if not headers or any(len(row) != width for row in rendered_rows):
+        raise ValueError("Markdown table rows must exactly match the header width")
+
+    def source_cell(value: str) -> str:
+        output: list[str] = []
+        index = 0
+        while index < len(value):
+            if value[index] != "\\":
+                output.append(r"\|" if value[index] == "|" else value[index])
+                index += 1
+                continue
+            run_end = index
+            while run_end < len(value) and value[run_end] == "\\":
+                run_end += 1
+            count = run_end - index
+            if run_end < len(value) and value[run_end] == "|":
+                output.append("\\" * (2 * count + 1))
+                output.append("|")
+                index = run_end + 1
+            else:
+                output.append("\\" * count)
+                index = run_end
+        return "".join(output)
+
+    header = "| " + " | ".join(source_cell(value) for value in headers) + " |\n"
+    separator = "|" + "|".join("---" for _ in headers) + "|\n"
+    body = "".join(
+        "| " + " | ".join(source_cell(value) for value in row) + " |\n"
+        for row in rendered_rows
+    )
+    return header + separator + body
 
 
 def compact_projection_json(value: Any) -> str:
@@ -1338,10 +1574,10 @@ def compact_projection_json(value: Any) -> str:
 def page_markdown_projection_rows(
     page_ledger: list[dict[str, str]],
 ) -> list[list[str]]:
-    return [
-        [markdown_projection_scalar(row.get(field, "")) for field in PAGE_MARKDOWN_FIELDS]
-        for row in sorted(page_ledger, key=lambda item: item.get("PageID", ""))
-    ]
+    return markdown_projection_rows(
+        sorted(page_ledger, key=lambda item: item.get("PageID", "")),
+        PAGE_MARKDOWN_FIELDS,
+    )
 
 
 def bibliography_markdown_projection_rows(
@@ -1904,6 +2140,90 @@ def parse_closed_access_receipt(
         "opened": split(match.group(2)),
         "public_endpoints": split(match.group(3)),
     }
+
+
+def extract_closed_access_receipt(
+    text: str, filename: str, errors: list[str],
+) -> dict[str, list[str]] | None:
+    """Extract the one visible canonical access receipt from a Markdown artifact."""
+
+    visible = markdown_visible_text(text)
+    matches = list(re.finditer(
+        r"(?im)^[ ]{0,3}-[ \t]+(?:[A-Za-z-]+[ \t]+)?"
+        r"Input-receipt/access declaration[ \t]*:[ \t]*(.*)$",
+        visible,
+    ))
+    if len(matches) != 1:
+        errors.append(
+            f"{filename}: input receipt field must occur exactly once for "
+            "cross-artifact reconciliation"
+        )
+        return None
+    return parse_closed_access_receipt(matches[0].group(1), filename, errors)
+
+
+def validate_identical_actor_access_receipts(
+    paths: Iterable[Path],
+    expected_opened: list[str],
+    allowed_public_sequence: Iterable[str],
+    actor_id: str,
+    errors: list[str],
+) -> None:
+    """Require one actor's signed artifacts to share one canonical receipt."""
+
+    allowed_public = ordered_unique(
+        value.strip()
+        for value in allowed_public_sequence
+        if isinstance(value, str) and value.strip()
+    )
+    allowed_public_set = set(allowed_public)
+    baseline: dict[str, list[str]] | None = None
+    baseline_filename = ""
+    for path in paths:
+        try:
+            raw_text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            errors.append(
+                f"{path.name}: cannot read actor receipt for reconciliation: {exc}"
+            )
+            continue
+        parsed = extract_closed_access_receipt(raw_text, path.name, errors)
+        if parsed is None:
+            continue
+        if parsed.get("received") != ["operational prompt"]:
+            errors.append(
+                f"{path.name}: shared {actor_id} receipt received list must be "
+                "exactly [operational prompt]"
+            )
+        if parsed.get("opened") != expected_opened:
+            errors.append(
+                f"{path.name}: shared {actor_id} receipt opened list must equal "
+                "the canonical actor allowlist"
+            )
+        public_items = parsed.get("public_endpoints", [])
+        normalized_public = (
+            [] if public_items == ["none"]
+            else [value for value in public_items if value.casefold() != "none"]
+        )
+        unknown = sorted(set(normalized_public) - allowed_public_set)
+        canonical_subset = [
+            value for value in allowed_public if value in set(normalized_public)
+        ]
+        canonical_public = canonical_subset or ["none"]
+        if unknown or public_items != canonical_public:
+            errors.append(
+                f"{path.name}: shared {actor_id} public_endpoints must be a "
+                "duplicate-free canonical-order subset of the actor endpoint "
+                f"allowlist; unknown={unknown}"
+            )
+        if baseline is None:
+            baseline = parsed
+            baseline_filename = path.name
+        elif parsed != baseline:
+            errors.append(
+                f"{path.name}: {actor_id} access receipt must exactly match "
+                f"{baseline_filename} across received/opened/public_endpoints"
+            )
 
 
 def validate_declarations(
@@ -3000,10 +3320,7 @@ def validate_chair_report(
             value for value in process.get("governing_rule_urls", [])
             if isinstance(value, str)
         ),
-        *(
-            row.get("EvidenceEndpoint", "") for row in bibliography_ledger
-            if row.get("EvidenceEndpoint")
-        ),
+        *bibliography_ledger_public_endpoints(bibliography_ledger),
         *citation_ledger_public_endpoints(citation_ledger),
     }
     text = validate_declarations(
@@ -3100,10 +3417,7 @@ def validate_chair_report(
             value.strip() for value in process.get("governing_rule_urls", [])
             if isinstance(value, str) and value.strip()
         ),
-        *(
-            row.get("EvidenceEndpoint", "").strip()
-            for row in bibliography_ledger if row.get("EvidenceEndpoint", "").strip()
-        ),
+        *bibliography_ledger_public_endpoints(bibliography_ledger),
         *citation_ledger_public_endpoints(citation_ledger),
     }
     if len(declared_public) != len(set(declared_public)) or any(
@@ -3157,17 +3471,14 @@ def validate_chair_report(
                 ) or ""
                 source_dispositions: dict[str, str] = {}
                 for source_line in assessment.splitlines():
-                    match = re.match(r"^\|\s*([A-I])\s*(?:[—-]|\|)", source_line)
-                    if not match:
+                    cells = parse_markdown_pipe_row(source_line)
+                    if cells is None or len(cells) != 6:
                         continue
-                    cells = [
-                        cell.replace(r"\|", "|").strip()
-                        for cell in re.split(
-                            r"(?<!\\)\|", source_line.strip()[1:-1]
-                        )
-                    ]
-                    if len(cells) == 6:
-                        source_dispositions[match.group(1)] = cells[2]
+                    gate_match = re.fullmatch(
+                        r"([A-I])(?:[ \t]*[—-][ \t]*.*)?", cells[0]
+                    )
+                    if gate_match is not None:
+                        source_dispositions[gate_match.group(1)] = cells[2]
                 expected_gate_values = tuple(
                     source_dispositions.get(gate, "") for gate in "ABCDEFGHI"
                 )
@@ -3356,6 +3667,16 @@ def validate_chair_report(
     derived_cross_counts = Counter()
     if cross_rows is not None:
         valid_rows = [row for row in cross_rows if len(row) == len(cross_headers)]
+        expected_reference_order = [
+            markdown_projection_scalar(reference_id)
+            for reference_id in cited_reference_order
+        ]
+        observed_reference_order = [row[0] for row in valid_rows]
+        if observed_reference_order != expected_reference_order:
+            errors.append(
+                f"{path.name}: citation cross-ledger row order must exactly "
+                "follow the citation-inventory first-reference order"
+            )
         reference_counts = Counter(row[0] for row in valid_rows)
         duplicates = sorted(
             reference_id for reference_id, count in reference_counts.items()
@@ -3381,22 +3702,26 @@ def validate_chair_report(
             expected_displayed_label = displayed_label_for_reference_id(
                 reference_id, bib_inventory_by_id
             )
-            if row[1] != expected_displayed_label:
+            if row[1] != markdown_projection_scalar(expected_displayed_label):
                 errors.append(
                     f"{path.name}: {reference_id} Displayed label does not project "
                     "the rendered bibliography label or dangling citation marker"
                 )
             source_rows = citation_rows_by_ref.get(reference_id, [])
-            expected_pairs = ", ".join(item.get("PairID", "") for item in source_rows)
+            expected_pairs = markdown_projection_scalar(
+                ", ".join(item.get("PairID", "") for item in source_rows)
+            )
             if row[2] != expected_pairs:
                 errors.append(
                     f"{path.name}: {reference_id} Affected Pair IDs do not exactly "
                     "project 04-citation-claim-audit-ledger.csv"
                 )
-            expected_citation_projection = " ; ".join(
-                f"{item.get('PairID', '')}=>{item.get('PublicIdentifier', '')} @ "
-                f"{item.get('ContentSourceOpened', '') or 'N/A'}"
-                for item in source_rows
+            expected_citation_projection = markdown_projection_scalar(
+                " ; ".join(
+                    f"{item.get('PairID', '')}=>{item.get('PublicIdentifier', '')} @ "
+                    f"{item.get('ContentSourceOpened', '') or 'N/A'}"
+                    for item in source_rows
+                )
             )
             if row[3] != expected_citation_projection:
                 errors.append(
@@ -3404,7 +3729,7 @@ def validate_chair_report(
                     "not exactly project the citation ledger"
                 )
             missing_bibliography_entry = not inventory_row
-            expected_bib_projection = (
+            expected_bib_projection = markdown_projection_scalar(
                 DANGLING_REFERENCE_SENTINEL
                 if missing_bibliography_entry
                 else " ; ".join(
@@ -4061,10 +4386,11 @@ def validate_summary_markdown_values(
             value.casefold() for value in expected_headers
         ]:
             continue
-        id_field = mapping[0][1]
         valid_rows = [row for row in rows if len(row) == len(mapping)]
         observed_id_order = [row[0] for row in valid_rows]
-        expected_id_order = list(csv_rows)
+        expected_id_order = [
+            markdown_projection_scalar(identifier) for identifier in csv_rows
+        ]
         if observed_id_order != expected_id_order:
             errors.append(
                 f"{path.name}: {section_heading} row order must exactly project "
@@ -4079,10 +4405,11 @@ def validate_summary_markdown_values(
             markdown_row = markdown_by_id[identifier]
             csv_row = csv_rows[identifier]
             for index, (_header, field) in enumerate(mapping):
-                if markdown_row[index] != csv_row[field]:
+                expected_value = markdown_projection_scalar(csv_row[field])
+                if markdown_row[index] != expected_value:
                     errors.append(
                         f"{path.name}: Markdown/CSV value mismatch for "
-                        f"{identifier}/{field}: expected {csv_row[field]!r}, "
+                        f"{identifier}/{field}: expected {expected_value!r}, "
                         f"got {markdown_row[index]!r}"
                     )
 
@@ -4133,17 +4460,28 @@ def validate_chair_ledger_markdown_values(
             value.casefold() for value in expected_headers
         ]:
             continue
+        valid_rows = [row for row in rows if len(row) == len(mapping)]
+        observed_id_order = [row[0] for row in valid_rows]
+        expected_id_order = [
+            markdown_projection_scalar(identifier) for identifier in csv_rows
+        ]
+        if observed_id_order != expected_id_order:
+            errors.append(
+                f"{path.name}: {first_header} row order must exactly project "
+                f"the authoritative CSV order {expected_id_order}"
+            )
         markdown_by_id = {
-            row[0]: row for row in rows if len(row) == len(mapping)
+            row[0]: row for row in valid_rows
         }
         for identifier in sorted(set(csv_rows) & set(markdown_by_id)):
             markdown_row = markdown_by_id[identifier]
             csv_row = csv_rows[identifier]
             for index, (_header, field) in enumerate(mapping):
-                if markdown_row[index] != csv_row[field]:
+                expected_value = markdown_projection_scalar(csv_row[field])
+                if markdown_row[index] != expected_value:
                     errors.append(
                         f"{path.name}: Markdown/CSV value mismatch for "
-                        f"{identifier}/{field}: expected {csv_row[field]!r}, "
+                        f"{identifier}/{field}: expected {expected_value!r}, "
                         f"got {markdown_row[index]!r}"
                     )
 
@@ -4187,11 +4525,21 @@ def validate_chair_finding_tables(
             "ExactPDFAnchor", "DirectObservation", "EvidenceStatus", "Owner",
             "MinimumEditEvidence", "Verification",
         ]
+        expected_chair_order = [
+            markdown_projection_scalar(row["ChairFindingID"])
+            for row in academic_rows.values()
+        ]
+        if [row[0] for row in valid_rows] != expected_chair_order:
+            errors.append(
+                f"{path.name}: adjudicated-finding row order must exactly follow "
+                "91-revision-ledger.csv"
+            )
         for identifier in sorted(set(academic_by_chair_id) & set(markdown_by_id)):
             csv_row = academic_by_chair_id[identifier]
             markdown_row = markdown_by_id[identifier]
             for index, field in enumerate(mapping):
-                if field is not None and markdown_row[index] != csv_row[field]:
+                expected_value = markdown_projection_scalar(csv_row[field])
+                if markdown_row[index] != expected_value:
                     errors.append(
                         f"{path.name}: chair/91 value mismatch for "
                         f"{identifier}/{field}"
@@ -4221,11 +4569,20 @@ def validate_chair_finding_tables(
             "AIFindingID", "Impact", "ExactPDFAnchor", "DirectStyleObservation",
             "MinimumEditingAction", "Verification", "Status",
         ]
+        expected_ai_order = [
+            markdown_projection_scalar(identifier) for identifier in ai_rows
+        ]
+        if [row[0] for row in valid_rows] != expected_ai_order:
+            errors.append(
+                f"{path.name}: AI-actionable row order must exactly follow "
+                "91-ai-actionable-ledger.csv"
+            )
         for identifier in sorted(set(ai_rows) & set(markdown_by_id)):
             csv_row = ai_rows[identifier]
             markdown_row = markdown_by_id[identifier]
             for index, field in enumerate(mapping):
-                if markdown_row[index] != csv_row[field]:
+                expected_value = markdown_projection_scalar(csv_row[field])
+                if markdown_row[index] != expected_value:
                     errors.append(
                         f"{path.name}: chair/91 AI value mismatch for "
                         f"{identifier}/{field}"
@@ -6817,6 +7174,7 @@ def main(argv: list[str] | None = None) -> int:
             "Disposition", "Evidence",
         },
         same_row_id_headers={"Render artifact ID/hash"},
+        reference_id_headers={"Neighbor pages checked", "Evidence"},
     )
     validate_markdown_csv_projection(
         root / "02-page-layout-ledger.md",
@@ -7088,6 +7446,9 @@ def main(argv: list[str] | None = None) -> int:
         bib_ledger, "03-bibliography-audit-ledger.csv",
         BIB_LEDGER_COLUMNS, errors,
         blank_allowed={"EvidenceEndpoint"},
+    )
+    validate_bibliography_endpoint_records(
+        bib_ledger, "03-bibliography-audit-ledger.csv", errors
     )
     validate_reference_ids_only_in_id_column(
         bib_ledger, "03-bibliography-audit-ledger.csv", errors
@@ -7523,6 +7884,9 @@ def main(argv: list[str] | None = None) -> int:
     academic_by_id = index_unique(
         academic_ledger, "LedgerID", "91-revision-ledger.csv", errors
     )
+    validate_academic_dependency_references(
+        academic_ledger, "91-revision-ledger.csv", errors
+    )
     ai_by_id = index_unique(
         ai_ledger, "AIFindingID", "91-ai-actionable-ledger.csv", errors
     )
@@ -7639,6 +8003,7 @@ def main(argv: list[str] | None = None) -> int:
             "Exact PDF anchor", "Direct observation", "Evidence status", "Minimum edit/evidence",
             "Dependency", "Owner", "Status", "Verification",
         },
+        reference_id_headers={"Dependency"},
     )
     validate_markdown_id_projection(
         root / "91-revision-ledger.md",
@@ -7827,6 +8192,8 @@ def main(argv: list[str] | None = None) -> int:
                 "Evidence status", "Minimum required action", "Dependency",
                 "Owner", "Chair disposition", "Verification",
             },
+            reference_id_headers={"Dependency"},
+            reference_id_values=set(academic_by_id),
             section_heading="Current actionable items",
         )
         validate_markdown_id_projection(
@@ -7891,10 +8258,13 @@ def main(argv: list[str] | None = None) -> int:
             no_new_section, no_new_headers, evidence_path.name, errors
         )
         expected_no_new_rows = [
-            [
-                row["LedgerID"], row["Remedy"], row["ExactPDFAnchor"],
-                row["MinimumEditEvidence"], row["Verification"],
-            ]
+            markdown_projection_row(
+                row,
+                (
+                    "LedgerID", "Remedy", "ExactPDFAnchor",
+                    "MinimumEditEvidence", "Verification",
+                ),
+            )
             for row in open_academic.values()
             if row.get("Remedy", "").casefold() in {"w", "e", "p"}
         ]
@@ -7914,10 +8284,9 @@ def main(argv: list[str] | None = None) -> int:
         experiment_rows = parse_markdown_table_by_exact_headers(
             experiment_section, experiment_headers, evidence_path.name, errors
         )
-        expected_experiment_rows = [
-            [row[field] for field in EVIDENCE_ITEM_COLUMNS]
-            for row in evidence_items
-        ]
+        expected_experiment_rows = markdown_projection_rows(
+            evidence_items, EVIDENCE_ITEM_COLUMNS
+        )
         if experiment_rows is not None and experiment_rows != expected_experiment_rows:
             errors.append(
                 f"{evidence_path.name}: N-evidence table must exactly project "
@@ -7930,10 +8299,9 @@ def main(argv: list[str] | None = None) -> int:
             value for value in process.get("governing_rule_urls", [])
             if isinstance(value, str)
         }
-        bibliography_public_endpoints = {
-            row.get("EvidenceEndpoint", "") for row in bib_ledger
-            if row.get("EvidenceEndpoint", "")
-        }
+        bibliography_public_endpoints = bibliography_ledger_public_endpoints(
+            bib_ledger
+        )
         citation_public_endpoints = citation_ledger_public_endpoints(
             citation_ledger
         )
@@ -8236,6 +8604,21 @@ def main(argv: list[str] | None = None) -> int:
                 if isinstance(process, dict) else None
             ),
             allowed_governing_sources,
+            errors,
+        )
+        validate_identical_actor_access_receipts(
+            (
+                root / "90-chair-synthesis.md",
+                root / "91-revision-ledger.md",
+                root / "92-new-evidence-or-experiments.md",
+            ),
+            canonical_stage_opened_inputs(process, reviewer_count, "C", root),
+            (
+                *governing_rule_public_endpoint_sequence(process),
+                *bibliography_ledger_public_endpoint_sequence(bib_ledger),
+                *citation_ledger_public_endpoint_sequence(citation_ledger),
+            ),
+            "C",
             errors,
         )
         chair_path = root / "90-chair-synthesis.md"

@@ -144,21 +144,11 @@ CITATION_MARKDOWN_HEADERS = [
 
 
 def markdown_projection_scalar(value: str) -> str:
-    normalized = value.replace("\r\n", "\n").replace("\r", "\n")
-    return json.dumps(normalized, ensure_ascii=False)[1:-1]
+    return VALIDATOR_MODULE.markdown_projection_scalar(value)
 
 
 def markdown_table(headers: list[str], rows: list[list[str]]) -> str:
-    def source_cell(value: str) -> str:
-        return value.replace("|", r"\|")
-
-    header = "| " + " | ".join(source_cell(value) for value in headers) + " |\n"
-    separator = "|" + "|".join("---" for _ in headers) + "|\n"
-    body = "".join(
-        "| " + " | ".join(source_cell(value) for value in row) + " |\n"
-        for row in rows
-    )
-    return header + separator + body
+    return VALIDATOR_MODULE.render_markdown_pipe_table(headers, rows)
 
 
 def bibliography_markdown_rows(
@@ -3805,6 +3795,19 @@ class ValidateReviewBundleTests(unittest.TestCase):
             for old, new in chair_replacements.items():
                 chair_text = chair_text.replace(old, new)
             chair.write_text(chair_text, encoding="utf-8")
+            for filename in (
+                "91-revision-ledger.md",
+                "92-new-evidence-or-experiments.md",
+            ):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "public_endpoints=[none]",
+                        f"public_endpoints=[{rule_endpoint}]",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
             summary = root / "93-user-facing-summary.md"
             summary_text = summary.read_text(encoding="utf-8").replace(
                 "| B | 小修后可答辩 | skill-default | high |",
@@ -5675,6 +5678,76 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "Location: canonical `physical p.<n>` within `1..physical_page_count`",
             report_template,
         )
+
+    def test_dependency_ledger_ids_are_validated_as_closed_foreign_keys(self) -> None:
+        rows = [
+            {"LedgerID": "L01", "Dependency": "requires L02"},
+            {"LedgerID": "L02", "Dependency": "none"},
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_academic_dependency_references(
+            rows, "91-revision-ledger.csv", errors
+        )
+        self.assertEqual([], errors)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "91-revision-ledger.md"
+            path.write_text(
+                VALIDATOR_MODULE.render_markdown_pipe_table(
+                    ["Ledger ID", "Dependency"],
+                    [["L01", "L02"], ["L02", "none"]],
+                ),
+                encoding="utf-8",
+            )
+            projection_errors: list[str] = []
+            VALIDATOR_MODULE.validate_markdown_id_projection(
+                path,
+                {"L01", "L02"},
+                re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])"),
+                {"Ledger ID"},
+                "academic dependency fixture",
+                projection_errors,
+                required_headers={"Ledger ID", "Dependency"},
+                reference_id_headers={"Dependency"},
+            )
+            self.assertEqual([], projection_errors)
+
+        cases = (
+            (
+                [
+                    {"LedgerID": "L01", "Dependency": "L99"},
+                    {"LedgerID": "L02", "Dependency": "none"},
+                ],
+                "unknown LedgerID references ['L99']",
+            ),
+            (
+                [
+                    {"LedgerID": "L01", "Dependency": "L01"},
+                    {"LedgerID": "L02", "Dependency": "none"},
+                ],
+                "cannot reference its own LedgerID L01",
+            ),
+            (
+                [
+                    {"LedgerID": "L01", "Dependency": "L02"},
+                    {"LedgerID": "L02", "Dependency": "L01"},
+                ],
+                "Dependency cycle is forbidden",
+            ),
+            (
+                [
+                    {"LedgerID": "L01", "Dependency": "L02; L02"},
+                    {"LedgerID": "L02", "Dependency": "none"},
+                ],
+                "repeats LedgerID references ['L02']",
+            ),
+        )
+        for candidate, needle in cases:
+            with self.subTest(needle=needle):
+                errors = []
+                VALIDATOR_MODULE.validate_academic_dependency_references(
+                    candidate, "91-revision-ledger.csv", errors
+                )
+                self.assertTrue(any(needle in error for error in errors), errors)
 
 
 if __name__ == "__main__":

@@ -705,6 +705,7 @@ def validate_page_outputs(
         errors,
         required_headers=set(module.PAGE_MARKDOWN_HEADERS),
         same_row_id_headers={"Render artifact ID/hash"},
+        reference_id_headers={"Neighbor pages checked", "Evidence"},
     )
     module.validate_markdown_csv_projection(
         root / "02-page-layout-ledger.md",
@@ -738,6 +739,9 @@ def validate_bibliography_outputs(
         module.BIB_LEDGER_COLUMNS,
         errors,
         blank_allowed={"EvidenceEndpoint"},
+    )
+    module.validate_bibliography_endpoint_records(
+        bibliography_ledger, "03-bibliography-audit-ledger.csv", errors
     )
     module.validate_reference_ids_only_in_id_column(
         bibliography_ledger, "03-bibliography-audit-ledger.csv", errors
@@ -1039,10 +1043,9 @@ def validate_r5(root: Path, module: Any) -> list[str]:
         value for value in process.get("governing_rule_urls", [])
         if isinstance(value, str)
     }
-    bibliography_endpoints = {
-        row.get("EvidenceEndpoint", "") for row in bibliography_ledger
-        if row.get("EvidenceEndpoint", "")
-    }
+    bibliography_endpoints = module.bibliography_ledger_public_endpoints(
+        bibliography_ledger
+    )
     allowed_endpoints = rule_endpoints | bibliography_endpoints
     module.validate_declarations(
         root / "01-policy-basis.md",

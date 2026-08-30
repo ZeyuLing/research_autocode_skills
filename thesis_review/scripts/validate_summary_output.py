@@ -148,6 +148,9 @@ def validate_summary(root: Path, module: Any) -> list[str]:
     academic_by_id = module.index_unique(
         academic, "LedgerID", "91-revision-ledger.csv", errors
     )
+    module.validate_academic_dependency_references(
+        academic, "91-revision-ledger.csv", errors
+    )
     ai_by_id = module.index_unique(
         ai, "AIFindingID", "91-ai-actionable-ledger.csv", errors
     )
@@ -258,6 +261,8 @@ def validate_summary(root: Path, module: Any) -> list[str]:
             "Minimum required action", "Dependency", "Owner", "Chair disposition",
             "Verification",
         },
+        reference_id_headers={"Dependency"},
+        reference_id_values=set(academic_by_id),
         section_heading="Current actionable items",
     )
     module.validate_markdown_id_projection(

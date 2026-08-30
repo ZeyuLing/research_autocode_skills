@@ -156,6 +156,7 @@ Behavior:
 - does not substitute BibTeX key closure, citation-count statistics, keyword matching, or spot checks for claim--source verification;
 - verifies each claim--source pair from the cited primary source or official full record rather than inferring support from title, abstract keywords, venue, or citation count;
 - produces `04-citation-claim-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records every inaccessible, partially supporting, context-only, or mismatched source use;
+- completes the authoritative `04` CSV first, records every auxiliary opened route with the closed endpoint marker, runs the staged owner materializer, inspects its exact Markdown/receipt projection, and only then runs the read-only R4 gate;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - labels inference and uncertainty explicitly.
 
@@ -183,6 +184,7 @@ Behavior:
 - do not accept a contact-sheet-only claim of full-page coverage; record every physical page and the disposition of every pagination signal;
 - do not trust imported BibTeX, search snippets, generated citation sites, or aggregate metadata matches; open authoritative records and give every required field a separate verdict;
 - produce the one-row-per-entry Markdown summary plus long-form `03-bibliography-audit-ledger.csv` with every mandatory field row and no pending field; treat a substantiated fabricated/nonexistent citation as an `S0` integrity blocker while distinguishing it from an inaccessible source or a local metadata typo;
+- complete the authoritative `02`/`03` CSVs first, use only current PageIDs for explicit neighbor/evidence cross-references, record every auxiliary opened bibliography route with the closed endpoint marker, run the staged owner materializer, inspect its exact Markdown/receipt projections, and only then run the read-only R5 gate;
 - do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 
@@ -232,6 +234,6 @@ The chair is not a sixth reviewer. Launch it as a new clean actor with no inheri
 
 If the chair needs evidence beyond the frozen PDF and permitted public citation sources, the blind-review round cannot resolve that question. Record it as `not verifiable from the submitted PDF`. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
 
-Before freezing or exiting, the Chair runs `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Its pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
+Before freezing or exiting, the Chair runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS, repeating both after any Chair-source edit. Materialization preserves semantic decisions and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
 
 After the chair freezes its outputs, run the separate clean Stage-S synthesis in `clean-room-orchestration.md`. The chair does not write free-form user commentary, and the conversation-aware orchestrator does not reconstruct or supplement the issue table.

@@ -29,6 +29,17 @@ projection.
 
 Use continuous deterministic Page IDs `P0001...` in physical-page order, with `Pnnnn` bound to physical page `nnnn`. Retain every inspected PNG in the round as `page-renders/<PageID>.png`; the validator decodes its pixels and checks its PNG structure, pixel dimensions against the corresponding PDF page and declared DPI, and exact SHA-256. `Region` distinguishes front matter, chapter, references, appendix, and back matter. `Signals` records automated or visual triage. `Inspection mode/scale` is `individual`, `small-legible-group`, or `full-scale` with the actual zoom/scale; every page needs one valid inspection record, and every suspect page needs `full-scale`. `Render artifact ID/hash` records the retained PNG's exact 64-hex hash, optionally prefixed by its PageID; do not put an arbitrary token or the source-PDF hash there. `Disposition` is `clean`, `intentional`, `finding <ID>`, or `recheck after edit`. Do not omit blank pages; explain whether each is template-mandated, chapter-structure-induced, or erroneous. Reconcile the parsed PDF page count, retained render filenames, Stage-P inventory, CSV, and complete Markdown table Page-ID sets; duplicate/missing/extra IDs and PageID/physical-page swaps must all be zero.
 
+`Neighbor pages checked` records the adjacent or continuation pages actually
+examined. It may name current-round PageIDs such as `P0070; P0072` or use
+physical-page locators; `Evidence` may likewise use an existing PageID when a
+visual conclusion explicitly depends on another rendered page. These are
+foreign-key references, not extra primary-key rows: every `Pnnnn` token in
+either column must exist in `00-page-inventory.csv`. An unknown PageID, or a
+PageID in any other non-ID column or surrounding prose, is invalid. After the
+authoritative CSV is complete, run the owner materializer specified in
+`ledger-validation.md`; it produces the exact escaped Markdown table and does
+not change a page disposition or inspection record.
+
 ## 3. Mandatory triage signals
 
 Treat these as prompts for full-scale inspection, not automatic defects:
