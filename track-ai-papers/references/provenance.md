@@ -20,5 +20,7 @@ This skill is an original implementation informed by a GitHub survey. No upstrea
 - structured source, selection, and delivery reports
 - v2 artifact lanes for recent papers, curated foundational classics, and verified Hugging Face open-model releases
 - high-precision audiovisual relationship matching plus artifact-, lane-, and primary-topic-scoped post-quality quotas that never lower evidence gates or override hard caps
+- an independent first-party organization technical-release lane with an extensible seed matrix, safe source-promotion gates, artifact-aware review, and mandatory per-run coverage/funnel auditing
+- high-precision arbitrary-skeleton motion discovery that requires cross-topology/heterogeneous-skeleton generation or transfer semantics and rejects ordinary pose-estimation or fixed-skeleton work
 
 Check upstream licenses and behavior again before copying code or adding new vendored components. Links and license observations were verified during initial development in August 2026.

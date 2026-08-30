@@ -93,6 +93,73 @@
       "exclude_any": ["molecular motion", "motion blur removal", "camera motion only"]
     },
     {
+      "id": "arbitrary-skeleton-motion",
+      "label": "任意骨架动作生成 / 跨骨架动作迁移",
+      "arxiv_categories": ["cs.CV", "cs.GR", "cs.RO", "cs.AI", "cs.LG"],
+      "query_terms": [
+        "arbitrary skeleton motion generation",
+        "arbitrary-skeleton motion generation",
+        "heterogeneous skeleton motion generation",
+        "cross skeleton motion generation",
+        "cross-skeleton motion generation",
+        "skeleton agnostic motion generation",
+        "character agnostic motion generation",
+        "topology aware motion generation",
+        "topology generalized motion generation",
+        "zero shot skeleton transfer",
+        "cross skeleton motion retargeting",
+        "motion retargeting arbitrary skeleton",
+        "unified motion representation heterogeneous skeleton",
+        "motion generation different joint topology",
+        "motion transfer across character morphology",
+        "motion transfer across body proportions",
+        "motion generation varying character proportions"
+      ],
+      "include_any": [
+        "arbitrary skeleton motion generation",
+        "heterogeneous skeleton motion generation",
+        "cross skeleton motion generation",
+        "skeleton agnostic motion generation",
+        "character agnostic motion generation",
+        "topology aware motion generation",
+        "topology generalized motion",
+        "zero shot skeleton transfer",
+        "cross skeleton motion retargeting",
+        "motion retargeting arbitrary skeleton",
+        "unified motion representation for heterogeneous skeleton",
+        "motion generation across skeleton topologies",
+        "motion transfer across different morphologies",
+        "motion transfer across body proportions",
+        "motion generation across character proportions"
+      ],
+      "include_all_groups": [
+        [
+          "arbitrary skeleton", "heterogeneous skeleton", "cross skeleton",
+          "skeleton agnostic", "character agnostic", "topology agnostic",
+          "topology aware", "topology generalized", "topology generalization",
+          "unseen skeleton", "different skeleton", "different joint topology",
+          "varying joint topology", "multiple skeleton topologies",
+          "arbitrary character", "different morphology", "cross morphology",
+          "morphology aware", "different body proportion",
+          "varying body proportion", "body proportion agnostic"
+        ],
+        [
+          "motion generation", "motion synthesis", "motion transfer",
+          "motion retargeting", "skeleton transfer", "character animation",
+          "animation generation", "action generation"
+        ]
+      ],
+      "exclude_any": [
+        "3d pose estimation", "2d pose estimation", "human pose estimation",
+        "multi person pose estimation", "pose estimation benchmark",
+        "keypoint detection", "pose tracking", "skeleton action recognition",
+        "action recognition only", "skeleton extraction", "automatic rigging",
+        "mesh skinning", "inverse kinematics only", "motion capture only",
+        "single skeleton motion generation", "fixed skeleton motion generation",
+        "same skeleton retargeting", "molecular motion", "camera motion only"
+      ]
+    },
+    {
       "id": "video-generation",
       "label": "视频生成",
       "arxiv_categories": ["cs.CV", "cs.AI", "cs.LG", "cs.MM"],

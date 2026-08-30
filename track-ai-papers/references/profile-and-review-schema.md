@@ -23,6 +23,8 @@ Version 2 additionally requires:
 
 The default v2 lanes are `recent-paper`, `classic-foundation`, and `open-model`. Lane minimums must fit inside `max_digest_papers`. Minimums reserve space only among candidates that already pass relevance, intrinsic-quality, evidence, and fatal-concern gates; they never turn a rejected or watchlist item into a highlight. Maximums and `max_per_topic` are hard constraints: when a minimum conflicts with a maximum, selection reports the minimum as unmet instead of bypassing the cap. The default audiovisual quota is scoped to `artifact_types: ["paper"]`, `lanes: ["recent-paper"]`, and `require_primary_topic: true`, so an open model or a paper reviewed under another primary topic cannot satisfy it. Version 1 profiles remain accepted and use the original recent-paper selection path. The scripts do not mutate a v1 workspace profile into v2.
 
+The required `organization-release` lane is an operating discovery and coverage contract parallel to these three bundled selector lanes. It intentionally is not added to the core `lanes[]` array because the bundled validator currently accepts only `paper` and `model-release`, while organization discovery also covers APIs, tools, SDKs, benchmarks, datasets, standards, research previews and repositories. A deployed adapter may normalize those artifact types into its extended candidate schema; a local run must still produce `organization-release-coverage.json` and the corresponding digest section. Never relabel a non-paper artifact merely to pass the core validator. Read `organization-release-radar.md` for the extended record and audit contract.
+
 `language` currently accepts `zh-CN` or `en` and localizes both Markdown and HTML output. `timezone` must be an IANA name such as `Asia/Shanghai` or `America/Los_Angeles`; it controls the local calendar-day cutoff used by all sources, while persisted timestamps remain UTC for reproducibility.
 
 `max_digest_papers`, `max_per_topic`, and every lane maximum are global across highlights plus watchlist items; highlights consume the budget first, and the watchlist can use only the remaining total, per-topic, and per-lane capacity. Lane minimums apply to eligible highlights only.
@@ -159,6 +161,7 @@ For a model-release highlight use `evidence_level: "official-artifacts"` after i
 - `reviewed.json`: agent-completed judgments
 - `digest.md`, `digest.html`: rendered outputs
 - `selection-report.json`: accepted, watchlisted, rejected, score breakdown, reasons, and v2 `quota_fulfillment`
+- `organization-release-coverage.json`: mandatory organization/category source states, discovery expansions, crawl budgets and candidate funnel for every operating run
 - `delivery-report.json`: per-channel notification result
 
 The source log and selection report are part of the deliverable. They prevent a polished digest from hiding retrieval failures, query-cap truncation risks, or incomplete screening.

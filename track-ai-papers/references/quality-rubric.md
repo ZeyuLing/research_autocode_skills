@@ -100,10 +100,14 @@ Verify all of the following from the official Hugging Face repository and linked
 
 A public repository is not proof of open weights. Missing weights, an absent license, gating, a metadata mismatch, or an unverifiable identity is a highlight-blocking concern. Popularity cannot repair these failures. Interpret the existing score fields for a release as: problem importance = value of the capability/use case; method novelty = disclosed technical novelty; evidence strength = benchmark and provenance strength; reproducibility = weights, license, code, documentation, and runnable detail.
 
+### Organization technical releases
+
+Use the actual artifact rather than paper-shaped proxies. Verify first-party ownership, canonical identity, release date/version, substantive change, documentation and relevant artifact links. For an API/tool/SDK/runtime, inspect the capability contract, runnable examples or specification, compatibility and availability; for a benchmark/dataset, inspect construction, protocol, license and leakage/coverage risks; for a standard, inspect the versioned specification and implementations; for a research preview or repository, inspect the technical disclosure, code/artifacts and evaluation actually provided. Separate first-party claims from independent reproduction or adoption. Financing, hiring, marketing, minor product churn and identity-only announcements are not watchlist candidates. Follow `organization-release-radar.md` for source promotion and coverage rules.
+
 ## Evidence levels and gates
 
 - `full-text`: Method and Experiments inspected; concrete anchors captured. Eligible for highlights.
-- `official-artifacts`: official model card, weight inventory, license, linked code/paper, and benchmark provenance inspected. Eligible only for `model-release` highlights.
+- `official-artifacts`: the canonical first-party technical artifact and its relevant model/card/weights/license/code/documentation/API/data/benchmark/specification evidence were inspected. Eligible for verified model releases and non-paper organization technical releases, using artifact-specific gates; first-party provenance alone is insufficient.
 - `partial-text`: more than abstract read, but experiments or method remain incomplete. Watchlist only.
 - `abstract`: title/abstract/metadata only. Watchlist only.
 
@@ -111,7 +115,7 @@ Highlight gates:
 
 - relevance at or above the profile threshold
 - intrinsic quality at or above the profile threshold
-- paper: `evidence_level == "full-text"`; model release: `evidence_level == "official-artifacts"`
+- paper: `evidence_level == "full-text"`; model or other organization technical release: `evidence_level == "official-artifacts"`
 - no unresolved fatal concern, retraction, metadata mismatch, or unverifiable paper identity
 
 Watchlist gates:

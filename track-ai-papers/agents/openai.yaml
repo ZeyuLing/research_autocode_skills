@@ -1,4 +1,4 @@
 interface:
   display_name: "AI Research Radar"
-  short_description: "Track papers, classics, and open-model releases"
-  default_prompt: "Use $track-ai-papers to find and rank today's strongest papers, one foundational classic, and verified recent open-model releases for my research topics."
+  short_description: "Track papers, classics, open models, and technical releases"
+  default_prompt: "Use $track-ai-papers to find and rank today's strongest papers, one foundational classic, verified open models, and first-party organization technical releases, with a coverage audit for my research topics."

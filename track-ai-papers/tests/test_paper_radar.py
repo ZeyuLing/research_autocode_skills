@@ -279,6 +279,57 @@ class PaperRadarTests(unittest.TestCase):
             with self.subTest(title=title):
                 self.assertFalse(match_topic({"title": title, "abstract": abstract}, topic)[0])
 
+    def test_arbitrary_skeleton_motion_requires_cross_topology_generation_or_transfer(self) -> None:
+        profile = load_json(DEFAULT_PROFILE)
+        topic = next(item for item in profile["topics"] if item["id"] == "arbitrary-skeleton-motion")
+        positives = [
+            (
+                "TopoMotion: Arbitrary-Skeleton Motion Generation",
+                "A topology-generalized diffusion model synthesizes motion for unseen character rigs.",
+            ),
+            (
+                "A Unified Representation for Animated Characters",
+                "We perform motion retargeting between heterogeneous skeletons with different joint topology.",
+            ),
+            (
+                "Zero-Shot Skeleton Transfer",
+                "The character-agnostic model transfers actions to unseen skeletons and morphologies.",
+            ),
+            (
+                "Motion Transfer Across Body Proportions",
+                "A unified representation synthesizes animation for characters with varying body proportions.",
+            ),
+        ]
+        for title, abstract in positives:
+            with self.subTest(title=title):
+                self.assertTrue(match_topic({"title": title, "abstract": abstract}, topic)[0])
+
+        hard_negatives = [
+            (
+                "Topology-Aware 3D Pose Estimation",
+                "We estimate human keypoints on heterogeneous skeleton annotations.",
+            ),
+            (
+                "Text-to-Motion Diffusion",
+                "We generate human motion on one fixed SMPL skeleton.",
+            ),
+            (
+                "Cross-Dataset Skeleton Action Recognition",
+                "The network classifies actions using different joint topologies.",
+            ),
+            (
+                "Automatic Rigging for Arbitrary Characters",
+                "We predict bones and mesh skinning weights without generating motion.",
+            ),
+            (
+                "Monocular Motion Capture",
+                "A pose tracking system recovers motion for a single skeleton.",
+            ),
+        ]
+        for title, abstract in hard_negatives:
+            with self.subTest(title=title):
+                self.assertFalse(match_topic({"title": title, "abstract": abstract}, topic)[0])
+
     def test_v1_profile_remains_valid_without_lane_fields(self) -> None:
         profile = load_json(DEFAULT_PROFILE)
         profile["profile_version"] = 1

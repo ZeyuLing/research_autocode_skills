@@ -11,13 +11,14 @@ When running inside Codex, use the host application's recurring automation facil
 - delivery channels
 - instruction to disclose source failures and keep abstract-only items in the watchlist
 - for v2 profiles, instruction to preserve the classic/open-model lane quotas and the audiovisual minimum without lowering any quality or evidence gate
+- instruction to run the independent first-party `organization-release` lane, preserve its machine-readable coverage audit, and report `no_release`, partial, failed, and uncovered sources separately
 
 Do not silently create a recurring task. Confirm the cadence and external delivery target unless the user already specified them.
 
 Example task prompt:
 
 ```text
-Use $track-ai-papers every weekday. Fetch the configured recent-paper window plus the v2 classic and open-model lanes for <workspace>/profile.json, review candidates that can clear the artifact-appropriate quality gate, preserve lane/topic quotas only among eligible highlights, render the digest, and deliver it to the configured Telegram channel with --mark-seen. Report source or delivery failures, and consume artifacts only after every requested channel succeeds.
+Use $track-ai-papers every weekday. Fetch the configured recent-paper window plus the v2 classic and open-model lanes for <workspace>/profile.json, and run the independent first-party organization technical-release lane using its extensible coverage matrix. Review candidates that can clear the artifact-appropriate quality gate, preserve lane/topic quotas only among eligible highlights, render the digest and organization-release coverage audit, and deliver them to the configured Telegram channel with --mark-seen. Report no-release, partial, failed and uncovered organization sources separately from other source or delivery failures, and consume artifacts only after every requested channel succeeds.
 ```
 
 ## Supported channels
