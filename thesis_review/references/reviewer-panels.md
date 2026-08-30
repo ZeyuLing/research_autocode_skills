@@ -21,6 +21,17 @@ Do not infer an unreported run count from result formatting. If one row reports 
 
 Each reviewer reads the whole thesis. The persona changes priority, depth, skepticism, and professional viewpoint; it never narrows the reviewer to one topic.
 
+The `Persona assignment` field is a closed machine-validated value, not free prose. Use the following exact value for the active degree level and reviewer index; put any richer description only in `Persona emphasis`:
+
+- doctorate R1: `R1 technical/methods/experiments`
+- doctorate R2: `R2 contribution/novelty/positioning`
+- doctorate R3: `R3 thesis architecture/narrative`
+- doctorate R4: `R4 evidence/reproducibility/integrity/citation`
+- doctorate R5: `R5 format/bibliography/layout`
+- master's R1: `R1 technical/methods/experiments`
+- master's R2: `R2 contribution/positioning + thesis architecture/narrative`
+- master's R3: `R3 evidence/integrity/citation + format/bibliography/layout`
+
 ## Common whole-thesis mandate
 
 Before the persona-weighted deep review, every reviewer must independently evaluate all nine rubric gates across the complete thesis:

@@ -5203,6 +5203,29 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "the open 91-ai-actionable-ledger.csv row order",
             )
 
+    def test_rule_text_exposes_exact_personas_and_ai_physical_locator(self) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        report_template = (skill_root / "references" / "report-template.md").read_text(
+            encoding="utf-8"
+        )
+        reviewer_panels = (skill_root / "references" / "reviewer-panels.md").read_text(
+            encoding="utf-8"
+        )
+        exact_personas = (
+            "R1 technical/methods/experiments",
+            "R2 contribution/novelty/positioning",
+            "R3 thesis architecture/narrative",
+            "R4 evidence/reproducibility/integrity/citation",
+            "R5 format/bibliography/layout",
+        )
+        for persona in exact_personas:
+            self.assertIn(persona, report_template)
+            self.assertIn(persona, reviewer_panels)
+        self.assertIn(
+            "Location: canonical `physical p.<n>` within `1..physical_page_count`",
+            report_template,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

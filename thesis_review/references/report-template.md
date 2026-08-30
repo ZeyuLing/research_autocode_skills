@@ -136,6 +136,17 @@ For doctoral R5, the canonical `opened=[...]` sequence has one fixed R5-only ins
 
 ## Independent reviewer report
 
+Copy `Persona assignment` exactly from this closed degree-specific mapping; do not translate, paraphrase, add punctuation, or combine roles:
+
+- doctorate R1: `R1 technical/methods/experiments`
+- doctorate R2: `R2 contribution/novelty/positioning`
+- doctorate R3: `R3 thesis architecture/narrative`
+- doctorate R4: `R4 evidence/reproducibility/integrity/citation`
+- doctorate R5: `R5 format/bibliography/layout`
+- master's R1: `R1 technical/methods/experiments`
+- master's R2: `R2 contribution/positioning + thesis architecture/narrative`
+- master's R3: `R3 evidence/integrity/citation + format/bibliography/layout`
+
 ```markdown
 # Rn — Comprehensive whole-thesis review — persona emphasis
 
@@ -144,7 +155,7 @@ For doctoral R5, the canonical `opened=[...]` sequence has one fixed R5-only ins
 - Review round ID: <exact process round_id>
 - Review retry ID: <exact process retry_id>
 - Whole-thesis mandate: Gate A--I
-- Persona assignment: exact degree-specific value from `reviewer-panels.md` and the list below
+- Persona assignment: exact degree-specific value from `reviewer-panels.md` and the mapping immediately above
 - Persona emphasis:
 - Separate exhaustive audit duties, if any:
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
@@ -322,7 +333,7 @@ Under `institutional`, `Governing source` is a duplicate-free semicolon-separate
 
 ### AI-F01 — short title
 - Impact: material / local / optional
-- Location: exact PDF page and section
+- Location: canonical `physical p.<n>` within `1..physical_page_count`, optionally followed by section/table/figure detail
 - Recurrent evidence:
 - Reader impact:
 - Minimum safe editing strategy:
