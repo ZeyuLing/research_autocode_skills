@@ -314,6 +314,17 @@ class ValidateR5OutputTests(unittest.TestCase):
                 "blank mandatory field ClassificationEvidence",
             )
 
+    def test_r5_contract_forbids_mutating_stage_p_or_other_inputs(self) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        ledger_text = (skill_root / "references" / "ledger-validation.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("R5 must never edit the Stage-P packet", skill_text)
+        self.assertIn("R5 must not edit the Stage-P packet", ledger_text)
+        self.assertIn("stop and report failure", skill_text)
+        self.assertIn("stop and report failure to Stage O", ledger_text)
+
 
 if __name__ == "__main__":
     unittest.main()
