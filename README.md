@@ -89,6 +89,7 @@ The toolkit supports the loop rather than treating publication as the end of a l
 | Blind-review a Chinese CS master's or doctoral thesis | [thesis_review](thesis_review/) | Three- or five-reviewer independent reports, chair adjudication, full-document anonymity, split bibliography-integrity and claim--citation audits, physical-page pagination audits, and a revision ledger |
 | Repair figure/table placement in LaTeX | [latex-float-layout](latex-float-layout/) | Compile-and-inspect float redistribution and pagination fixes |
 | Prepare an author response | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | Review map, response strategy, and rebuttal draft |
+| Turn research outputs into a polished interactive web surface | [impeccable](impeccable/) | Context-grounded research site, paper companion, method demo, or benchmark dashboard with browser evidence and deterministic UI checks |
 | Diagnose research code iteratively | [autodebug](autodebug/) | Hypothesis-driven debugging loop with persistent observations |
 | Execute a research TODO queue | [autorun](autorun/) | Dependency-aware execution, task state, and reviewer-style acceptance checks |
 
@@ -146,7 +147,8 @@ There is intentionally no root-level `pip install` or `npm install` command. Exa
 - [idea2experiment](idea2experiment/) — Python 3.10+ for the orchestration core, plus the training framework, data access, accelerator runtime, and scheduler required by the selected project adapter;
 - [paperjury](paperjury/) — its own Node.js/toolkit requirements;
 - [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) — its own Python CLI environment;
-- [Skill-Research-Figure](Skill-Research-Figure/) — LaTeX/TikZ or Blender only for the selected rendering path.
+- [Skill-Research-Figure](Skill-Research-Figure/) — LaTeX/TikZ or Blender only for the selected rendering path;
+- [impeccable](impeccable/) — Node.js 22.18+ for its scripts; full URL inspection additionally uses Puppeteer with Chrome/Chromium.
 
 When a hard dependency is unavailable, a workflow should report the missing requirement instead of silently replacing it with a semantically different tool.
 
@@ -159,6 +161,7 @@ Survey explicit motion planning and text-to-motion prior art, with source and co
 Deep-read this paper and map each module to the challenge and evidence it addresses.
 Run a pre-submission adversarial review of this CVPR LaTeX project and apply safe edits.
 Repair appendix float clustering and large single-column blank regions.
+Use impeccable to turn these paper assets into a publication-grade companion site and verify it at desktop and mobile widths.
 ```
 
 ## Featured workflows
@@ -169,6 +172,7 @@ Repair appendix float clustering and large single-column blank regions.
 | **Idea → audited experiments** | `idea2experiment` → repository/data audit → sanity and tiny-overfit gates → baseline reproduction → scale/data/module/parameter studies → independent audit | Immutable runs and claim-linked measured evidence, including preserved failures and explicit scientific replanning |
 | **Evidence → academic manuscript** | `deep-research` → `academic-paper` → integrity checks → `academic-paper-reviewer` → revision | A structured research synthesis and manuscript with repeated review passes |
 | **Pre-submission hardening** | `research-paper-writing` → `paperjury` → `latex-float-layout` | Clearer argumentation, adversarial issue discovery, controlled edits, and render-verified layout repair |
+| **Research output → interactive showcase** | research artifacts → `frontend-design` context and accessibility gates → `impeccable` shape/build/critique/audit/polish | A coherent research homepage, paper companion, interactive method demo, result browser, or benchmark dashboard with rendered QA evidence |
 | **Research engineering** | `generate-docs` / `autorun` → `autodebug` → acceptance checks | Better project context, dependency-aware execution, and evidence-driven debugging |
 
 Predicted experimental values are not measured results. Workflows that use forecasts must bind them to visible replacement TODOs. `idea2experiment` is the execution-side bridge: only completed, protocol-bound, audited runs may replace those targets with measured evidence.
@@ -225,7 +229,8 @@ Predicted experimental values are not measured results. Workflows that use forec
 | [Skill-Research-Figure](Skill-Research-Figure/) | Produce TikZ pipelines and Blender-based 3D research figures |
 | [drawio-figure-replicator](drawio-figure-replicator/) | Recreate reference diagrams as editable draw.io assets |
 | [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) | Rebuild slide images or scanned decks as object-level editable PowerPoint |
-| [frontend-design](frontend-design/) | Build research pages, demos, dashboards, posters, and interactive presentations |
+| [frontend-design](frontend-design/) | Lightweight, context-fit design governance for research pages, demos, dashboards, posters, and interactive presentations, including accessibility and responsive hard gates |
+| [impeccable](impeccable/) | End-to-end design context, shaping, implementation, live browser iteration, adversarial critique, deterministic UI detection, hardening, and final polish for research-facing web surfaces |
 
 Inside an `idea2paper` run, its `imagegen`-only figure contract takes precedence. Independent figure tasks can choose ImageGen, TikZ/Blender, or draw.io according to the required artifact.
 
@@ -298,6 +303,8 @@ Examples belong to their respective components and may require component-specifi
 - Some components are Codex-first, some are Claude Code-first, and some are portable prompt/workflow packages.
 - Python, Node.js, LaTeX, Poppler, Blender, ImageGen, databases, or external services are required only by the components that declare them.
 - A bundle's nested files, templates, scripts, and references are part of its runtime contract.
+- The vendored [Impeccable](impeccable/) Skill is pinned to upstream Skill `4.1.2` at commit `63b04e2530f5c7b41ea83c133daab24f34912456`. Its CLI requires Node.js 22.18 or newer; URL/browser detection may additionally use Puppeteer/Chromium.
+- Installing Impeccable as a user-level Codex Skill makes it discoverable in Codex sessions, but its automatic detector hook remains project-scoped: each project must add and explicitly approve its own `.codex/hooks.json` entry.
 
 Before adopting a component, check:
 
@@ -345,7 +352,7 @@ This repository contains original, adapted, bundled, and vendored components. **
 
 Examples of declared component licenses include MIT, Apache-2.0, and CC BY-NC 4.0; several components do not currently include an explicit license file. Components without an explicit license should not be assumed to grant reuse or redistribution rights.
 
-Review the relevant component directory before use, modification, commercial deployment, or redistribution. Upstream references are recorded in component README files, package metadata, license files, and notices such as [nature-paper-card/UPSTREAM.md](nature-paper-card/UPSTREAM.md).
+Review the relevant component directory before use, modification, commercial deployment, or redistribution. Upstream references are recorded in component README files, package metadata, license files, and notices such as [nature-paper-card/UPSTREAM.md](nature-paper-card/UPSTREAM.md) and [impeccable/VENDORED_FROM.md](impeccable/VENDORED_FROM.md).
 
 ## Feedback
 

@@ -95,6 +95,7 @@ flowchart LR
 | 对中国计算机学科硕博学位论文进行盲审预检 | [thesis_review](thesis_review/) | 3/5 位独立审稿意见、主席裁决、全文身份泄露与逐物理页分页检查、可执行修改台账 |
 | 修复 LaTeX 图表分布与分页 | [latex-float-layout](latex-float-layout/) | 基于编译和检查的 float 重排与分页修复 |
 | 准备 author response | [Skill-Research-Rebuttal](Skill-Research-Rebuttal/) | 审稿意见图谱、回复策略和 rebuttal 草稿 |
+| 把科研成果做成高质量交互式 Web 展示 | [impeccable](impeccable/) | 基于产品上下文的科研主页、论文 companion site、方法 demo 或 benchmark dashboard，并附浏览器证据与确定性 UI 检查 |
 | 迭代诊断科研代码问题 | [autodebug](autodebug/) | 假设驱动的调试闭环和持久化观测 |
 | 批量执行科研 TODO | [autorun](autorun/) | 依赖感知执行、任务状态和 reviewer 风格验收 |
 
@@ -154,7 +155,8 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 - [idea2experiment](idea2experiment/)——编排核心需要 Python 3.10+；训练框架、数据访问、加速器运行时和调度器则由具体项目适配器决定；
 - [paperjury](paperjury/)——使用自己的 Node.js/工具链依赖；
 - [image-to-editable-ppt-skill](image-to-editable-ppt-skill/)——使用自己的 Python CLI 环境；
-- [Skill-Research-Figure](Skill-Research-Figure/)——仅在选择对应路径时需要 LaTeX/TikZ 或 Blender。
+- [Skill-Research-Figure](Skill-Research-Figure/)——仅在选择对应路径时需要 LaTeX/TikZ 或 Blender；
+- [impeccable](impeccable/)——脚本需要 Node.js 22.18+；完整 URL 检查还会使用 Puppeteer 与 Chrome/Chromium。
 
 如果缺少强依赖，工作流应报告具体缺口，而不是静默替换为语义不同的工具。
 
@@ -167,6 +169,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 精读这篇论文，梳理每个模块解决的 challenge 及其证据。
 对这个 CVPR LaTeX 项目做投稿前对抗性评审，并应用安全修改。
 修复附录图表扎堆和单栏大面积留白。
+使用 impeccable 将这些论文素材做成发布级 companion site，并在桌面与移动端宽度完成渲染验收。
 ```
 
 ## 旗舰工作流
@@ -177,6 +180,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | **Idea → 可审计实验** | `idea2experiment` → 代码/数据审计 → sanity 与极小数据过拟合门禁 → baseline 复现 → 模型/数据 scale、模块/参数研究 → 独立审计 | 生成不可变、论断关联的实测证据，同时保留失败并显式记录科研重规划 |
 | **证据 → 学术论文** | `deep-research` → `academic-paper` → 完整性检查 → `academic-paper-reviewer` → 修订 | 形成结构化研究综合与经过多轮评审的论文 |
 | **投稿前加固** | `research-paper-writing` → `paperjury` → `latex-float-layout` | 加强论证、发现对抗性问题、实施受控修改并做渲染验证的排版修复 |
+| **科研成果 → 交互展示** | 科研产物 → `frontend-design` 上下文与无障碍门禁 → `impeccable` 的 shape/build/critique/audit/polish | 形成经过渲染验收的科研主页、论文 companion site、交互式方法 demo、结果浏览器或 benchmark dashboard |
 | **科研工程** | `generate-docs` / `autorun` → `autodebug` → 验收检查 | 建立项目上下文、依赖感知执行和证据驱动调试 |
 
 预测实验数字不是实测结果。使用预测值的工作流必须将其绑定到显式替换 TODO。`idea2experiment` 是执行侧桥梁：只有完成运行、绑定冻结协议且通过审计的结果，才能把这些目标替换为实测证据。
@@ -235,7 +239,8 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | [Skill-Research-Figure](Skill-Research-Figure/) | 生成 TikZ pipeline 和基于 Blender 的 3D 科研图 |
 | [drawio-figure-replicator](drawio-figure-replicator/) | 将参考图复刻为可编辑 draw.io 资产 |
 | [image-to-editable-ppt-skill](image-to-editable-ppt-skill/) | 把图片式幻灯片或扫描 deck 重建为对象级可编辑 PowerPoint |
-| [frontend-design](frontend-design/) | 构建科研主页、demo、Dashboard、poster 和交互展示 |
+| [frontend-design](frontend-design/) | 面向科研主页、demo、Dashboard、poster 和交互展示的轻量 context-fit 设计治理，以及无障碍和响应式硬门禁 |
+| [impeccable](impeccable/) | 面向科研 Web 展示的端到端设计上下文、方案细化、实现、浏览器实时迭代、对抗性评审、确定性 UI 检测、加固与最终润色 |
 
 在 `idea2paper` 工作流内，其 `imagegen`-only 作图合同优先。独立作图任务可以根据交付格式选择 ImageGen、TikZ/Blender 或 draw.io。
 
@@ -308,6 +313,8 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 - 本仓库同时包含 Codex 优先、Claude Code 优先和可移植的 prompt/workflow 工具包。
 - Python、Node.js、LaTeX、Poppler、Blender、ImageGen、数据库或外部服务，仅由明确声明它们的组件使用。
 - bundle 内部的文件、模板、脚本和参考资料都属于其运行合同。
+- 本仓库 vendored 的 [Impeccable](impeccable/) Skill 固定为上游 Skill `4.1.2`、commit `63b04e2530f5c7b41ea83c133daab24f34912456`。其 CLI 需要 Node.js 22.18 或更高版本；URL/真实浏览器检测还可能使用 Puppeteer/Chromium。
+- 将 Impeccable 安装为 Codex 用户级 Skill 后，所有 Codex 会话都可以发现它；但自动 detector hook 仍是项目级能力，每个项目都需要单独写入并明确批准 `.codex/hooks.json`。
 
 采用组件前，请检查：
 
@@ -357,7 +364,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 
 当前可确认的组件许可证包括 MIT、Apache-2.0 和 CC BY-NC 4.0；若干组件目前没有显式许可证文件。没有显式许可证的组件不应被默认视为授予使用或再分发权利。
 
-使用、修改、商业部署或再分发前，请检查对应组件目录。上游来源记录在组件 README、package metadata、许可证文件以及 [nature-paper-card/UPSTREAM.md](nature-paper-card/UPSTREAM.md) 等说明中。
+使用、修改、商业部署或再分发前，请检查对应组件目录。上游来源记录在组件 README、package metadata、许可证文件以及 [nature-paper-card/UPSTREAM.md](nature-paper-card/UPSTREAM.md)、[impeccable/VENDORED_FROM.md](impeccable/VENDORED_FROM.md) 等说明中。
 
 ## 反馈
 
