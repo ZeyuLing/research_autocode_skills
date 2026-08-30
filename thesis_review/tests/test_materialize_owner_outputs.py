@@ -4,6 +4,7 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -593,6 +594,79 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
             self.assertEqual(0, second.returncode, second.stdout + second.stderr)
             self.assertEqual(after_first, file_hashes(root))
 
+    def test_stage_s_materializer_creates_all_three_outputs_when_absent(
+        self,
+    ) -> None:
+        for degree in ("masters", "doctorate"):
+            with self.subTest(degree=degree), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = fixture_module.ValidateReviewBundleTests(
+                    methodName="test_complete_fixture_passes"
+                )
+                harness.build_bundle(root)
+                if degree == "doctorate":
+                    harness.convert_bundle_to_doctorate(root)
+
+                from_template = self.run_materializer(root, "S")
+                self.assertEqual(
+                    0, from_template.returncode,
+                    from_template.stdout + from_template.stderr,
+                )
+                expected = {
+                    filename: (root / filename).read_bytes()
+                    for filename in STAGE_S_FILES
+                }
+                for filename in STAGE_S_FILES:
+                    (root / filename).unlink()
+
+                before = file_hashes(root)
+                first = self.run_materializer(root, "S")
+                self.assertEqual(0, first.returncode, first.stdout + first.stderr)
+                self.assertTrue(
+                    first.stdout.startswith("MATERIALIZED\n"), first.stdout
+                )
+                after_first = file_hashes(root)
+                self.assertEqual(STAGE_S_FILES, changed_files(before, after_first))
+                for filename in STAGE_S_FILES:
+                    path = root / filename
+                    self.assertTrue(path.is_file(), filename)
+                    self.assertEqual(1, path.stat().st_nlink, filename)
+                    self.assertEqual(expected[filename], path.read_bytes(), filename)
+
+                scoped = self.run_gate(SUMMARY_VALIDATOR, root)
+                self.assertEqual(
+                    0, scoped.returncode, scoped.stdout + scoped.stderr
+                )
+                self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+
+                second = self.run_materializer(root, "S")
+                self.assertEqual(0, second.returncode, second.stdout + second.stderr)
+                self.assertEqual(after_first, file_hashes(root))
+
+    def test_stage_s_materializer_rejects_preexisting_hardlinked_output(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            harness.build_bundle(root)
+            for filename in STAGE_S_FILES:
+                (root / filename).unlink()
+            sentinel = root / "sentinel.txt"
+            sentinel.write_text("must remain unchanged\n", encoding="utf-8")
+            os.link(sentinel, root / "93-user-facing-summary.md")
+
+            before = file_hashes(root)
+            result = self.run_materializer(root, "S")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("single-link regular file", result.stdout)
+            self.assertEqual(before, file_hashes(root))
+            self.assertEqual(
+                "must remain unchanged\n", sentinel.read_text(encoding="utf-8")
+            )
+
     def test_chair_and_stage_s_materializers_do_not_enumerate_root_or_read_forbidden_stage_files(
         self,
     ) -> None:
@@ -626,6 +700,9 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
                     methodName="test_complete_fixture_passes"
                 )
                 harness.build_bundle(root)
+                if actor_id == "S":
+                    for filename in STAGE_S_FILES:
+                        (root / filename).unlink()
                 (root / "95-bundle-validation.md").write_text(
                     "forbidden downstream sentinel\n", encoding="utf-8"
                 )

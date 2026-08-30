@@ -7,7 +7,8 @@ is complete and before the role's read-only scoped gate. It never enumerates the
 round root, opens an input outside the actor's closed allowlist, changes a
 semantic master, or supplies a verdict. Reviewer owners and Chair write only
 their owned Markdown projections. Stage S additionally writes its two wholly
-derived 93 CSV subsets and their owned Markdown summary.
+derived 93 CSV subsets and their owned Markdown summary; those three wholly
+derived outputs may be absent on the first Stage-S invocation.
 """
 
 from __future__ import annotations
@@ -377,11 +378,27 @@ def table_rows_from_section(
     return rows or []
 
 
-def atomic_replace_text(module: Any, path: Path, text: str) -> str | None:
-    """Atomically replace one already-preflighted owned Markdown file."""
+def atomic_replace_text(
+    module: Any,
+    path: Path,
+    text: str,
+    *,
+    allow_create: bool = False,
+) -> str | None:
+    """Atomically publish one owned projection, optionally creating it once."""
 
     errors: list[str] = []
-    if not safe_regular_file(module, path, errors):
+    missing = False
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        missing = True
+    except OSError as exc:
+        return f"cannot safely inspect owned projection {path.name}: {exc}"
+    if missing:
+        if not allow_create:
+            return f"required owned projection {path.name} does not exist"
+    elif not safe_regular_file(module, path, errors):
         return "; ".join(errors)
     temporary_path: Path | None = None
     try:
@@ -398,7 +415,14 @@ def atomic_replace_text(module: Any, path: Path, text: str) -> str | None:
             handle.flush()
             os.fsync(handle.fileno())
             temporary_path = Path(handle.name)
-        temporary_path.replace(path)
+        if missing:
+            # Link publication is atomic and fails closed if another entry
+            # appeared after the absence check. Removing the temporary name
+            # leaves the published output as a single-link regular file.
+            os.link(temporary_path, path)
+            temporary_path.unlink()
+        else:
+            temporary_path.replace(path)
         temporary_path = None
         return None
     except OSError as exc:
@@ -782,6 +806,74 @@ def materialize_chair(
     return prepared
 
 
+def build_summary_shell(
+    module: Any,
+    process: dict[str, Any],
+    opened: list[str],
+) -> str:
+    """Build the complete deterministic Stage-S schema when no output exists."""
+
+    prompt_map = process.get("actor_prompt_sha256", {})
+    prompt_hash = prompt_map.get("S", "") if isinstance(prompt_map, dict) else ""
+    pdf_hash = str(process.get("selected_pdf_sha256", "")).upper()
+    opened_text = "; ".join(opened)
+    receipt = (
+        "received=[operational prompt]; "
+        f"opened=[{opened_text}]; public_endpoints=[none]; "
+        "no unlisted substantive assertion was received; "
+        "no prohibited context/artifact was used; "
+        "neighboring paths were not enumerated"
+    )
+    fresh = (
+        "no inherited user/thread/task turns beyond system/developer "
+        "instructions and the exact operational prompt"
+    )
+    table = module.render_markdown_pipe_table
+    blocks = [
+        "# Current-round user-facing review summary",
+        "## Clean-room identity\n"
+        "- Actor ID: S\n"
+        f"- Review round ID: {process.get('round_id', '')}\n"
+        f"- Review retry ID: {process.get('retry_id', '')}\n"
+        "- Frozen PDF path and SHA-256: "
+        f"file={process.get('frozen_pdf_file', '')} ; sha256={pdf_hash}\n"
+        f"- Summary fresh-context declaration: {fresh}\n"
+        f"- Exact current-round input allowlist: {opened_text}\n"
+        f"- Operational prompt SHA-256: {prompt_hash}\n"
+        f"- Summary input-receipt/access declaration: {receipt}\n"
+        f"- Frozen PDF SHA-256 at start and end: {pdf_hash} / {pdf_hash}",
+        "## Independent and overall conclusions\n\n"
+        + table(CONCLUSION_HEADERS, []).rstrip("\n"),
+        "## Current actionable items\n\n"
+        + table(SUMMARY_ACADEMIC_HEADERS, []).rstrip("\n"),
+        "## Current AI-style actionable items — separate from academic grading\n\n"
+        + table(SUMMARY_AI_HEADERS, []).rstrip("\n"),
+        "## Current new evidence or experiments (N)\n\n"
+        + table(EVIDENCE_MD_HEADERS, []).rstrip("\n"),
+        "## Optional suggestions\nnone",
+        "## Unresolved questions\n\n"
+        + table(DISAGREEMENT_HEADERS, []).rstrip("\n"),
+        "## Review limitations\nnone",
+        "## Reconciliation\n\n"
+        "- Open required rows in 91-revision-ledger.csv: \n"
+        "- Rows in 93-current-actionable-items.csv: \n"
+        "- Rows in Current actionable items Markdown table: \n"
+        "- Missing ledger IDs: \n"
+        "- Extra summary IDs: \n"
+        "- Duplicate IDs: \n"
+        "- Open AI rows in 91-ai-actionable-ledger.csv: \n"
+        "- Rows in 93-current-ai-actionable-items.csv: \n"
+        "- Rows in Current AI-style actionable items Markdown table: \n"
+        "- Missing/extra/duplicate AI finding IDs: \n"
+        "- Rows in 92-new-evidence-or-experiments.csv: \n"
+        "- Rows in Current new evidence or experiments Markdown table: \n"
+        "- Missing/extra/duplicate evidence item IDs: \n"
+        "- Statement: This summary introduces no new finding and uses no "
+        "prior-round or author-side information.",
+    ]
+    return "\n\n".join(blocks) + "\n"
+
+
 def materialize_summary(
     module: Any,
     root: Path,
@@ -789,16 +881,31 @@ def materialize_summary(
     errors: list[str],
 ) -> dict[Path, str]:
     reviewer_count = reviewer_count_for_process(process)
-    needed = {
+    sources = {
         "05-ai-style-assessment.md", "90-chair-synthesis.md",
         "91-revision-ledger.md", "91-revision-ledger.csv",
         "91-ai-actionable-ledger.csv", "92-new-evidence-or-experiments.md",
-        "92-new-evidence-or-experiments.csv", "93-user-facing-summary.md",
-        "93-current-actionable-items.csv", "93-current-ai-actionable-items.csv",
+        "92-new-evidence-or-experiments.csv",
         *(f"R{index}-comprehensive-review.md" for index in range(1, reviewer_count + 1)),
     }
-    for filename in sorted(needed):
+    stage_s_outputs = {
+        "93-user-facing-summary.md", "93-current-actionable-items.csv",
+        "93-current-ai-actionable-items.csv",
+    }
+    for filename in sorted(sources):
         safe_regular_file(module, root / filename, errors)
+    output_exists: dict[str, bool] = {}
+    for filename in sorted(stage_s_outputs):
+        path = root / filename
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            output_exists[filename] = False
+        except OSError as exc:
+            errors.append(f"cannot safely inspect owned projection {filename}: {exc}")
+        else:
+            output_exists[filename] = True
+            safe_regular_file(module, path, errors)
     if errors:
         return {}
     academic = read_csv_exact(
@@ -825,11 +932,14 @@ def materialize_summary(
     ]
     texts = {
         filename: (root / filename).read_text(encoding="utf-8")
-        for filename in needed if filename.endswith(".md")
+        for filename in sources if filename.endswith(".md")
     }
     opened = module.canonical_stage_opened_inputs(process, reviewer_count, "S", root)
     filename = "93-user-facing-summary.md"
-    text = texts[filename]
+    if output_exists[filename]:
+        text = (root / filename).read_text(encoding="utf-8")
+    else:
+        text = build_summary_shell(module, process, opened)
     text = replace_labeled_value(
         text, "Exact current-round input allowlist", "; ".join(opened), filename, errors
     )
@@ -977,7 +1087,9 @@ def materialize(root: Path, actor_id: str) -> list[str]:
         if errors:
             return errors
         for path, text in prepared.items():
-            write_error = atomic_replace_text(module, path, text)
+            write_error = atomic_replace_text(
+                module, path, text, allow_create=True
+            )
             if write_error:
                 return [write_error]
         return []
