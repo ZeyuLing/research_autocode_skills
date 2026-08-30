@@ -131,25 +131,32 @@ Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these to
 
 `received_blocks`, `opened_inputs`, `limitations`, and `recipient_stages` are arrays. The fresh-context string is canonical, and `input_receipt_access_declaration` must exactly serialize `received_blocks`, `opened_inputs`, and the three clean-access statements; prose cannot contradict or compensate for the arrays. `outputs` is a non-empty array of objects with exactly `file` and `sha256`; `file` is a neutral basename inside `helpers/`, and its hash is verified. The prompt and PDF hashes are 64 hexadecimal characters; both PDF hashes equal the frozen PDF. Every non-provenance file in `helpers/` must be registered by exactly one provenance record. For every declared recipient actor, the canonical opened list appends the provenance path and all output paths in deterministic helper/output order; every artifact signed by that actor must report those inputs. Unregistered, multiply registered, missing, path-traversing, unconsumed, or hash-mismatched helper output invalidates the bundle. If no helper is consumed, omit the `helpers/` directory.
 
-## 3. Validation command
+## 3. Mandatory stage gates and final validation
 
-Before Stage P freezes or exits, run its scoped validator repeatedly against the exact current bundle root:
+Every substantive actor runs its exact read-only gate before freezing or exiting:
 
-```text
-python rules/scripts/validate_stage_p_output.py <exact-round-root>
-```
+| Actor | Mandatory command | Outputs the actor may correct before rerunning |
+|---|---|---|
+| P | `python rules/scripts/validate_stage_p_output.py <exact-round-root>` | `00-manifest.md`, `01-policy-basis.md`, and the five `00-*.csv` packet masters |
+| Ordinary R reviewer | `python rules/scripts/validate_reviewer_output.py <exact-round-root> Rn` | that actor's `Rn-comprehensive-review.md` only |
+| Doctoral R4 | `python rules/scripts/validate_r4_output.py <exact-round-root>` | `R4-comprehensive-review.md` and `04` Markdown/CSV only |
+| Doctoral R5 | `python rules/scripts/validate_r5_output.py <exact-round-root>` | `R5-comprehensive-review.md`, `02`, `03`, and authorized page renders only |
+| Master's R3 | `python rules/scripts/validate_master_r3_output.py <exact-round-root>` | `R3-comprehensive-review.md`, `02`, `03`, `04`, and authorized page renders only |
+| AI | `python rules/scripts/validate_ai_output.py <exact-round-root>` | `05-ai-style-assessment.md` only |
+| C | `python rules/scripts/validate_chair_output.py <exact-round-root>` | current Chair-owned `90`--`92` Markdown/CSV outputs only |
+| S | `python rules/scripts/validate_summary_output.py <exact-round-root>` | `93-user-facing-summary.md` and both `93` CSV projections only |
 
-Stage P passes this gate only when the command exits `0` and its first nonempty stdout line is exactly `PASS`. Do not skip, patch, mock, replace, or suppress either `validate_stage_p_output.py` or its sibling `validate_review_bundle.py`. P may correct only `00-manifest.md`, `01-policy-basis.md`, and the five `00-*.csv` packet masters, then rerun until PASS. A process-envelope, frozen-PDF, governing-input, or staged-rule defect is reported to Stage O and triggers a clean retry; P must not edit those inputs. The command is read-only, creates no `95-bundle-validation.md`, requires and opens no R/AI/Chair/Stage-S/Stage-V artifact, and never enumerates the bundle root, `helpers/`, or neighboring paths. It reuses the full validator's extraction primitives and is mechanical rule infrastructure only; its output and source are never thesis/citation evidence, and PASS never replaces packet-neutrality or semantic sign-off.
+Each gate passes only when it exits `0` and its first nonempty stdout line is exactly `PASS`. Do not skip, patch, mock, replace, suppress, or wrap a validator so its diagnostics disappear. The actor may repair only the owned outputs in the table and rerun within the same still-fresh turn. It must never edit the process envelope, frozen PDF, governing inputs, staged rules, Stage-P packet after P freezes, a peer artifact, or an upstream artifact. If a failure is attributable to any such frozen input, the actor stops and reports failure to Stage O. Once the actor exits/freeze occurs, or once post-S validation fails, the retry is immutable and must be globally quarantined/restarted under `clean-room-orchestration.md`.
 
-Before a doctoral R5 freezes its report and owned ledgers or exits, run the scoped validator repeatedly against the exact current bundle root:
+For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P packet or any other frozen input. A packet/frozen-input diagnostic requires R5 to stop and report failure to Stage O; it is never repaired inside the R5 stage.
 
-```text
-python rules/scripts/validate_r5_output.py <exact-round-root>
-```
+The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. The Chair gate uses the full validator's explicit `--pre-stage-s` mode: `93`, `94`, and `95` are forbidden, and no diagnostic is waived by message matching. The Stage-S gate opens only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; it never opens the PDF, packet, `02`--`04`, helpers, prior artifacts, or `95`. All scoped commands are read-only and create no `95-bundle-validation.md`.
 
-R5 passes this gate only when the command exits `0` and its first nonempty stdout line is exactly `PASS`. Do not skip, patch, mock, replace, or suppress either `validate_r5_output.py` or its sibling `validate_review_bundle.py`. When the failure is confined to R5-owned output, correct only the current R5 report, `02`, `03`, authorized renders, or the declarations inside those R5-owned Markdown files and rerun until PASS. R5 must not edit the Stage-P packet, process envelope, frozen PDF, staged rules, or any other input. If the scoped validator identifies a packet or frozen-input defect, stop and report failure to Stage O; Stage O invalidates the dependent clean-room chain and performs the required clean Stage-P/downstream retry. The scoped command is read-only, does not create `95-bundle-validation.md`, does not require or open R1--R4/AI/Chair/Stage-S/Stage-V artifacts, and does not enumerate the bundle root to discover peer outputs. It is mechanical rule infrastructure only: validator output and source code are never thesis/citation evidence or a source of findings, and PASS never replaces manual semantic and visual sign-off.
+The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
 
-Run the validator after Stage S in an environment with `pypdf` and Pillow available (the bundled Codex workspace Python includes both; with `uv`, use `uv run --with pypdf --with pillow`):
+Validator scripts and stdout are mechanical rule infrastructure only. They are never thesis/citation evidence, never decide whether a proposition is supported, and never replace packet neutrality, reviewer semantic judgment, page-level visual inspection, or Chair adjudication.
+
+After Stage S has passed its scoped gate and frozen, Stage O runs the complete validator in an environment with `pypdf` and Pillow available (the bundled Codex workspace Python includes both; with `uv`, use `uv run --with pypdf --with pillow`):
 
 ```text
 python scripts/validate_review_bundle.py <round-directory> --write-report <round-directory>/95-bundle-validation.md

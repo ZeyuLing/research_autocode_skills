@@ -134,7 +134,14 @@ For Stage P, the canonical `opened=[...]` sequence is exactly: `00-process-param
 
 Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: exact `Actor ID`, `Review round ID`, and `Review retry ID`; fresh-context declaration using the exact no-inherited-turn wording above; one input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, the allowed `public_endpoints=[...]`, and the three boundary confirmations; the process-bound operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
 
-For doctoral R5, the canonical `opened=[...]` sequence has one fixed R5-only insertion: immediately after `ai-style-audit.md`, include `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py`, then continue with process-ordered governing local files, `<frozen_pdf_file>`, the seven Stage-P packet artifacts in canonical order, and any R5-recipient helper provenance/outputs. The same sequence appears byte-for-byte in `R5-comprehensive-review.md`, `02-page-layout-ledger.md`, and `03-bibliography-audit-ledger.md`. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. The scripts are mechanical rule inputs, not thesis evidence, and are absent from every other reviewer's receipt.
+For every R actor, immediately after `ai-style-audit.md`, insert exactly one role-specific validator sequence before process-ordered governing local files, `<frozen_pdf_file>`, the seven Stage-P packet artifacts, and any recipient helper provenance/outputs:
+
+- ordinary doctoral/master's reviewer: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_reviewer_output.py`;
+- doctoral R4: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_r4_output.py`;
+- doctoral R5: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py`;
+- master's R3: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_master_r3_output.py`.
+
+`validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete sequence appears byte-for-byte in every Markdown artifact signed by that reviewer. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, run the exact role command in `ledger-validation.md` to PASS; do not rename any H2, label, field, or table header in the closed reviewer template.
 
 ## Independent reviewer report
 
@@ -300,6 +307,8 @@ Under `institutional`, `Governing source` is a duplicate-free semicolon-separate
 
 ## Standalone AI-style assessment
 
+The canonical AI `opened=[...]` sequence is exactly: `00-process-parameters.json`; `SKILL.md`; `clean-room-orchestration.md`; `report-template.md`; `ai-style-audit.md`; `rules/scripts/validate_review_bundle.py`; `rules/scripts/validate_ai_output.py`; `<frozen_pdf_file>`; `00-manifest.md`; `00-page-inventory.csv`; and any AI-recipient helper provenance/outputs. It contains no R report, `02`--`04`, Chair, Stage-S, old-round, or governing-local-file input. Before freeze, run `python rules/scripts/validate_ai_output.py <exact-round-root>` to PASS.
+
 ```markdown
 # Standalone AI-style prose assessment
 
@@ -356,6 +365,8 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 
 ## Chair synthesis
 
+Before freeze, run `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. The command's explicit pre-Stage-S mode requires every current upstream/Chair artifact and forbids `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, process/rule input, or PDF returns control to Stage O for a global retry.
+
 ```markdown
 # Chair synthesis
 
@@ -364,7 +375,7 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 - Review round ID: <exact process round_id>
 - Review retry ID: <exact process retry_id>
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md (omit the governing-file placeholder when none exist; expand every actual filename and R row exactly, in order, with no ellipsis)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Chair input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded allowlist above in the same order]; public_endpoints=[a duplicate-free subset of current process-rule URLs and current 03/04 evidence/content endpoints, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
@@ -383,7 +394,7 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 | Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 
-Validate this table before substantive synthesis. A report with a missing gate row must be returned to the same isolated reviewer for completion before that reviewer sees any other report.
+Validate this table before substantive synthesis. Because every reviewer report is already frozen before Stage C starts, a missing gate row invalidates the current retry and returns control to Stage O for a new global retry; the Chair must not reopen or patch that reviewer artifact.
 
 Each Gate cell exactly copies that reviewer's frozen Gate disposition. `Whole-thesis rationale` is the literal status `complete`. `Audit duty complete` is `yes` only for the assigned owner (doctoral R4/R5, or master's R3) and `not assigned` for every other reviewer; it is not a generic quality score. `Eligible for adjudication` must be `yes` for every included reviewer.
 
@@ -497,7 +508,9 @@ The W/E/P table is the exact ledger-order projection of every open current `91-r
 
 ## Clean user-facing summary
 
-Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, or re-adjudicate evidence.
+Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
+
+Before freeze, run `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. This scoped command opens only the process/summary rules, full and Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. It never opens the PDF, Stage-P packet, `02`--`04`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
 
 The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
 
@@ -510,10 +523,10 @@ The validated Markdown dialect permits ATX headings with zero to three leading s
 - Review retry ID: <exact process retry_id>
 - Frozen PDF path and SHA-256: file=<frozen_pdf_file> ; sha256=<selected_pdf_sha256>
 - Summary fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md; 92-new-evidence-or-experiments.csv (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; report-template.md; rules/scripts/validate_review_bundle.py; rules/scripts/validate_summary_output.py; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 90-chair-synthesis.md; 91-revision-ledger.md; 91-revision-ledger.csv; 91-ai-actionable-ledger.csv; 92-new-evidence-or-experiments.md; 92-new-evidence-or-experiments.csv (write the expanded exact semicolon-separated basename set, with no ellipsis or extra file)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Summary input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded current-round input allowlist above in the same order]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
-- Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
+- Frozen PDF SHA-256 at start and end: <copy selected_pdf_sha256> / <copy selected_pdf_sha256> (Stage S does not open or hash the PDF; both identity projections remain on this one line)
 
 ## Independent and overall conclusions
 | Actor | Persona/status | Category or AI-style label | Exact defense recommendation | Decision regime/source | Confidence | Decisive current-round basis |
@@ -562,7 +575,7 @@ The H1 and nine H2 headings above are an exact closed sequence: no extra H2, pre
 
 Keep the AI-style actor row visibly separate from the reviewers and Chair; its defense recommendation and regime/source are `N/A`. The actor table is an exact projection, including its prose basis; Stage S writes no new rationale. Reviewer persona fields come only from the unique `Role, scope, and independence` section, reviewer verdict fields from the unique `Verdict` section, AI fields from the unique `Overall judgment` section, and Chair fields from the unique `Overall risk and recommendation` section. `Persona/status = Persona assignment + " — " + Persona emphasis` for reviewers, `standalone AI-style assessment` for AI, and `chair adjudication` for Chair. Category, recommendation, regime/source, confidence, and rationale copy their authoritative source fields byte-for-byte after trimming. The degree-specific persona-assignment values are the exact values listed earlier in this file. Any paraphrase, extra context, old-round statement, author explanation, or repository fact invalidates Stage S.
 
-The open academic and AI row sets are lossless, order-preserving projections: `93-current-actionable-items.csv` has exactly the same fifteen columns and values, in the same order, as the open subset of `91-revision-ledger.csv`; `93-current-ai-actionable-items.csv` has exactly the same seven columns and values, in the same order, as the open subset of `91-ai-actionable-ledger.csv`. Their Stage-S Markdown tables preserve the corresponding CSV order and exact fields. The current N-evidence table is the exact ordered projection of `92-new-evidence-or-experiments.csv`. The conclusion table order is `R1...Rn, AI, Chair`. `Unresolved questions` is the exact ordered subset of the current Chair decision table whose status is `unresolved`, `not verifiable`, or `disputed`. The `Statement` reconciliation value is exactly `This summary introduces no new finding and uses no prior-round or author-side information.` Every row and statement is current-round-only. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. If reconciliation fails, return the inconsistency to the clean Chair or regenerate Stage S; never improvise.
+The open academic and AI row sets are lossless, order-preserving projections: `93-current-actionable-items.csv` has exactly the same fifteen columns and values, in the same order, as the open subset of `91-revision-ledger.csv`; `93-current-ai-actionable-items.csv` has exactly the same seven columns and values, in the same order, as the open subset of `91-ai-actionable-ledger.csv`. Their Stage-S Markdown tables preserve the corresponding CSV order and exact fields. The current N-evidence table is the exact ordered projection of `92-new-evidence-or-experiments.csv`. The conclusion table order is `R1...Rn, AI, Chair`. `Unresolved questions` is the exact ordered subset of the current Chair decision table whose status is `unresolved`, `not verifiable`, or `disputed`. The `Statement` reconciliation value is exactly `This summary introduces no new finding and uses no prior-round or author-side information.` Every row and statement is current-round-only. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. Before S freezes, a failure confined to an S-owned projection is corrected only in the three `93` outputs and the scoped gate is rerun. An inconsistency in a frozen R/AI/Chair/`91`/`92` source, or any failure discovered after S freezes, invalidates the whole retry and returns control to Stage O for a new global retry; never reopen the Chair or improvise a mixed lineage.
 
 ## Fresh re-review and optional prior-issue closure
 

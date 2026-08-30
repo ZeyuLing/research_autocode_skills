@@ -29,6 +29,11 @@ from typing import Any, Iterable
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
 PUBLIC_URL_RE = re.compile(r"https?://[^\s;,\[\]`\"]+", re.IGNORECASE)
+ACCESS_ENDPOINT_MARKER_RE = re.compile(
+    r"(?i)(?:^|[;\n])\s*accessed endpoint\s*:\s*"
+    r"(https?://[^\s;,\[\]`\"<>]+)"
+    r"(?=[ \t]*(?:;|\n|$))"
+)
 BIB_MISMATCH_EXEMPTION_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"none|clean|n[./]?a|"
@@ -51,6 +56,82 @@ SOURCE_LOCATOR_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+
+
+def citation_ledger_public_endpoints(
+    citation_ledger: Iterable[dict[str, Any]],
+) -> set[str]:
+    """Return endpoints explicitly recorded as opened in canonical ``04`` fields.
+
+    ``ContentSourceOpened`` stores the one source endpoint used for the support
+    verdict.  Redirects, failed official routes, and fallback attempts are
+    access evidence only when ``DispositionEvidence`` labels each one with the
+    closed marker ``accessed endpoint: <URL>``.  URLs in propositions or
+    ``PublicIdentifier`` identify text or a work; they do not prove access.
+    The Markdown receipt is never scanned, so it cannot authorize itself.
+    """
+
+    endpoints: set[str] = set()
+    for row in citation_ledger:
+        content = row.get("ContentSourceOpened", "")
+        if isinstance(content, str):
+            content = content.strip()
+            if content and PUBLIC_URL_RE.fullmatch(content):
+                endpoints.add(content)
+        disposition = row.get("DispositionEvidence", "")
+        if isinstance(disposition, str):
+            endpoints.update(
+                match.group(1)
+                for match in ACCESS_ENDPOINT_MARKER_RE.finditer(disposition)
+            )
+    return endpoints
+
+
+def validate_citation_endpoint_records(
+    citation_ledger: Iterable[dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Validate the closed source/auxiliary endpoint recording grammar."""
+
+    for line, row in enumerate(citation_ledger, start=2):
+        content = row.get("ContentSourceOpened", "")
+        if isinstance(content, str):
+            content = content.strip()
+        else:
+            content = ""
+        if content and PUBLIC_URL_RE.fullmatch(content) is None:
+            errors.append(
+                f"{filename}:{line}: ContentSourceOpened must be exactly one "
+                "complete http(s) endpoint"
+            )
+        disposition = row.get("DispositionEvidence", "")
+        if not isinstance(disposition, str):
+            continue
+        marked = [
+            match.group(1)
+            for match in ACCESS_ENDPOINT_MARKER_RE.finditer(disposition)
+        ]
+        marker_count = len(
+            re.findall(r"(?i)accessed\s+endpoint\s*:", disposition)
+        )
+        if marker_count != len(marked):
+            errors.append(
+                f"{filename}:{line}: every 'accessed endpoint:' marker must "
+                "contain one complete http(s) URL and be delimited by the "
+                "start of the field, a semicolon, or a newline"
+            )
+        disposition_urls = {
+            match.group(0) for match in PUBLIC_URL_RE.finditer(disposition)
+        }
+        unmarked = sorted(disposition_urls - set(marked))
+        if unmarked:
+            errors.append(
+                f"{filename}:{line}: DispositionEvidence URL(s) must use the "
+                f"closed 'accessed endpoint: <URL>' marker; unmarked={unmarked}"
+            )
+
+
 PAGE_ID_RE = re.compile(r"^P(\d{4})$")
 REFERENCE_ID_RE = re.compile(r"^REF(\d{4})$")
 OCCURRENCE_ID_RE = re.compile(r"^C(\d{4})$")
@@ -292,6 +373,32 @@ R5_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
     "rules/scripts/validate_r5_output.py",
 ]
+ORDINARY_REVIEWER_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_reviewer_output.py",
+]
+R4_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_r5_output.py",
+    "rules/scripts/validate_r4_output.py",
+]
+MASTER_R3_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_r5_output.py",
+    "rules/scripts/validate_master_r3_output.py",
+]
+AI_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_ai_output.py",
+]
+CHAIR_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_chair_output.py",
+]
+SUMMARY_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_summary_output.py",
+]
 P_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
     "rules/scripts/validate_stage_p_output.py",
@@ -459,7 +566,14 @@ def preflight_reparse_boundary(root: Path, errors: list[str]) -> bool:
 RESERVED_ROUND_BASENAMES = {
     "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
     *(Path(value).name for value in (
-        *P_VALIDATOR_RULE_INPUTS, *R5_VALIDATOR_RULE_INPUTS,
+        *P_VALIDATOR_RULE_INPUTS,
+        *ORDINARY_REVIEWER_VALIDATOR_RULE_INPUTS,
+        *R4_VALIDATOR_RULE_INPUTS,
+        *MASTER_R3_VALIDATOR_RULE_INPUTS,
+        *R5_VALIDATOR_RULE_INPUTS,
+        *AI_VALIDATOR_RULE_INPUTS,
+        *CHAIR_VALIDATOR_RULE_INPUTS,
+        *SUMMARY_VALIDATOR_RULE_INPUTS,
     )),
     "00-manifest.md", "00-page-inventory.csv",
     "00-bibliography-inventory.csv", "00-citation-candidate-ledger.csv",
@@ -1677,15 +1791,23 @@ def canonical_stage_opened_inputs(
         if isinstance(item, dict) and item.get("neutral_file")
     ]
     frozen = str(process.get("frozen_pdf_file", ""))
-    r5_validator_rules = (
-        R5_VALIDATOR_RULE_INPUTS
-        if process.get("degree_level") == "doctorate" and actor_id == "R5"
-        else []
-    )
+    degree_level = process.get("degree_level")
+    reviewer_validator_rules: list[str] = []
+    if re.fullmatch(r"R\d+", actor_id):
+        if degree_level == "masters" and actor_id == "R3":
+            reviewer_validator_rules = MASTER_R3_VALIDATOR_RULE_INPUTS
+        elif degree_level == "doctorate" and actor_id == "R4":
+            reviewer_validator_rules = R4_VALIDATOR_RULE_INPUTS
+        elif degree_level == "doctorate" and actor_id == "R5":
+            reviewer_validator_rules = R5_VALIDATOR_RULE_INPUTS
+        else:
+            reviewer_validator_rules = ORDINARY_REVIEWER_VALIDATOR_RULE_INPUTS
     p_validator_rules = P_VALIDATOR_RULE_INPUTS if actor_id == "P" else []
+    chair_validator_rules = CHAIR_VALIDATOR_RULE_INPUTS if actor_id == "C" else []
     base_rules = [
         "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
-        *p_validator_rules, *r5_validator_rules, *governing, frozen,
+        *p_validator_rules, *reviewer_validator_rules,
+        *chair_validator_rules, *governing, frozen,
     ]
     packet = [
         "00-manifest.md", "01-policy-basis.md", "00-page-inventory.csv",
@@ -1696,14 +1818,20 @@ def canonical_stage_opened_inputs(
         # Stage P is the packet builder and has no upstream helper inputs.  Its
         # scoped validator must not probe or enumerate the helpers directory.
         return base_rules
-    helper_inputs = helper_inputs_for_recipient(root, actor_id)
+    # Stage S is never a helper recipient: it receives only the frozen
+    # current-round summary sources.  Avoid even probing ``helpers/`` while
+    # deriving its receipt.
+    helper_inputs = (
+        [] if actor_id == "S" else helper_inputs_for_recipient(root, actor_id)
+    )
     if re.fullmatch(r"R\d+", actor_id):
         return [*base_rules, *packet, *helper_inputs]
     if actor_id == "AI":
         return [
             "00-process-parameters.json", "SKILL.md",
             "clean-room-orchestration.md", "report-template.md",
-            "ai-style-audit.md", frozen, "00-manifest.md",
+            "ai-style-audit.md", *AI_VALIDATOR_RULE_INPUTS,
+            frozen, "00-manifest.md",
             "00-page-inventory.csv", *helper_inputs,
         ]
     if actor_id == "C":
@@ -1721,6 +1849,7 @@ def canonical_stage_opened_inputs(
         return [
             "00-process-parameters.json", "SKILL.md",
             "clean-room-orchestration.md", "report-template.md",
+            *SUMMARY_VALIDATOR_RULE_INPUTS,
             *(f"R{index}-comprehensive-review.md" for index in range(1, reviewer_count + 1)),
             "05-ai-style-assessment.md", "90-chair-synthesis.md",
             "91-revision-ledger.md", "91-revision-ledger.csv",
@@ -2867,9 +2996,15 @@ def validate_chair_report(
     errors: list[str],
 ) -> None:
     allowed_chair_public = {
-        *(value for value in process.get("governing_rule_urls", []) if isinstance(value, str)),
-        *(row.get("EvidenceEndpoint", "") for row in bibliography_ledger if row.get("EvidenceEndpoint")),
-        *(row.get("ContentSourceOpened", "") for row in citation_ledger if row.get("ContentSourceOpened")),
+        *(
+            value for value in process.get("governing_rule_urls", [])
+            if isinstance(value, str)
+        ),
+        *(
+            row.get("EvidenceEndpoint", "") for row in bibliography_ledger
+            if row.get("EvidenceEndpoint")
+        ),
+        *citation_ledger_public_endpoints(citation_ledger),
     }
     text = validate_declarations(
         path, expected_pdf_hash, errors,
@@ -2969,10 +3104,7 @@ def validate_chair_report(
             row.get("EvidenceEndpoint", "").strip()
             for row in bibliography_ledger if row.get("EvidenceEndpoint", "").strip()
         ),
-        *(
-            row.get("ContentSourceOpened", "").strip()
-            for row in citation_ledger if row.get("ContentSourceOpened", "").strip()
-        ),
+        *citation_ledger_public_endpoints(citation_ledger),
     }
     if len(declared_public) != len(set(declared_public)) or any(
         value not in allowed_public for value in declared_public
@@ -5882,6 +6014,8 @@ def validate_process(
     errors: list[str],
     *,
     enforce_single_reviewer_pdf: bool = True,
+    validate_governing_file_bytes: bool = True,
+    validate_frozen_pdf_bytes: bool = True,
     stage_v_present_override: bool | None = None,
     process_override: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
@@ -5996,10 +6130,16 @@ def validate_process(
             seen_local_files.add(filename_key)
             rule_path = root / filename
             declared = str(item.get("sha256") or "").upper()
-            if not rule_path.is_file():
-                errors.append(f"missing neutral governing file: {filename}")
-            elif not HEX64_RE.fullmatch(declared) or sha256(rule_path) != declared:
-                errors.append(f"neutral governing file hash mismatch: {filename}")
+            if validate_governing_file_bytes:
+                if not rule_path.is_file():
+                    errors.append(f"missing neutral governing file: {filename}")
+                elif not HEX64_RE.fullmatch(declared) or sha256(rule_path) != declared:
+                    errors.append(f"neutral governing file hash mismatch: {filename}")
+            elif not HEX64_RE.fullmatch(declared):
+                errors.append(
+                    f"governing_local_files[{index}].sha256 must be 64 "
+                    "hexadecimal characters"
+                )
             title = item.get("official_title")
             if not isinstance(title, str) or not title.strip():
                 errors.append(f"governing_local_files[{index}].official_title is blank")
@@ -6074,14 +6214,15 @@ def validate_process(
     expected_hash = str(process.get("selected_pdf_sha256") or "").upper()
     if not HEX64_RE.fullmatch(expected_hash):
         errors.append("selected_pdf_sha256 must be 64 hexadecimal characters")
-    if not frozen_path.is_file():
-        errors.append(f"missing frozen PDF: {frozen_name or '<unspecified>'}")
-    elif HEX64_RE.fullmatch(expected_hash):
-        actual = sha256(frozen_path)
-        if actual != expected_hash:
-            errors.append(
-                f"frozen PDF hash mismatch: expected {expected_hash}, got {actual}"
-            )
+    if validate_frozen_pdf_bytes:
+        if not frozen_path.is_file():
+            errors.append(f"missing frozen PDF: {frozen_name or '<unspecified>'}")
+        elif HEX64_RE.fullmatch(expected_hash):
+            actual = sha256(frozen_path)
+            if actual != expected_hash:
+                errors.append(
+                    f"frozen PDF hash mismatch: expected {expected_hash}, got {actual}"
+                )
     page_count_raw = process.get("physical_page_count")
     if (
         not isinstance(page_count_raw, int)
@@ -6092,11 +6233,11 @@ def validate_process(
         page_count = 0
     else:
         page_count = page_count_raw
-    pdf_page_sizes = (
-        validate_pdf_structure_and_pages(frozen_path, page_count, errors)
-        if frozen_path.is_file()
-        else []
-    )
+    pdf_page_sizes = []
+    if validate_frozen_pdf_bytes and frozen_path.is_file():
+        pdf_page_sizes = validate_pdf_structure_and_pages(
+            frozen_path, page_count, errors
+        )
     degree_value = process.get("degree_level")
     degree = degree_value if isinstance(degree_value, str) else ""
     if degree not in {"doctorate", "masters"}:
@@ -6330,7 +6471,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("round_directory", type=Path)
     parser.add_argument("--write-report", type=Path)
+    parser.add_argument(
+        "--pre-stage-s",
+        action="store_true",
+        help=(
+            "validate the frozen Stage-C bundle before Stage S exists; the "
+            "three Stage-S outputs are forbidden and only their validations "
+            "are omitted"
+        ),
+    )
     args = parser.parse_args(argv)
+    if args.pre_stage_s and args.write_report is not None:
+        parser.error("--write-report is forbidden with --pre-stage-s")
     root = args.round_directory.absolute()
     errors: list[str] = []
     warnings: list[str] = []
@@ -6384,9 +6536,12 @@ def main(argv: list[str] | None = None) -> int:
         "91-revision-ledger.md", "91-revision-ledger.csv",
         "91-ai-actionable-ledger.csv", "92-new-evidence-or-experiments.md",
         "92-new-evidence-or-experiments.csv",
-        "93-user-facing-summary.md", "93-current-actionable-items.csv",
-        "93-current-ai-actionable-items.csv",
     }
+    if not args.pre_stage_s:
+        required_files.update({
+            "93-user-facing-summary.md", "93-current-actionable-items.csv",
+            "93-current-ai-actionable-items.csv",
+        })
     required_files.update(
         f"R{i}-comprehensive-review.md" for i in range(1, reviewer_count + 1)
     )
@@ -6401,12 +6556,14 @@ def main(argv: list[str] | None = None) -> int:
     optional_stage_v = "94-post-freeze-prior-issue-closure.md"
     allowed_root_files = {
         "00-process-parameters.json", str(process.get("frozen_pdf_file", "")),
-        "95-bundle-validation.md", *required_files, *governing_root_files,
+        *required_files, *governing_root_files,
     }
-    if (root / optional_stage_v).is_file():
+    if not args.pre_stage_s:
+        allowed_root_files.add("95-bundle-validation.md")
+    if not args.pre_stage_s and (root / optional_stage_v).is_file():
         allowed_root_files.add(optional_stage_v)
     allowed_root_directories = {"page-renders", "helpers"}
-    if (root / optional_stage_v).is_file():
+    if not args.pre_stage_s and (root / optional_stage_v).is_file():
         allowed_root_directories.add("stage-v-inputs")
     unexpected_root_files: list[str] = []
     unexpected_root_directories: list[str] = []
@@ -7104,6 +7261,9 @@ def main(argv: list[str] | None = None) -> int:
         CITATION_LEDGER_COLUMNS, errors,
         blank_allowed={"ContentSourceOpened", "ExactSourceLocator"},
     )
+    validate_citation_endpoint_records(
+        citation_ledger, "04-citation-claim-audit-ledger.csv", errors
+    )
     validate_pdf_hash(
         citation_inventory, "00-citation-inventory.csv", expected_hash, errors
     )
@@ -7513,15 +7673,6 @@ def main(argv: list[str] | None = None) -> int:
         finding_id: row for finding_id, row in ai_by_id.items()
         if row["Status"].casefold() not in CLOSED_STATUSES
     }
-    academic_summary = read_csv(
-        root / "93-current-actionable-items.csv",
-        ACADEMIC_SUMMARY_COLUMNS, errors,
-        require_rows=bool(open_academic),
-    )
-    ai_summary = read_csv(
-        root / "93-current-ai-actionable-items.csv",
-        AI_SUMMARY_COLUMNS, errors, require_rows=bool(open_ai),
-    )
     evidence_items = read_csv(
         root / "92-new-evidence-or-experiments.csv",
         EVIDENCE_ITEM_COLUMNS,
@@ -7532,46 +7683,12 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     validate_rows_mandatory(
-        academic_summary, "93-current-actionable-items.csv",
-        ACADEMIC_SUMMARY_COLUMNS, errors,
-    )
-    validate_rows_mandatory(
-        ai_summary, "93-current-ai-actionable-items.csv",
-        AI_SUMMARY_COLUMNS, errors,
-    )
-    validate_rows_mandatory(
         evidence_items, "92-new-evidence-or-experiments.csv",
         EVIDENCE_ITEM_COLUMNS, errors,
-    )
-    academic_summary_by_id = index_unique(
-        academic_summary, "LedgerID",
-        "93-current-actionable-items.csv", errors,
-    )
-    ai_summary_by_id = index_unique(
-        ai_summary, "AIFindingID",
-        "93-current-ai-actionable-items.csv", errors,
     )
     evidence_by_id = index_unique(
         evidence_items, "EvidenceItemID",
         "92-new-evidence-or-experiments.csv", errors,
-    )
-    if [row.get("LedgerID", "") for row in academic_summary] != list(open_academic):
-        errors.append(
-            "93-current-actionable-items.csv: row order must exactly follow the "
-            "open 91-revision-ledger.csv row order"
-        )
-    if [row.get("AIFindingID", "") for row in ai_summary] != list(open_ai):
-        errors.append(
-            "93-current-ai-actionable-items.csv: row order must exactly follow the "
-            "open 91-ai-actionable-ledger.csv row order"
-        )
-    compare_sets(
-        "current academic summary", set(open_academic),
-        set(academic_summary_by_id), errors,
-    )
-    compare_sets(
-        "current AI-actionable summary", set(open_ai),
-        set(ai_summary_by_id), errors,
     )
     evidence_numbers = [
         int(match.group(1))
@@ -7634,79 +7751,121 @@ def main(argv: list[str] | None = None) -> int:
             "92-new-evidence-or-experiments.csv: LedgerID row order must exactly "
             "follow open Remedy=N rows in 91-revision-ledger.csv"
         )
-    for ledger_id in sorted(
-        set(open_academic) & set(academic_summary_by_id)
-    ):
-        ledger = open_academic[ledger_id]
-        summary = academic_summary_by_id[ledger_id]
-        for field in ACADEMIC_SUMMARY_COLUMNS:
-            if summary[field] != ledger[field]:
-                errors.append(
-                    f"academic 91->93 mismatch for {ledger_id}/{field}: "
-                    f"expected {ledger[field]!r}, got {summary[field]!r}"
-                )
-    for finding_id in sorted(set(open_ai) & set(ai_summary_by_id)):
-        ledger = open_ai[finding_id]
-        summary = ai_summary_by_id[finding_id]
-        for field in AI_SUMMARY_COLUMNS:
-            if summary[field] != ledger[field]:
-                errors.append(
-                    f"AI 91->93 mismatch for {finding_id}/{field}: "
-                    f"expected {ledger[field]!r}, got {summary[field]!r}"
-                )
-    validate_markdown_id_projection(
-        root / "93-user-facing-summary.md",
-        set(open_academic),
-        re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])"),
-        {"Ledger ID", "LedgerID"},
-        "Stage-S current academic summary",
-        errors,
-        required_headers={
-            "Ledger ID", "Priority", "Chair finding ID",
-            "Source reviewer finding IDs", "Severity", "S0 subtype",
-            "Remedy", "Exact PDF anchor", "Direct PDF-visible observation",
-            "Evidence status", "Minimum required action", "Dependency",
-            "Owner", "Chair disposition", "Verification",
-        },
-        section_heading="Current actionable items",
-    )
-    validate_markdown_id_projection(
-        root / "93-user-facing-summary.md",
-        set(open_ai),
-        re.compile(r"(?<![A-Za-z0-9])AI-F\d{2,4}(?![A-Za-z0-9])"),
-        {"AI finding ID", "AIFindingID"},
-        "Stage-S current AI summary",
-        errors,
-        required_headers={
-            "AI finding ID", "Impact (`material` / `local`)",
-            "Exact PDF anchor", "Direct style observation",
-            "Minimum editing action", "Chair status", "Verification",
-        },
-        section_heading=(
-            "Current AI-style actionable items — separate from academic grading"
-        ),
-    )
-    validate_markdown_id_projection(
-        root / "93-user-facing-summary.md",
-        set(evidence_by_id),
-        re.compile(r"(?<![A-Za-z0-9])N\d{2,4}(?![A-Za-z0-9])"),
-        {"Evidence item ID", "EvidenceItemID"},
-        "Stage-S current N-evidence summary",
-        errors,
-        required_headers={
-            "Evidence item ID", "Ledger ID", "Chair finding ID", "Remedy",
-            "Item", "Claim that depends on it", "Why writing is insufficient",
-            "Minimum viable evidence", "Consequence if unavailable",
-        },
-        section_heading="Current new evidence or experiments (N)",
-    )
-    validate_summary_markdown_values(
-        root / "93-user-facing-summary.md",
-        academic_summary_by_id,
-        ai_summary_by_id,
-        evidence_by_id,
-        errors,
-    )
+    if not args.pre_stage_s:
+        academic_summary = read_csv(
+            root / "93-current-actionable-items.csv",
+            ACADEMIC_SUMMARY_COLUMNS, errors,
+            require_rows=bool(open_academic),
+        )
+        ai_summary = read_csv(
+            root / "93-current-ai-actionable-items.csv",
+            AI_SUMMARY_COLUMNS, errors, require_rows=bool(open_ai),
+        )
+        validate_rows_mandatory(
+            academic_summary, "93-current-actionable-items.csv",
+            ACADEMIC_SUMMARY_COLUMNS, errors,
+        )
+        validate_rows_mandatory(
+            ai_summary, "93-current-ai-actionable-items.csv",
+            AI_SUMMARY_COLUMNS, errors,
+        )
+        academic_summary_by_id = index_unique(
+            academic_summary, "LedgerID",
+            "93-current-actionable-items.csv", errors,
+        )
+        ai_summary_by_id = index_unique(
+            ai_summary, "AIFindingID",
+            "93-current-ai-actionable-items.csv", errors,
+        )
+        if [row.get("LedgerID", "") for row in academic_summary] != list(open_academic):
+            errors.append(
+                "93-current-actionable-items.csv: row order must exactly follow the "
+                "open 91-revision-ledger.csv row order"
+            )
+        if [row.get("AIFindingID", "") for row in ai_summary] != list(open_ai):
+            errors.append(
+                "93-current-ai-actionable-items.csv: row order must exactly follow the "
+                "open 91-ai-actionable-ledger.csv row order"
+            )
+        compare_sets(
+            "current academic summary", set(open_academic),
+            set(academic_summary_by_id), errors,
+        )
+        compare_sets(
+            "current AI-actionable summary", set(open_ai),
+            set(ai_summary_by_id), errors,
+        )
+        for ledger_id in sorted(set(open_academic) & set(academic_summary_by_id)):
+            ledger = open_academic[ledger_id]
+            summary = academic_summary_by_id[ledger_id]
+            for field in ACADEMIC_SUMMARY_COLUMNS:
+                if summary[field] != ledger[field]:
+                    errors.append(
+                        f"academic 91->93 mismatch for {ledger_id}/{field}: "
+                        f"expected {ledger[field]!r}, got {summary[field]!r}"
+                    )
+        for finding_id in sorted(set(open_ai) & set(ai_summary_by_id)):
+            ledger = open_ai[finding_id]
+            summary = ai_summary_by_id[finding_id]
+            for field in AI_SUMMARY_COLUMNS:
+                if summary[field] != ledger[field]:
+                    errors.append(
+                        f"AI 91->93 mismatch for {finding_id}/{field}: "
+                        f"expected {ledger[field]!r}, got {summary[field]!r}"
+                    )
+        validate_markdown_id_projection(
+            root / "93-user-facing-summary.md",
+            set(open_academic),
+            re.compile(r"(?<![A-Za-z0-9])L\d{2,4}(?![A-Za-z0-9])"),
+            {"Ledger ID", "LedgerID"},
+            "Stage-S current academic summary",
+            errors,
+            required_headers={
+                "Ledger ID", "Priority", "Chair finding ID",
+                "Source reviewer finding IDs", "Severity", "S0 subtype",
+                "Remedy", "Exact PDF anchor", "Direct PDF-visible observation",
+                "Evidence status", "Minimum required action", "Dependency",
+                "Owner", "Chair disposition", "Verification",
+            },
+            section_heading="Current actionable items",
+        )
+        validate_markdown_id_projection(
+            root / "93-user-facing-summary.md",
+            set(open_ai),
+            re.compile(r"(?<![A-Za-z0-9])AI-F\d{2,4}(?![A-Za-z0-9])"),
+            {"AI finding ID", "AIFindingID"},
+            "Stage-S current AI summary",
+            errors,
+            required_headers={
+                "AI finding ID", "Impact (`material` / `local`)",
+                "Exact PDF anchor", "Direct style observation",
+                "Minimum editing action", "Chair status", "Verification",
+            },
+            section_heading=(
+                "Current AI-style actionable items — separate from academic grading"
+            ),
+        )
+        validate_markdown_id_projection(
+            root / "93-user-facing-summary.md",
+            set(evidence_by_id),
+            re.compile(r"(?<![A-Za-z0-9])N\d{2,4}(?![A-Za-z0-9])"),
+            {"Evidence item ID", "EvidenceItemID"},
+            "Stage-S current N-evidence summary",
+            errors,
+            required_headers={
+                "Evidence item ID", "Ledger ID", "Chair finding ID", "Remedy",
+                "Item", "Claim that depends on it", "Why writing is insufficient",
+                "Minimum viable evidence", "Consequence if unavailable",
+            },
+            section_heading="Current new evidence or experiments (N)",
+        )
+        validate_summary_markdown_values(
+            root / "93-user-facing-summary.md",
+            academic_summary_by_id,
+            ai_summary_by_id,
+            evidence_by_id,
+            errors,
+        )
 
     evidence_path = root / "92-new-evidence-or-experiments.md"
     if evidence_path.is_file():
@@ -7775,10 +7934,9 @@ def main(argv: list[str] | None = None) -> int:
             row.get("EvidenceEndpoint", "") for row in bib_ledger
             if row.get("EvidenceEndpoint", "")
         }
-        citation_public_endpoints = {
-            row.get("ContentSourceOpened", "") for row in citation_ledger
-            if row.get("ContentSourceOpened", "")
-        }
+        citation_public_endpoints = citation_ledger_public_endpoints(
+            citation_ledger
+        )
         page_bib_owner = "R5" if process.get("degree_level") == "doctorate" else "R3"
         citation_owner = "R4" if process.get("degree_level") == "doctorate" else "R3"
         owner_expected_vectors = build_owner_expected_vectors(
@@ -8120,32 +8278,33 @@ def main(argv: list[str] | None = None) -> int:
                         "inconsistent with the open adjudicated severity/remedy profile; "
                         f"expected {required_grade}"
                     )
-        validate_summary_report(
-            root / "93-user-facing-summary.md", expected_hash,
-            process, reviewer_count, len(open_academic), len(open_ai),
-            len(evidence_by_id), errors,
-        )
-        validate_stage_v(
-            root / "94-post-freeze-prior-issue-closure.md",
-            expected_hash,
-            process,
-            reviewer_count,
-            (
-                current_reviewer_finding_ids
-                | {row.get("ChairFindingID", "") for row in academic_ledger}
-                | set(ai_by_id)
-            ) - {""},
-            current_reviewer_findings,
-            page_inventory,
-            page_ledger,
-            bib_inventory,
-            bib_ledger,
-            citation_inventory,
-            citation_ledger,
-            academic_ledger,
-            ai_ledger,
-            errors,
-        )
+        if not args.pre_stage_s:
+            validate_summary_report(
+                root / "93-user-facing-summary.md", expected_hash,
+                process, reviewer_count, len(open_academic), len(open_ai),
+                len(evidence_by_id), errors,
+            )
+            validate_stage_v(
+                root / "94-post-freeze-prior-issue-closure.md",
+                expected_hash,
+                process,
+                reviewer_count,
+                (
+                    current_reviewer_finding_ids
+                    | {row.get("ChairFindingID", "") for row in academic_ledger}
+                    | set(ai_by_id)
+                ) - {""},
+                current_reviewer_findings,
+                page_inventory,
+                page_ledger,
+                bib_inventory,
+                bib_ledger,
+                citation_inventory,
+                citation_ledger,
+                academic_ledger,
+                ai_ledger,
+                errors,
+            )
         validate_helper_bundle(
             root, expected_hash, process, reviewer_count, errors
         )

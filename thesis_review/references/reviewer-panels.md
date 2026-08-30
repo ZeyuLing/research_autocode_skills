@@ -17,6 +17,8 @@ All reviewers receive the same frozen **PDF-only reviewer-visible** evidence pac
 
 Use separate output files and private scratch directories. If reviewers share a filesystem, give each reviewer exact input paths; it must not enumerate the parent round, neighboring rounds, repository root, or unrelated workspace paths. Every reviewer must include a fresh-context and input-receipt/access declaration covering the prompt hash, all received blocks, opened artifacts, and public endpoints. Access to any prohibited context or artifact invalidates the round and requires the recovery defined in `clean-room-orchestration.md`; relabeling it as author-side evidence does not cure the violation. Batch execution is acceptable; evidence leakage is not.
 
+Before freezing or exiting, every reviewer runs the exact role-scoped gate in `ledger-validation.md`: ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware gates; master's R3 uses the combined owner gate. The actor may correct only its own current report and assigned ledgers/renders before freeze. A failure attributable to the packet, process envelope, PDF, governing rules, staged validators, or another actor's artifact stops the actor and triggers Stage O's global retry; no reviewer may patch an upstream or peer artifact. A mechanical `PASS` is mandatory but never substitutes for the whole-thesis semantic and visual judgment.
+
 Do not infer an unreported run count from result formatting. If one row reports `mean ± dispersion` and another reports a point estimate, state only what each row visibly reports. Unless the PDF explicitly gives the repeat count, the latter is `not stated in the PDF`, not single-run or single-seed.
 
 Each reviewer reads the whole thesis. The persona changes priority, depth, skepticism, and professional viewpoint; it never narrows the reviewer to one topic.
@@ -71,7 +73,7 @@ Ledger ownership creates no extra vote, veto, severity privilege, or exclusive a
 
 Run one additional isolated prose-style assessment for both doctoral and master's theses. This assessor is not R6, is not included in the reviewer count, does not issue an academic or defense category, and does not infer AI use or authorship. Follow `ai-style-audit.md` and write only `05-ai-style-assessment.md`.
 
-Before freezing the report, launch the assessor in another fresh context. It may read only the frozen PDF, PDF-derived reviewer-visible manifest/policy, and mechanical statistics derived from extracted PDF text. It must not read conversation history, user explanations, the thesis source, R1--R5/R1--R3 reports or ledgers, the chair synthesis, old review rounds, author responses, or author-side materials. It reports `low`, `moderate`, `high`, or `indeterminate` AI-style signal with evidence and counter-evidence.
+Before freezing the report, launch the assessor in another fresh context. It may read only the neutral process envelope, the frozen PDF, the exact clean-room/report/AI rule files and full/AI-scoped validators, `00-manifest.md`, `00-page-inventory.csv`, and any registered AI-recipient helper sidecars containing mechanical PDF-text statistics. It must not read `01-policy-basis.md`, governing local files, conversation history, user explanations, the thesis source, R1--R5/R1--R3 reports or ledgers, the chair synthesis, old review rounds, author responses, or author-side materials. It reports `low`, `moderate`, `high`, or `indeterminate` AI-style signal with evidence and counter-evidence, then runs `python rules/scripts/validate_ai_output.py <exact-round-root>` to PASS before freeze. The AI gate may correct only `05-ai-style-assessment.md`; an upstream defect triggers Stage O's global retry.
 
 ## Doctoral panel: five reviewers
 
@@ -229,5 +231,7 @@ The chair is not a sixth reviewer. Launch it as a new clean actor with no inheri
 - reports the standalone AI-style judgment separately and never converts it into an authorship or misconduct conclusion.
 
 If the chair needs evidence beyond the frozen PDF and permitted public citation sources, the blind-review round cannot resolve that question. Record it as `not verifiable from the submitted PDF`. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
+
+Before freezing or exiting, the Chair runs `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Its pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
 
 After the chair freezes its outputs, run the separate clean Stage-S synthesis in `clean-room-orchestration.md`. The chair does not write free-form user commentary, and the conversation-aware orchestrator does not reconstruct or supplement the issue table.

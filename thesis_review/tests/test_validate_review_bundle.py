@@ -1658,10 +1658,24 @@ class ValidateReviewBundleTests(unittest.TestCase):
     def convert_bundle_to_doctorate(self, root: Path) -> None:
         process_path = root / "00-process-parameters.json"
         process = json.loads(process_path.read_text(encoding="utf-8"))
+        masters_r1_opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "R1")
+        )
+        masters_r3_opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "R3")
+        )
         process["degree_level"] = "doctorate"
         process["actor_prompt_sha256"]["R4"] = ACTOR_PROMPT_HASHES["R4"]
         process["actor_prompt_sha256"]["R5"] = ACTOR_PROMPT_HASHES["R5"]
         process_path.write_text(json.dumps(process), encoding="utf-8")
+        doctoral_opened = {
+            actor_id: "; ".join(
+                VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                    process, 5, actor_id
+                )
+            )
+            for actor_id in ("R3", "R4", "R5")
+        }
         process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
         manifest = root / "00-manifest.md"
         manifest_text = manifest.read_text(encoding="utf-8")
@@ -1726,6 +1740,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
         ).replace(
             f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
             "public_endpoints=[none]",
+        ).replace(
+            f"opened=[{masters_r3_opened}]",
+            f"opened=[{doctoral_opened['R3']}]",
         )
         r3.write_text(r3_text, encoding="utf-8")
 
@@ -1758,6 +1775,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             .replace("public_endpoints=[none]", f"public_endpoints=[{CITATION_ENDPOINT}]")
             .replace(r1_assignment, r4_assignment)
             .replace(r1_emphasis, r4_emphasis)
+            .replace(
+                f"opened=[{masters_r1_opened}]",
+                f"opened=[{doctoral_opened['R4']}]",
+            )
             + "\n\n"
             + (citation_section.group(0).strip() if citation_section else "")
             + "\n"
@@ -1770,20 +1791,15 @@ class ValidateReviewBundleTests(unittest.TestCase):
             .replace("public_endpoints=[none]", f"public_endpoints=[{BIB_ENDPOINT}]")
             .replace(r1_assignment, r5_assignment)
             .replace(r1_emphasis, r5_emphasis)
+            .replace(
+                f"opened=[{masters_r1_opened}]",
+                f"opened=[{doctoral_opened['R5']}]",
+            )
             + "\n\n"
             + (page_section.group(0).strip() if page_section else "")
             + "\n\n"
             + (bib_section.group(0).strip() if bib_section else "")
             + "\n"
-        )
-        r5_opened = "; ".join(
-            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 5, "R5")
-        )
-        non_r5_opened = "; ".join(
-            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 5, "R1")
-        )
-        r5_text = r5_text.replace(
-            f"opened=[{non_r5_opened}]", f"opened=[{r5_opened}]"
         )
         (root / "R4-comprehensive-review.md").write_text(r4_text, encoding="utf-8")
         (root / "R5-comprehensive-review.md").write_text(r5_text, encoding="utf-8")
@@ -1801,11 +1817,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ACTOR_PROMPT_HASHES[old_actor],
                 ACTOR_PROMPT_HASHES[new_actor],
                 1,
+            ).replace(
+                f"opened=[{masters_r3_opened}]",
+                f"opened=[{doctoral_opened[new_actor]}]",
             )
-            if new_actor == "R5":
-                text = text.replace(
-                    f"opened=[{non_r5_opened}]", f"opened=[{r5_opened}]"
-                )
             path.write_text(text, encoding="utf-8")
 
         old_sources = "R1-F01, R2-F01, R3-F01"

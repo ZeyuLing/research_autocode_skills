@@ -68,7 +68,10 @@ This table is an exact ordered projection of
 field under the common escaping rule in `ledger-validation.md`; obtain
 `Displayed label` from `00-bibliography-inventory.csv` by the row's
 `ReferenceID`; for a dangling `REFnnnn` that has no bibliography row, project
-the PDF-displayed numeric marker as `[n]`. The combined source/locator cell is the compact JSON object
+the PDF-displayed numeric marker as `[n]`. Normalize CRLF/CR inside any CSV
+field to LF and serialize each real LF into the two literal characters `\n`
+in Markdown; collapsing or removing a line break is projection drift. The
+combined source/locator cell is the compact JSON object
 `{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`
 with that exact key order and no extra whitespace. The CSV `PDFSHA256` is
 projected through the checksum declaration and validated separately. An
@@ -98,8 +101,22 @@ thesis). For `partial`, `context-only`, `unverifiable`, or `not-needed` only,
 `reasoned non-finding:` followed by a substantive explanation. A support or
 metadata `mismatch` is a contradiction and cannot use that waiver. A bare
 `none`, `no finding`, or severity word is not a disposition.
+The waiver marker belongs only in `DispositionEvidence`; placing it in
+`SeverityFinding` does not satisfy the row. `SeverityFinding` contains `none`
+or an owning current finding/question reference as applicable.
 When a mismatch links a finding rather than a question, that finding is at least
 `S3`; an `S4` label cannot waive a documented contradiction.
+
+`ContentSourceOpened` is either blank under the documented unverifiable
+contract or exactly one complete HTTP(S) endpoint whose content was used for
+the support verdict. Any redirect, fallback, or failed route actually opened
+must be retained in `DispositionEvidence` with the closed marker `accessed
+endpoint: <URL>`; the URL is followed only by a semicolon, newline, or field
+end. Record its outcome in the same disposition. URLs appearing only in
+`PublicIdentifier`, the attached proposition, an exact locator, or unmarked
+prose are identities/text, not proof of access. Every source and marked
+auxiliary endpoint appears once in both the owning ledger and reviewer
+receipts; a receipt-only or omitted recorded endpoint fails closure.
 
 ## 3. Static closure checks
 
