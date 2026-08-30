@@ -12,6 +12,8 @@ Before assigning any occurrence or pair ID, reconcile the mandatory Stage-P `00-
 
 Stage P also preserves every unmatched square-bracket glyph in `00-unmatched-bracket-ledger.csv`, one row per glyph with its physical page, exact deterministic PDF-extraction context, and visible-role disposition. A positive count cannot be summarized as “none found.” The bibliography span is derived independently from the unique longest rendered `[1]...[N]` entry run, inventory length, and same-page `References`/`参考文献` heading; ledger owners must invalidate the packet if an arbitrary body page is labeled as bibliography, if a candidate or glyph is omitted, or if an occurrence page/context does not match its mapped candidate.
 
+The authoritative construction of raw page text, candidate/glyph ordering and windows, `ExpandedNumbers`, occurrence IDs, and Pair rows is the closed Stage-P extraction contract in `ledger-validation.md`; do not infer an alternative serialization, offset convention, or displayed-reference mapping from rendered appearance.
+
 In an isolated blind-review round, follow `clean-room-orchestration.md` and start each ledger owner in a fresh context. Use only the frozen thesis PDF, its rendered bibliography, neutral PDF-derived inventories, governing rules, and public authoritative sources reachable from or identifiable through the rendered citations. Do not use conversation history, memory summaries, user explanations/rebuttals, earlier assistant issue tables, another actor's messages, the thesis source, `.bib`, Git history, private companion papers, internal repositories, logs, old rounds, source/provenance audits, or author declarations. Source-assisted provenance work is a separate non-review task and cannot alter the blind-review verdict.
 
 ## 2. Build two independently owned inventories
@@ -65,14 +67,17 @@ This table is an exact ordered projection of
 `04-citation-claim-audit-ledger.csv`. Sort rows by `PairID`; project every scalar
 field under the common escaping rule in `ledger-validation.md`; obtain
 `Displayed label` from `00-bibliography-inventory.csv` by the row's
-`ReferenceID`. The combined source/locator cell is the compact JSON object
+`ReferenceID`; for a dangling `REFnnnn` that has no bibliography row, project
+the PDF-displayed numeric marker as `[n]`. The combined source/locator cell is the compact JSON object
 `{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`
 with that exact key order and no extra whitespace. The CSV `PDFSHA256` is
 projected through the checksum declaration and validated separately. An
 unchanged Pair ID therefore cannot conceal drift in proposition, source,
 locator, support, metadata status, severity/finding, or disposition/evidence.
 
-Use continuous occurrence IDs `C0001...` in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference and assign continuous Pair IDs `C0001-S01`, `C0001-S02...`. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+Use continuous occurrence IDs `C0001...` in PDF reading order. For a citation cluster, repeat the occurrence ID for each displayed reference and assign continuous Pair IDs `C0001-S01`, `C0001-S02...C0001-S99`, followed by `C0001-S100` and wider ordinary decimal ordinals as needed through `S9999`. Sort Pair IDs by their numeric occurrence and source ordinals, never lexically. Pair ID is the primary key for reconciliation, chair joins, reclassification, and re-review. A displayed number missing from the rendered bibliography remains an auditable Pair row and must be reported as a paper defect. The exact proposition must state what the thesis asks that source to support; do not copy an entire paragraph when only one clause is attached.
+
+For that dangling Pair row, use the closed serialization `Support=unverifiable`, `MetadataStatus=mismatch`, and `PublicIdentifier=no rendered bibliography entry`; leave `ContentSourceOpened` and `ExactSourceLocator` blank, and link `SeverityFinding` or `DispositionEvidence` to the owning reviewer's current `R4-Fxx/R4-Qxx` (doctorate) or `R3-Fxx/R3-Qxx` (master's) disposition. This sentinel records the absence visible in the frozen PDF; it is not a source identity. Any different support/status combination, a fabricated content endpoint, or an unlinked mismatch is invalid.
 
 The authoritative CSV schema is exactly the contract in `ledger-validation.md`:
 

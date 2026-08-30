@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import hashlib
 import importlib.util
+import json
 import subprocess
 import sys
 import tempfile
@@ -123,15 +124,61 @@ class ValidateR5OutputTests(unittest.TestCase):
             harness.build_bundle(root)
             harness.convert_bundle_to_doctorate(root)
             original_iterdir = Path.iterdir
+            original_is_file = Path.is_file
 
             def guarded_iterdir(path: Path):
                 if path.absolute() == root.absolute():
                     raise AssertionError("R5 validator enumerated the bundle root")
                 return original_iterdir(path)
 
-            with mock.patch.object(Path, "iterdir", guarded_iterdir):
+            def guarded_is_file(path: Path):
+                if path.name == "94-post-freeze-prior-issue-closure.md":
+                    raise AssertionError("R5 validator probed Stage V")
+                return original_is_file(path)
+
+            with (
+                mock.patch.object(Path, "iterdir", guarded_iterdir),
+                mock.patch.object(Path, "is_file", guarded_is_file),
+            ):
                 errors = R5_MODULE.validate_r5(root, FULL_VALIDATOR_MODULE)
             self.assertEqual([], errors)
+
+    def test_r5_rejects_reserved_process_alias_without_touching_peer(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            harness.build_bundle(root)
+            harness.convert_bundle_to_doctorate(root)
+            target = "R1-comprehensive-review.md"
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["frozen_pdf_file"] = target
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            original_lstat = Path.lstat
+            original_is_file = Path.is_file
+
+            def guard(path: Path) -> None:
+                if path.name == target:
+                    raise AssertionError(f"R5 touched reserved peer path {target}")
+
+            def guarded_lstat(path: Path, *args, **kwargs):
+                guard(path)
+                return original_lstat(path, *args, **kwargs)
+
+            def guarded_is_file(path: Path):
+                guard(path)
+                return original_is_file(path)
+
+            with (
+                mock.patch.object(Path, "lstat", guarded_lstat),
+                mock.patch.object(Path, "is_file", guarded_is_file),
+            ):
+                errors = R5_MODULE.validate_r5(root, FULL_VALIDATOR_MODULE)
+            self.assertTrue(
+                any("unsafe or collides" in error for error in errors), errors
+            )
 
     def test_report_requires_canonical_in_range_anchor_and_continuous_ids(self) -> None:
         with self.subTest(contract="gate anchor"), tempfile.TemporaryDirectory() as directory:

@@ -220,14 +220,23 @@ def citation_markdown_rows(
         for row in bibliography_inventory
     }
     projected: list[list[str]] = []
-    for row in sorted(ledger, key=lambda item: item["PairID"]):
+    for row in sorted(
+        ledger,
+        key=lambda item: VALIDATOR_MODULE.pair_id_sort_key(item["PairID"]),
+    ):
+        displayed_label = labels.get(
+            row["ReferenceID"],
+            VALIDATOR_MODULE.displayed_label_for_reference_id(
+                row["ReferenceID"], {}
+            ),
+        )
         projected.append([
             markdown_projection_scalar(row["PairID"]),
             markdown_projection_scalar(row["OccurrenceID"]),
             markdown_projection_scalar(row["PDFLocation"]),
             markdown_projection_scalar(row["ExactAttachedProposition"]),
             markdown_projection_scalar(row["ReferenceID"]),
-            markdown_projection_scalar(labels[row["ReferenceID"]]),
+            markdown_projection_scalar(displayed_label),
             markdown_projection_scalar(row["PublicIdentifier"]),
             json.dumps({
                 "content_source_opened": row["ContentSourceOpened"],
@@ -360,6 +369,103 @@ class ValidateReviewBundleTests(unittest.TestCase):
             with self.subTest(value=value, signal=signal):
                 self.assertFalse(match(value, signal))
 
+    def test_receipt_delimiters_cannot_hide_inside_basenames_or_urls(self) -> None:
+        for basename in (
+            "official;rule.txt",
+            "official[rule].txt",
+            "official]rule.txt",
+            "`official-rule.txt",
+            "official-rule.txt`",
+        ):
+            with self.subTest(basename=basename):
+                self.assertFalse(
+                    VALIDATOR_MODULE.is_neutral_portable_basename(basename)
+                )
+        for endpoint in (
+            "https://example.edu/rule;opened=fake",
+            "https://example.edu/rule,https://evil.example",
+            "https://example.edu/rule[none]",
+            "https://example.edu/`rule`",
+            'https://example.edu/"rule"',
+        ):
+            with self.subTest(endpoint=endpoint):
+                self.assertIsNone(
+                    VALIDATOR_MODULE.PUBLIC_URL_RE.fullmatch(endpoint)
+                )
+
+    def test_pair_projection_and_row_order_handle_s100_numerically(self) -> None:
+        base_row = {
+            "OccurrenceID": "C0001",
+            "PDFLocation": "physical p.1",
+            "ExactAttachedProposition": "fixture proposition",
+            "ReferenceID": "REF0001",
+            "PublicIdentifier": "doi:fixture",
+            "ContentSourceOpened": CITATION_ENDPOINT,
+            "ExactSourceLocator": "p.1",
+            "Support": "direct",
+            "MetadataStatus": "verified",
+            "SeverityFinding": "no finding",
+            "DispositionEvidence": "supported by source content",
+            "PDFSHA256": "A" * 64,
+        }
+        ledger = [
+            {**base_row, "PairID": "C0001-S100"},
+            {**base_row, "PairID": "C0001-S99"},
+        ]
+        projected = VALIDATOR_MODULE.citation_markdown_projection_rows(
+            ledger,
+            {"REF0001": {"DisplayedLabel": "[1]"}},
+        )
+        self.assertEqual(
+            ["C0001-S99", "C0001-S100"],
+            [row[0] for row in projected],
+        )
+        inventory = [
+            {"PairID": "C0001-S99"},
+            {"PairID": "C0001-S100"},
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_pair_row_order(
+            inventory, list(reversed(inventory)), errors
+        )
+        self.assertTrue(any("PairID row order" in error for error in errors), errors)
+
+        with tempfile.TemporaryDirectory() as directory:
+            markdown = Path(directory) / "04-citation-claim-audit-ledger.md"
+            rows = []
+            for pair_id in ("C0001-S99", "C0001-S100"):
+                rows.append([
+                    pair_id,
+                    "C0001",
+                    "physical p.1",
+                    "fixture proposition",
+                    "REF0001",
+                    "[1]",
+                    "doi:fixture",
+                    '{"content_source_opened":"https://example.org/paper",'
+                    '"exact_source_locator":"p.1"}',
+                    "direct",
+                    "verified",
+                    "no finding",
+                    "supported by source content",
+                ])
+            markdown.write_text(
+                "# Citation ledger\n\n"
+                + markdown_table(CITATION_MARKDOWN_HEADERS, rows),
+                encoding="utf-8",
+            )
+            projection_errors: list[str] = []
+            VALIDATOR_MODULE.validate_markdown_id_projection(
+                markdown,
+                {"C0001-S99", "C0001-S100"},
+                VALIDATOR_MODULE.PAIR_ID_TOKEN_RE,
+                {"Pair ID", "PairID"},
+                "citation-claim ledger",
+                projection_errors,
+                required_headers=set(CITATION_MARKDOWN_HEADERS),
+            )
+            self.assertEqual([], projection_errors)
+
     def rewrite_pdf_and_rehash(self, root: Path, page_texts: list[str]) -> str:
         process_path = root / "00-process-parameters.json"
         process = json.loads(process_path.read_text(encoding="utf-8"))
@@ -377,6 +483,257 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 content = path.read_text(encoding="utf-8")
                 path.write_text(content.replace(old_digest, new_digest), encoding="utf-8")
         return new_digest
+
+    def convert_bundle_to_dangling_reference(self, root: Path) -> None:
+        """Turn the complete fixture into one valid, fully adjudicated REF gap."""
+
+        body = (
+            "fixture proposition [2]; quantization levels are [3, 8]; "
+            "scale interval [0.85, 1]."
+        )
+        digest = self.rewrite_pdf_and_rehash(
+            root, [body, "References\n[1] Fixture reference."]
+        )
+        process_path = root / "00-process-parameters.json"
+        process = json.loads(process_path.read_text(encoding="utf-8"))
+        process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        manifest = root / "00-manifest.md"
+        manifest.write_text(
+            re.sub(
+                r"(?m)^- Process-parameter file and SHA-256: .*$",
+                "- Process-parameter file and SHA-256: "
+                f"00-process-parameters.json / {process_digest}",
+                manifest.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+
+        extraction_errors: list[str] = []
+        extracted, unmatched = VALIDATOR_MODULE.extract_numeric_bracket_candidates(
+            root / "frozen-thesis.pdf", {2}, extraction_errors
+        )
+        self.assertEqual([], extraction_errors)
+        self.assertEqual([], unmatched)
+        _, candidate_rows = read_csv(root / "00-citation-candidate-ledger.csv")
+        for row, source in zip(candidate_rows, extracted, strict=True):
+            row["Marker"] = source["Marker"]
+            row["ExpandedNumbers"] = (
+                "N/A" if source["Expanded"] is None
+                else ";".join(str(value) for value in source["Expanded"])
+            )
+            row["AdjacentPDFText"] = source["Adjacent"]
+            row["PDFSHA256"] = digest
+        write_csv(
+            root / "00-citation-candidate-ledger.csv",
+            CITATION_CANDIDATE_COLUMNS,
+            candidate_rows,
+        )
+
+        _, citation_inventory = read_csv(root / "00-citation-inventory.csv")
+        citation_inventory[0]["DisplayedReferenceID"] = "REF0002"
+        citation_inventory[0]["AdjacentPDFText"] = extracted[0]["Adjacent"]
+        citation_inventory[0]["PDFSHA256"] = digest
+        write_csv(
+            root / "00-citation-inventory.csv",
+            CITATION_INVENTORY_COLUMNS,
+            citation_inventory,
+        )
+
+        _, bibliography_inventory = read_csv(
+            root / "00-bibliography-inventory.csv"
+        )
+        bibliography_inventory[0]["Cited"] = "no"
+        bibliography_inventory[0]["PDFSHA256"] = digest
+        write_csv(
+            root / "00-bibliography-inventory.csv",
+            BIB_INVENTORY_COLUMNS,
+            bibliography_inventory,
+        )
+        _, bibliography_ledger = read_csv(
+            root / "03-bibliography-audit-ledger.csv"
+        )
+        for row in bibliography_ledger:
+            row["Cited"] = "no"
+            row["PDFSHA256"] = digest
+        write_csv(
+            root / "03-bibliography-audit-ledger.csv",
+            BIB_LEDGER_COLUMNS,
+            bibliography_ledger,
+        )
+        (root / "03-bibliography-audit-ledger.md").write_text(
+            "# Bibliography ledger\n\n"
+            + self.declaration(digest, process, "R3", [BIB_ENDPOINT])
+            + markdown_table(
+                BIB_MARKDOWN_HEADERS,
+                bibliography_markdown_rows(
+                    bibliography_inventory, bibliography_ledger
+                ),
+            ),
+            encoding="utf-8",
+        )
+
+        _, citation_ledger = read_csv(
+            root / "04-citation-claim-audit-ledger.csv"
+        )
+        citation_ledger[0].update({
+            "ReferenceID": "REF0002",
+            "PublicIdentifier": VALIDATOR_MODULE.DANGLING_REFERENCE_SENTINEL,
+            "ContentSourceOpened": "",
+            "ExactSourceLocator": "",
+            "Support": "unverifiable",
+            "MetadataStatus": "mismatch",
+            "SeverityFinding": "R3-F01",
+            "DispositionEvidence": (
+                "R3-F01: displayed citation has no rendered bibliography entry"
+            ),
+            "PDFSHA256": digest,
+        })
+        write_csv(
+            root / "04-citation-claim-audit-ledger.csv",
+            CITATION_LEDGER_COLUMNS,
+            citation_ledger,
+        )
+        (root / "04-citation-claim-audit-ledger.md").write_text(
+            "# Citation ledger\n\n"
+            + self.declaration(digest, process, "R3")
+            + markdown_table(
+                CITATION_MARKDOWN_HEADERS,
+                citation_markdown_rows(citation_ledger, bibliography_inventory),
+            ),
+            encoding="utf-8",
+        )
+
+        finding_replacements = {
+            "bounded fixture wording issue": "dangling rendered citation",
+            "- Primary gate: H": "- Primary gate: F",
+            "- Observation: The fixture exposes one bounded wording defect for validation.": (
+                "- Observation: The displayed citation [2] has no rendered "
+                "bibliography entry."
+            ),
+            "- Why it matters: The wording must remain precise for a defensible local claim.": (
+                "- Why it matters: The cited source cannot be identified or checked "
+                "from the rendered thesis."
+            ),
+            "- Evidence: The visible fixture sentence contains the designated wording defect.": (
+                "- Evidence: Physical p.1 displays [2], while the rendered "
+                "bibliography ends at [1]."
+            ),
+            "- Required action: Correct only the bounded wording without changing the claim.": (
+                "- Required action: Add the missing bibliography entry or correct "
+                "the citation marker."
+            ),
+            "- Verification: Reinspect physical p.1 and confirm the corrected sentence.": (
+                "- Verification: Recheck the citation and bibliography after PDF refreeze."
+            ),
+        }
+        for reviewer_index in range(1, 4):
+            report = root / f"R{reviewer_index}-comprehensive-review.md"
+            text = report.read_text(encoding="utf-8")
+            for old, new in finding_replacements.items():
+                text = text.replace(old, new, 1)
+            if reviewer_index == 3:
+                text = text.replace(
+                    f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
+                    f"public_endpoints=[{BIB_ENDPOINT}]",
+                    1,
+                ).replace(
+                    "- Semantically verified pairs: 1",
+                    "- Semantically verified pairs: 0",
+                    1,
+                ).replace(
+                    "- Inaccessible/unverifiable pairs: 0",
+                    "- Inaccessible/unverifiable pairs: 1",
+                    1,
+                )
+            report.write_text(text, encoding="utf-8")
+
+        academic_row = {
+            "LedgerID": "L01",
+            "Priority": "P2",
+            "ChairFindingID": "C-F01",
+            "SourceReviewerFindingIDs": "R1-F01, R2-F01, R3-F01",
+            "Severity": "S2",
+            "S0Subtype": "N/A",
+            "Remedy": "W",
+            "ExactPDFAnchor": "physical p.1",
+            "DirectObservation": (
+                "displayed citation [2] has no rendered bibliography entry"
+            ),
+            "EvidenceStatus": "verified",
+            "MinimumEditEvidence": (
+                "add the missing bibliography entry or correct the citation marker"
+            ),
+            "Dependency": "none",
+            "Owner": "author",
+            "Status": "open",
+            "Verification": (
+                "recheck the citation and bibliography after PDF refreeze"
+            ),
+        }
+        for filename in (
+            "91-revision-ledger.csv", "93-current-actionable-items.csv"
+        ):
+            write_csv(root / filename, ACADEMIC_LEDGER_COLUMNS, [academic_row])
+        academic_markdown_row = "| " + " | ".join(
+            academic_row[field] for field in ACADEMIC_LEDGER_COLUMNS
+        ) + " |"
+        old_academic_row = (
+            "| L01 | P2 | C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | "
+            "physical p.1 | visible wording defect | verified | correct the wording | "
+            "none | author | open | reinspect p.1 |"
+        )
+        for filename in ("91-revision-ledger.md", "93-user-facing-summary.md"):
+            path = root / filename
+            path.write_text(
+                path.read_text(encoding="utf-8").replace(
+                    old_academic_row, academic_markdown_row, 1
+                ),
+                encoding="utf-8",
+            )
+        evidence_plan = root / "92-new-evidence-or-experiments.md"
+        evidence_plan.write_text(
+            evidence_plan.read_text(encoding="utf-8").replace(
+                "| L01 | W | physical p.1 | correct the wording | reinspect p.1 |",
+                "| L01 | W | physical p.1 | add the missing bibliography entry "
+                "or correct the citation marker | recheck the citation and "
+                "bibliography after PDF refreeze |",
+                1,
+            ),
+            encoding="utf-8",
+        )
+
+        chair = root / "90-chair-synthesis.md"
+        chair_text = chair.read_text(encoding="utf-8").replace(
+            "| C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | "
+            "visible wording defect | verified | author | correct the wording | "
+            "reinspect p.1 |",
+            "| C-F01 | R1-F01, R2-F01, R3-F01 | S2 | N/A | W | physical p.1 | "
+            "displayed citation [2] has no rendered bibliography entry | verified | "
+            "author | add the missing bibliography entry or correct the citation "
+            "marker | recheck the citation and bibliography after PDF refreeze |",
+            1,
+        ).replace(
+            "| REF0001 | [1] | C0001-S01 | C0001-S01=>doi:fixture @ "
+            f"{CITATION_ENDPOINT} | title=fixture ; ordered_authors=fixture ; "
+            "year=fixture ; venue=fixture ; publication_status=fixture ; doi=fixture ; "
+            "arxiv_id=N/A ; arxiv_version=N/A ; url=N/A ; "
+            "isbn_or_other_persistent_id=N/A ; existence=fixture | agree | none | "
+            "none | closed |",
+            "| REF0002 | [2] | C0001-S01 | C0001-S01=>no rendered "
+            "bibliography entry @ N/A | no rendered bibliography entry | disagree | "
+            "substantive | C-F01 | open |",
+            1,
+        )
+        for old, new in (
+            ("- Identity-agreement count: 1", "- Identity-agreement count: 0"),
+            ("- Version disagreements: 0", "- Version disagreements: 1"),
+            ("- Substantive conflicts: 0", "- Substantive conflicts: 1"),
+            ("- Reclassified Pair IDs: 0", "- Reclassified Pair IDs: 1"),
+            ("- Unresolved conflicts: 0", "- Unresolved conflicts: 1"),
+            ("- Combined citation gate: pass", "- Combined citation gate: fail"),
+        ):
+            chair_text = chair_text.replace(old, new, 1)
+        chair.write_text(chair_text, encoding="utf-8")
 
     def declaration(
         self,
@@ -1164,7 +1521,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             }, {
                 "CandidateID": "BC0002",
                 "PhysicalPage": "1",
-                "Marker": "[3, 8]",
+                "Marker": "[3,8]",
                 "ExpandedNumbers": "3;8",
                 "Classification": "non-citation",
                 "ClassificationEvidence": (
@@ -1179,7 +1536,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             }, {
                 "CandidateID": "BC0003",
                 "PhysicalPage": "1",
-                "Marker": "[0.85, 1]",
+                "Marker": "[0.85,1]",
                 "ExpandedNumbers": "N/A",
                 "Classification": "non-citation",
                 "ClassificationEvidence": (
@@ -2130,7 +2487,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             write_csv(root / "02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS, rows)
             self.assert_fails(root, "was not inspected full-scale")
 
-    def test_citation_pair_mapping_and_unknown_reference_fail(self) -> None:
+    def test_citation_pair_mapping_and_malformed_dangling_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
@@ -2145,7 +2502,85 @@ class ValidateReviewBundleTests(unittest.TestCase):
             result = self.run_validator(root)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("citation mapping mismatch", result.stdout)
-            self.assertIn("unknown ReferenceID", result.stdout)
+            self.assertIn("requires Support=unverifiable", result.stdout)
+
+    def test_complete_dangling_citation_fixture_passes_full_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.convert_bundle_to_dangling_reference(root)
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_malformed_dangling_citation_contract_fails_full_gate(self) -> None:
+        cases = (
+            (
+                "sentinel",
+                lambda row: row.__setitem__("PublicIdentifier", "invented identity"),
+                "requires PublicIdentifier='no rendered bibliography entry'",
+            ),
+            (
+                "metadata status",
+                lambda row: row.__setitem__("MetadataStatus", "verified"),
+                "requires MetadataStatus=mismatch",
+            ),
+            (
+                "owner link",
+                lambda row: row.update({
+                    "SeverityFinding": "no current finding",
+                    "DispositionEvidence": "unsupported dangling citation",
+                }),
+                "mismatch row must link an owning-reviewer",
+            ),
+        )
+        for label, mutate, needle in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                self.convert_bundle_to_dangling_reference(root)
+                _, rows = read_csv(root / "04-citation-claim-audit-ledger.csv")
+                mutate(rows[0])
+                write_csv(
+                    root / "04-citation-claim-audit-ledger.csv",
+                    CITATION_LEDGER_COLUMNS,
+                    rows,
+                )
+                process = json.loads(
+                    (root / "00-process-parameters.json").read_text(encoding="utf-8")
+                )
+                digest = process["selected_pdf_sha256"]
+                _, bibliography = read_csv(
+                    root / "00-bibliography-inventory.csv"
+                )
+                (root / "04-citation-claim-audit-ledger.md").write_text(
+                    "# Citation ledger\n\n"
+                    + self.declaration(digest, process, "R3")
+                    + markdown_table(
+                        CITATION_MARKDOWN_HEADERS,
+                        citation_markdown_rows(rows, bibliography),
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(root, needle)
+
+    def test_chair_cannot_downgrade_dangling_reference_to_local_conflict(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.convert_bundle_to_dangling_reference(root)
+            chair = root / "90-chair-synthesis.md"
+            chair.write_text(
+                chair.read_text(encoding="utf-8").replace(
+                    "| disagree | substantive | C-F01 | open |",
+                    "| disagree | local | C-F01 | open |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "dangling REF0002 requires a substantive cross-ledger conflict",
+            )
 
     def test_citation_candidate_ledger_must_cover_pdf_extraction(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

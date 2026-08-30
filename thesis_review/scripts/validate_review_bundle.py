@@ -28,7 +28,7 @@ from typing import Any, Iterable
 
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
-PUBLIC_URL_RE = re.compile(r"https?://[^\s;,]+", re.IGNORECASE)
+PUBLIC_URL_RE = re.compile(r"https?://[^\s;,\[\]`\"]+", re.IGNORECASE)
 BIB_MISMATCH_EXEMPTION_RE = re.compile(
     r"(?<![A-Za-z0-9])(?:"
     r"none|clean|n[./]?a|"
@@ -54,7 +54,10 @@ SOURCE_LOCATOR_RE = re.compile(
 PAGE_ID_RE = re.compile(r"^P(\d{4})$")
 REFERENCE_ID_RE = re.compile(r"^REF(\d{4})$")
 OCCURRENCE_ID_RE = re.compile(r"^C(\d{4})$")
-PAIR_ID_RE = re.compile(r"^C(\d{4})-S(\d{2})$")
+PAIR_ID_RE = re.compile(r"^C(\d{4})-S(\d{2,4})$")
+PAIR_ID_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])C\d{4}-S\d{2,4}(?![A-Za-z0-9])"
+)
 BRACKET_CANDIDATE_ID_RE = re.compile(r"^BC(\d{4})$")
 NUMERIC_BRACKET_RE = re.compile(
     r"\[(?P<items>\d{1,4}(?:\s*[-–—]\s*\d{1,4})?"
@@ -123,6 +126,7 @@ CITATION_MARKDOWN_HEADERS = [
     "Support", "Metadata/status", "Severity/finding",
     "Disposition/evidence",
 ]
+DANGLING_REFERENCE_SENTINEL = "no rendered bibliography entry"
 REVIEWER_ASSESSMENT_HEADERS = [
     "Gate",
     "Review depth (`baseline` / `emphasized` / `primary`)",
@@ -288,6 +292,10 @@ R5_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
     "rules/scripts/validate_r5_output.py",
 ]
+P_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_stage_p_output.py",
+]
 
 
 def portable_basename_key(value: str) -> str:
@@ -306,7 +314,7 @@ def is_neutral_portable_basename(value: str) -> bool:
         or unicodedata.normalize("NFC", value) != value
         or Path(value).name != value
         or len(value) > 255
-        or re.search(r'[<>:"/\\|?*\x00-\x1f]', value)
+        or re.search(r'[<>:"/\\|?*;`\[\]\x00-\x1f]', value)
     ):
         return False
     stem = value.split(".", 1)[0].casefold()
@@ -450,7 +458,9 @@ def preflight_reparse_boundary(root: Path, errors: list[str]) -> bool:
 # would make basename-only opened-input receipts ambiguous even when the bytes hash.
 RESERVED_ROUND_BASENAMES = {
     "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
-    *(Path(value).name for value in R5_VALIDATOR_RULE_INPUTS),
+    *(Path(value).name for value in (
+        *P_VALIDATOR_RULE_INPUTS, *R5_VALIDATOR_RULE_INPUTS,
+    )),
     "00-manifest.md", "00-page-inventory.csv",
     "00-bibliography-inventory.csv", "00-citation-candidate-ledger.csv",
     "00-unmatched-bracket-ledger.csv", "00-citation-inventory.csv",
@@ -715,7 +725,8 @@ def derive_and_validate_reference_pages(
         errors.append(
             "00-bibliography-inventory.csv: DisplayedLabel sequence is not [1]..[N]"
         )
-    events: list[tuple[int, int]] = []
+    page_texts: dict[int, str] = {}
+    events: list[tuple[int, int, int, int]] = []
     for physical_page, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
@@ -724,14 +735,20 @@ def derive_and_validate_reference_pages(
                 f"bibliography extraction failed on physical page {physical_page}: {exc}"
             )
             continue
+        page_texts[physical_page] = text
         events.extend(
-            (physical_page, int(value))
-            for value in re.findall(r"(?m)^\s*\[(\d{1,4})\]", text)
+            (
+                physical_page,
+                int(match.group(1)),
+                match.start(),
+                match.end(),
+            )
+            for match in re.finditer(r"(?m)^\s*\[(\d{1,4})\]", text)
         )
-    all_runs: list[list[tuple[int, int]]] = []
+    all_runs: list[list[tuple[int, int, int, int]]] = []
     length = len(expected_sequence)
     if length:
-        for start, (_page, number) in enumerate(events):
+        for start, (_page, number, _offset_start, _offset_end) in enumerate(events):
             if number != 1:
                 continue
             candidate = [events[start]]
@@ -751,15 +768,10 @@ def derive_and_validate_reference_pages(
             f"rows; longest_length={longest_length}, tied_longest_runs={len(runs)}"
         )
         return set()
-    first_page = runs[0][0][0]
-    last_page = runs[0][-1][0]
-    try:
-        first_page_text = reader.pages[first_page - 1].extract_text() or ""
-    except Exception as exc:
-        errors.append(
-            f"cannot verify bibliography heading on physical page {first_page}: {exc}"
-        )
-        return set()
+    rendered_run = runs[0]
+    first_page = rendered_run[0][0]
+    last_page = rendered_run[-1][0]
+    first_page_text = page_texts.get(first_page, "")
     if not re.search(
         r"(?im)(?:^|\n)\s*(?:参考文献|references|bibliography)\s*(?:\n|$)",
         first_page_text,
@@ -776,6 +788,34 @@ def derive_and_validate_reference_pages(
             f"rendered bibliography span; declared={sorted(declared_reference_pages)}, "
             f"derived={sorted(derived_pages)}"
         )
+    expected_entries: list[str] = []
+    for index, (current_page, _number, _start, current_end) in enumerate(
+        rendered_run
+    ):
+        if index + 1 < len(rendered_run):
+            next_page, _next_number, next_start, _next_end = rendered_run[index + 1]
+        else:
+            next_page = last_page
+            next_start = len(page_texts.get(last_page, ""))
+        chunks: list[str] = []
+        if current_page == next_page:
+            chunks.append(page_texts.get(current_page, "")[current_end:next_start])
+        else:
+            chunks.append(page_texts.get(current_page, "")[current_end:])
+            chunks.extend(
+                page_texts.get(page_number, "")
+                for page_number in range(current_page + 1, next_page)
+            )
+            chunks.append(page_texts.get(next_page, "")[:next_start])
+        expected_entries.append(normalize_extracted_text("\n".join(chunks)))
+    for line, (row, expected_entry) in enumerate(
+        zip(bibliography_rows, expected_entries), start=2
+    ):
+        if row.get("RenderedEntry", "") != expected_entry:
+            errors.append(
+                f"00-bibliography-inventory.csv:{line}: RenderedEntry does not "
+                "exactly equal the deterministic frozen-PDF entry slice"
+            )
     return derived_pages
 
 
@@ -1242,12 +1282,83 @@ def bibliography_markdown_projection_rows(
     return rows
 
 
+def pair_id_sort_key(value: str) -> tuple[int, int, str]:
+    match = PAIR_ID_RE.fullmatch(value)
+    if match is None:
+        return (10_000, 10_000, value)
+    return (int(match.group(1)), int(match.group(2)), value)
+
+
+def displayed_label_for_reference_id(
+    reference_id: str,
+    bibliography_inventory_by_id: dict[str, dict[str, str]],
+) -> str:
+    """Project a rendered label, including a PDF-bound dangling marker."""
+
+    inventory_row = bibliography_inventory_by_id.get(reference_id)
+    if inventory_row is not None:
+        return inventory_row.get("DisplayedLabel", "")
+    match = REFERENCE_ID_RE.fullmatch(reference_id)
+    return f"[{int(match.group(1))}]" if match is not None else ""
+
+
+def validate_dangling_citation_audit_row(
+    row: dict[str, str],
+    bibliography_inventory_by_id: dict[str, dict[str, str]],
+    line: int,
+    errors: list[str],
+) -> None:
+    """Keep a dangling citation as an auditable finding, not an I/O error."""
+
+    reference_id = row.get("ReferenceID", "")
+    if reference_id in bibliography_inventory_by_id:
+        return
+    location = f"04-citation-claim-audit-ledger.csv:{line}"
+    if row.get("Support", "").casefold() != "unverifiable":
+        errors.append(
+            f"{location}: dangling {reference_id!r} requires Support=unverifiable"
+        )
+    if row.get("MetadataStatus", "").casefold() != "mismatch":
+        errors.append(
+            f"{location}: dangling {reference_id!r} requires MetadataStatus=mismatch"
+        )
+    if row.get("PublicIdentifier", "") != DANGLING_REFERENCE_SENTINEL:
+        errors.append(
+            f"{location}: dangling {reference_id!r} requires PublicIdentifier="
+            f"{DANGLING_REFERENCE_SENTINEL!r}"
+        )
+    if row.get("ContentSourceOpened", "") or row.get("ExactSourceLocator", ""):
+        errors.append(
+            f"{location}: dangling {reference_id!r} must leave content source and "
+            "locator blank unless a rendered bibliography identity exists"
+        )
+
+
+def validate_citation_pair_row_order(
+    citation_inventory: list[dict[str, str]],
+    citation_ledger: list[dict[str, str]],
+    errors: list[str],
+) -> None:
+    """Bind the semantic audit's source order to the PDF-derived inventory."""
+
+    inventory_pair_order = [row.get("PairID", "") for row in citation_inventory]
+    ledger_pair_order = [row.get("PairID", "") for row in citation_ledger]
+    if ledger_pair_order != inventory_pair_order:
+        errors.append(
+            "04-citation-claim-audit-ledger.csv: PairID row order must exactly "
+            "match 00-citation-inventory.csv reading/source order"
+        )
+
+
 def citation_markdown_projection_rows(
     citation_ledger: list[dict[str, str]],
     bibliography_inventory_by_id: dict[str, dict[str, str]],
 ) -> list[list[str]]:
     rows: list[list[str]] = []
-    for row in sorted(citation_ledger, key=lambda item: item.get("PairID", "")):
+    for row in sorted(
+        citation_ledger,
+        key=lambda item: pair_id_sort_key(item.get("PairID", "")),
+    ):
         reference_id = row.get("ReferenceID", "")
         content_projection = compact_projection_json({
             "content_source_opened": row.get("ContentSourceOpened", ""),
@@ -1260,8 +1371,8 @@ def citation_markdown_projection_rows(
             markdown_projection_scalar(row.get("ExactAttachedProposition", "")),
             markdown_projection_scalar(reference_id),
             markdown_projection_scalar(
-                bibliography_inventory_by_id.get(reference_id, {}).get(
-                    "DisplayedLabel", ""
+                displayed_label_for_reference_id(
+                    reference_id, bibliography_inventory_by_id
                 )
             ),
             markdown_projection_scalar(row.get("PublicIdentifier", "")),
@@ -1393,6 +1504,18 @@ def is_placeholder(value: str) -> bool:
     return value.strip().casefold() in PLACEHOLDERS
 
 
+def valid_candidate_classification_evidence(value: str) -> bool:
+    """Accept only a concrete contextual reason, identically in every gate."""
+
+    stripped = value.strip()
+    return (
+        len(stripped) >= 12
+        and not is_placeholder(stripped)
+        and stripped.casefold()
+        not in {"citation", "non-citation", "checked", "verified"}
+    )
+
+
 def require_value(
     row: dict[str, str],
     field: str,
@@ -1436,8 +1559,16 @@ def read_csv(
                     errors.append(
                         f"{path.name}:{line_number}: values exceed declared header"
                     )
+                # Preserve cell bytes apart from the cross-platform newline
+                # convention.  Callers explicitly strip only fields whose
+                # contract is semantic rather than an exact PDF/ledger anchor;
+                # globally stripping here would conceal drift in Marker,
+                # AdjacentPDFText, RenderedEntry, IDs, and signed projections.
                 normalized = {
-                    key: (row.get(key) or "").strip() for key in expected_columns
+                    key: (row.get(key) or "")
+                    .replace("\r\n", "\n")
+                    .replace("\r", "\n")
+                    for key in expected_columns
                 }
                 rows.append(normalized)
             if require_rows and not rows:
@@ -1551,18 +1682,21 @@ def canonical_stage_opened_inputs(
         if process.get("degree_level") == "doctorate" and actor_id == "R5"
         else []
     )
+    p_validator_rules = P_VALIDATOR_RULE_INPUTS if actor_id == "P" else []
     base_rules = [
         "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
-        *r5_validator_rules, *governing, frozen,
+        *p_validator_rules, *r5_validator_rules, *governing, frozen,
     ]
     packet = [
         "00-manifest.md", "01-policy-basis.md", "00-page-inventory.csv",
         "00-bibliography-inventory.csv", "00-citation-candidate-ledger.csv",
         "00-unmatched-bracket-ledger.csv", "00-citation-inventory.csv",
     ]
-    helper_inputs = helper_inputs_for_recipient(root, actor_id)
     if actor_id == "P":
-        return [*base_rules, *helper_inputs]
+        # Stage P is the packet builder and has no upstream helper inputs.  Its
+        # scoped validator must not probe or enumerate the helpers directory.
+        return base_rules
+    helper_inputs = helper_inputs_for_recipient(root, actor_id)
     if re.fullmatch(r"R\d+", actor_id):
         return [*base_rules, *packet, *helper_inputs]
     if actor_id == "AI":
@@ -3112,10 +3246,13 @@ def validate_chair_report(
                     f"{path.name}: invalid cross-ledger ReferenceID {reference_id!r}"
                 )
             inventory_row = bib_inventory_by_id.get(reference_id, {})
-            if row[1] != inventory_row.get("DisplayedLabel", ""):
+            expected_displayed_label = displayed_label_for_reference_id(
+                reference_id, bib_inventory_by_id
+            )
+            if row[1] != expected_displayed_label:
                 errors.append(
                     f"{path.name}: {reference_id} Displayed label does not project "
-                    "00-bibliography-inventory.csv"
+                    "the rendered bibliography label or dangling citation marker"
                 )
             source_rows = citation_rows_by_ref.get(reference_id, [])
             expected_pairs = ", ".join(item.get("PairID", "") for item in source_rows)
@@ -3134,10 +3271,15 @@ def validate_chair_report(
                     f"{path.name}: {reference_id} citation identity/source cell does "
                     "not exactly project the citation ledger"
                 )
-            expected_bib_projection = " ; ".join(
-                f"{field}="
-                f"{bib_rows_by_ref_field.get((reference_id, field), {}).get('CanonicalValue', '')}"
-                for field in bib_identity_fields
+            missing_bibliography_entry = not inventory_row
+            expected_bib_projection = (
+                DANGLING_REFERENCE_SENTINEL
+                if missing_bibliography_entry
+                else " ; ".join(
+                    f"{field}="
+                    f"{bib_rows_by_ref_field.get((reference_id, field), {}).get('CanonicalValue', '')}"
+                    for field in bib_identity_fields
+                )
             )
             if row[4] != expected_bib_projection:
                 errors.append(
@@ -3148,7 +3290,7 @@ def validate_chair_report(
                 bib_rows_by_ref_field.get((reference_id, field), {})
                 for field in bib_identity_fields
             ]
-            mechanically_disagrees = any(
+            mechanically_disagrees = missing_bibliography_entry or any(
                 item.get("Verdict", "").casefold() == "mismatch"
                 for item in relevant_bib_rows
             ) or any(
@@ -3180,6 +3322,11 @@ def validate_chair_report(
             if expected_agreement == "disagree" and conflict == "none":
                 errors.append(
                     f"{path.name}: {reference_id} ledger disagreement cannot use conflict none"
+                )
+            if missing_bibliography_entry and conflict != "substantive":
+                errors.append(
+                    f"{path.name}: dangling {reference_id} requires a substantive "
+                    "cross-ledger conflict"
                 )
             chair_ids = re.findall(r"C-F\d{2,4}", row[7])
             canonical_chair_ids = ", ".join(dict.fromkeys(chair_ids))
@@ -5735,13 +5882,20 @@ def validate_process(
     errors: list[str],
     *,
     enforce_single_reviewer_pdf: bool = True,
+    stage_v_present_override: bool | None = None,
+    process_override: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
-    process_path = root / "00-process-parameters.json"
-    try:
-        process = json.loads(process_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        errors.append(f"cannot read 00-process-parameters.json: {exc}")
-        return {}, root / "__missing__.pdf", "", 0, 0, []
+    if process_override is None:
+        process_path = root / "00-process-parameters.json"
+        try:
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"cannot read 00-process-parameters.json: {exc}")
+            return {}, root / "__missing__.pdf", "", 0, 0, []
+    else:
+        # Scoped gates preflight exact paths from this same frozen parse.  Reuse
+        # it so a second read cannot select a different PDF/governing allowlist.
+        process = process_override
     if not isinstance(process, dict):
         errors.append("00-process-parameters.json root must be an object")
         return {}, root / "__missing__.pdf", "", 0, 0, []
@@ -5857,7 +6011,7 @@ def validate_process(
         for index, value in enumerate(rule_urls):
             if (
                 not isinstance(value, str)
-                or not re.fullmatch(r"https?://[^\s]+", value.strip(), re.IGNORECASE)
+                or PUBLIC_URL_RE.fullmatch(value.strip()) is None
             ):
                 errors.append(
                     f"governing_rule_urls[{index}] must be one nonblank http(s) URL"
@@ -5959,7 +6113,11 @@ def validate_process(
         errors.append("actor_prompt_sha256 must be an object")
     else:
         observed_prompt_actors = set(prompt_map)
-        stage_v_present = (root / "94-post-freeze-prior-issue-closure.md").is_file()
+        stage_v_present = (
+            (root / "94-post-freeze-prior-issue-closure.md").is_file()
+            if stage_v_present_override is None
+            else stage_v_present_override
+        )
         required_prompt_actors = (
             expected_prompt_actors | {"V"} if stage_v_present
             else expected_prompt_actors
@@ -6612,7 +6770,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"00-unmatched-bracket-ledger.csv:{line}: Glyph does not "
                     "match the frozen-PDF extraction"
                 )
-            if normalize_extracted_text(row["AdjacentPDFText"]) != extracted["Adjacent"]:
+            if row["AdjacentPDFText"] != extracted["Adjacent"]:
                 errors.append(
                     f"00-unmatched-bracket-ledger.csv:{line}: AdjacentPDFText "
                     "does not exactly match the deterministic extraction window"
@@ -6657,6 +6815,11 @@ def main(argv: list[str] | None = None) -> int:
                 f"00-citation-candidate-ledger.csv:{line}: invalid PhysicalPage"
             )
         marker = normalize_numeric_marker(row["Marker"])
+        if row["Marker"] != marker:
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: Marker must equal "
+                "its canonical whitespace/comma/dash normalization"
+            )
         parsed_numbers = expand_numeric_marker(row["Marker"])
         if parsed_numbers is None:
             declared_numbers: list[int] | None = None
@@ -6696,9 +6859,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"00-citation-candidate-ledger.csv:{line}: PhysicalPage "
                     f"{physical_page} != extracted {extracted['PhysicalPage']}"
                 )
-            if marker != extracted["Marker"]:
+            if row["Marker"] != extracted["Marker"]:
                 errors.append(
-                    f"00-citation-candidate-ledger.csv:{line}: Marker {marker!r} "
+                    f"00-citation-candidate-ledger.csv:{line}: Marker {row['Marker']!r} "
                     f"!= extracted {extracted['Marker']!r}"
                 )
             if parsed_numbers != extracted["Expanded"]:
@@ -6706,7 +6869,7 @@ def main(argv: list[str] | None = None) -> int:
                     f"00-citation-candidate-ledger.csv:{line}: expansion does "
                     "not equal the frozen-PDF extraction"
                 )
-            if normalize_extracted_text(row["AdjacentPDFText"]) != extracted["Adjacent"]:
+            if row["AdjacentPDFText"] != extracted["Adjacent"]:
                 errors.append(
                     f"00-citation-candidate-ledger.csv:{line}: AdjacentPDFText "
                     "does not exactly match the deterministic frozen-PDF window"
@@ -6717,10 +6880,8 @@ def main(argv: list[str] | None = None) -> int:
                 f"00-citation-candidate-ledger.csv:{line}: invalid "
                 f"Classification {row['Classification']!r}"
             )
-        evidence = row["ClassificationEvidence"].strip()
-        if len(evidence) < 12 or evidence.casefold() in {
-            "citation", "non-citation", "checked", "verified"
-        }:
+        evidence = row["ClassificationEvidence"]
+        if not valid_candidate_classification_evidence(evidence):
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: "
                 "ClassificationEvidence is not a concrete contextual reason"
@@ -6755,9 +6916,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             candidate_occurrence_numbers[mapped] = parsed_numbers or []
             candidate_occurrence_pages[mapped] = physical_page
-            candidate_occurrence_contexts[mapped] = normalize_extracted_text(
-                row["AdjacentPDFText"]
-            )
+            candidate_occurrence_contexts[mapped] = row["AdjacentPDFText"]
         elif classification == "non-citation" and mapped != "N/A":
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: non-citation must "
@@ -6963,6 +7122,7 @@ def main(argv: list[str] | None = None) -> int:
         "citation-claim ledger", set(citation_inv_by_pair),
         set(citation_led_by_pair), errors,
     )
+    validate_citation_pair_row_order(citation_inventory, citation_ledger, errors)
     current_occurrence = 0
     current_source_ordinal = 0
     inventory_occurrence_numbers: dict[str, list[int]] = defaultdict(list)
@@ -7000,6 +7160,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"00-citation-inventory.csv:{line}: source ordinals are not "
                 "continuous within the occurrence"
             )
+        expected_pair_id = (
+            f"C{occurrence_number:04d}-S{current_source_ordinal:02d}"
+        )
+        if row["PairID"] != expected_pair_id:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: PairID must equal canonical "
+                f"reading-order ID {expected_pair_id}"
+            )
         reference_match = REFERENCE_ID_RE.fullmatch(
             row["DisplayedReferenceID"]
         )
@@ -7032,7 +7200,7 @@ def main(argv: list[str] | None = None) -> int:
         expected_context = candidate_occurrence_contexts.get(row["OccurrenceID"])
         if (
             expected_context is not None
-            and normalize_extracted_text(row["AdjacentPDFText"]) != expected_context
+            and row["AdjacentPDFText"] != expected_context
         ):
             errors.append(
                 f"00-citation-inventory.csv:{line}: AdjacentPDFText does not "
@@ -7124,11 +7292,9 @@ def main(argv: list[str] | None = None) -> int:
                     f"04-citation-claim-audit-ledger.csv:{line}: "
                     "ExactSourceLocator lacks a page/section/content locator"
                 )
-        if row["ReferenceID"] not in bib_inv_by_id:
-            errors.append(
-                f"04-citation-claim-audit-ledger.csv:{line}: "
-                f"unknown ReferenceID {row['ReferenceID']!r}"
-            )
+        validate_dangling_citation_audit_row(
+            row, bib_inv_by_id, line, errors
+        )
         requires_disposition = (
             support in {
                 "partial", "context-only", "mismatch", "unverifiable", "not-needed"
@@ -7158,7 +7324,7 @@ def main(argv: list[str] | None = None) -> int:
     validate_markdown_id_projection(
         root / "04-citation-claim-audit-ledger.md",
         set(citation_inv_by_pair),
-        re.compile(r"(?<![A-Za-z0-9])C\d{4}-S\d{2}(?![A-Za-z0-9])"),
+        PAIR_ID_TOKEN_RE,
         {"Pair ID", "PairID"},
         "citation-claim ledger",
         errors,

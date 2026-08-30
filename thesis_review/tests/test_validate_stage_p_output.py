@@ -1,0 +1,779 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import importlib.util
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from tests import test_validate_review_bundle as fixture_module
+
+
+STAGE_P_VALIDATOR = (
+    Path(__file__).resolve().parents[1]
+    / "scripts"
+    / "validate_stage_p_output.py"
+)
+STAGE_P_FILES = {
+    "00-process-parameters.json",
+    "00-manifest.md",
+    "01-policy-basis.md",
+    "00-page-inventory.csv",
+    "00-bibliography-inventory.csv",
+    "00-citation-candidate-ledger.csv",
+    "00-unmatched-bracket-ledger.csv",
+    "00-citation-inventory.csv",
+    "frozen-thesis.pdf",
+}
+PEER_AND_DOWNSTREAM_FILES = {
+    *(f"R{index}-comprehensive-review.md" for index in range(1, 6)),
+    "02-page-layout-ledger.md",
+    "02-page-layout-ledger.csv",
+    "03-bibliography-audit-ledger.md",
+    "03-bibliography-audit-ledger.csv",
+    "04-citation-claim-audit-ledger.md",
+    "04-citation-claim-audit-ledger.csv",
+    "05-ai-style-assessment.md",
+    "90-chair-synthesis.md",
+    "91-revision-ledger.md",
+    "91-revision-ledger.csv",
+    "91-ai-actionable-ledger.csv",
+    "92-new-evidence-or-experiments.md",
+    "92-new-evidence-or-experiments.csv",
+    "93-user-facing-summary.md",
+    "93-current-actionable-items.csv",
+    "93-current-ai-actionable-items.csv",
+    "94-post-freeze-prior-issue-closure.md",
+    "95-bundle-validation.md",
+}
+
+
+def load_stage_p_module():
+    spec = importlib.util.spec_from_file_location(
+        "test_stage_p_validator_module", STAGE_P_VALIDATOR
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("cannot load Stage-P validator for synthetic tests")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+STAGE_P_MODULE = load_stage_p_module()
+FULL_VALIDATOR_MODULE = STAGE_P_MODULE.load_validator()
+
+
+def read_rows(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        return list(reader.fieldnames or []), list(reader)
+
+
+def write_rows(
+    path: Path, headers: list[str], rows: list[dict[str, str]]
+) -> None:
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=headers, lineterminator="\n")
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def snapshot(root: Path) -> dict[str, tuple[str, str]]:
+    result: dict[str, tuple[str, str]] = {}
+    for path in sorted(root.rglob("*"), key=lambda item: item.as_posix()):
+        relative = path.relative_to(root).as_posix()
+        if path.is_dir():
+            result[relative] = ("directory", "")
+        else:
+            result[relative] = (
+                "file",
+                hashlib.sha256(path.read_bytes()).hexdigest().upper(),
+            )
+    return result
+
+
+class ValidateStagePOutputTests(unittest.TestCase):
+    def build_full_fixture(self, root: Path, *, doctorate: bool = False) -> None:
+        harness = fixture_module.ValidateReviewBundleTests(
+            methodName="test_complete_fixture_passes"
+        )
+        harness.build_bundle(root)
+        if doctorate:
+            harness.convert_bundle_to_doctorate(root)
+
+    def build_stage_p_only_fixture(
+        self, root: Path, *, doctorate: bool = False
+    ) -> None:
+        self.build_full_fixture(root, doctorate=doctorate)
+        for path in list(root.iterdir()):
+            if path.name in STAGE_P_FILES:
+                continue
+            if path.is_dir():
+                shutil.rmtree(path)
+            else:
+                path.unlink()
+
+    def run_stage_p(self, root: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-B", str(STAGE_P_VALIDATOR), str(root)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def run_full_validator(self, root: Path) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [sys.executable, "-B", str(STAGE_P_MODULE.VALIDATOR), str(root)],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    def refresh_process_identity(self, root: Path) -> None:
+        process_path = root / "00-process-parameters.json"
+        process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        manifest = root / "00-manifest.md"
+        manifest.write_text(
+            re.sub(
+                r"(?m)^- Process-parameter file and SHA-256: .*$",
+                "- Process-parameter file and SHA-256: "
+                f"00-process-parameters.json / {process_digest}",
+                manifest.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+
+    def assert_stage_p_and_full_fail(self, root: Path, needle: str) -> None:
+        stage_p = self.run_stage_p(root)
+        full = self.run_full_validator(root)
+        self.assertNotEqual(stage_p.returncode, 0, stage_p.stdout + stage_p.stderr)
+        self.assertNotEqual(full.returncode, 0, full.stdout + full.stderr)
+        self.assertIn(needle, stage_p.stdout)
+        self.assertIn(needle, full.stdout)
+
+    def assert_stage_p_fails(self, root: Path, needle: str) -> None:
+        result = self.run_stage_p(root)
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+        self.assertIn(needle, result.stdout)
+
+    def test_stage_p_only_fixture_passes_without_writing(self) -> None:
+        for doctorate in (False, True):
+            with self.subTest(doctorate=doctorate), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_stage_p_only_fixture(root, doctorate=doctorate)
+                before = snapshot(root)
+                result = self.run_stage_p(root)
+                after = snapshot(root)
+                self.assertEqual(
+                    result.returncode, 0, result.stdout + result.stderr
+                )
+                self.assertTrue(result.stdout.startswith("PASS\n"), result.stdout)
+                self.assertEqual(before, after)
+                self.assertFalse((root / "95-bundle-validation.md").exists())
+                self.assertFalse((root / "__pycache__").exists())
+
+    def test_scope_does_not_enumerate_or_open_peer_outputs(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_full_fixture(root)
+            original_iterdir = Path.iterdir
+            original_open = Path.open
+            original_read_text = Path.read_text
+            original_read_bytes = Path.read_bytes
+            original_is_file = Path.is_file
+
+            def guard(path: Path) -> None:
+                if path.name in PEER_AND_DOWNSTREAM_FILES:
+                    raise AssertionError(f"Stage-P gate touched peer path {path.name}")
+
+            def guarded_iterdir(path: Path):
+                if path.absolute() == root.absolute():
+                    raise AssertionError("Stage-P gate enumerated the bundle root")
+                return original_iterdir(path)
+
+            def guarded_open(path: Path, *args, **kwargs):
+                guard(path)
+                return original_open(path, *args, **kwargs)
+
+            def guarded_read_text(path: Path, *args, **kwargs):
+                guard(path)
+                return original_read_text(path, *args, **kwargs)
+
+            def guarded_read_bytes(path: Path, *args, **kwargs):
+                guard(path)
+                return original_read_bytes(path, *args, **kwargs)
+
+            def guarded_is_file(path: Path):
+                guard(path)
+                return original_is_file(path)
+
+            with (
+                mock.patch.object(Path, "iterdir", guarded_iterdir),
+                mock.patch.object(Path, "open", guarded_open),
+                mock.patch.object(Path, "read_text", guarded_read_text),
+                mock.patch.object(Path, "read_bytes", guarded_read_bytes),
+                mock.patch.object(Path, "is_file", guarded_is_file),
+            ):
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertEqual([], errors)
+
+    def test_reserved_process_basenames_are_rejected_without_touching_them(self) -> None:
+        cases = (
+            (
+                "frozen PDF alias",
+                "94-post-freeze-prior-issue-closure.md",
+                lambda process, target: process.__setitem__(
+                    "frozen_pdf_file", target
+                ),
+            ),
+            (
+                "governing-file alias",
+                "R1-comprehensive-review.md",
+                lambda process, target: process.__setitem__(
+                    "governing_local_files",
+                    [{
+                        "neutral_file": target,
+                        "official_title": "must not be opened",
+                        "sha256": "A" * 64,
+                    }],
+                ),
+            ),
+        )
+        for label, target, mutate in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_full_fixture(root)
+                process_path = root / "00-process-parameters.json"
+                process = json.loads(process_path.read_text(encoding="utf-8"))
+                mutate(process, target)
+                process_path.write_text(json.dumps(process), encoding="utf-8")
+                original_lstat = Path.lstat
+                original_open = Path.open
+                original_read_text = Path.read_text
+                original_read_bytes = Path.read_bytes
+                original_is_file = Path.is_file
+
+                def guard(path: Path) -> None:
+                    if path.name == target:
+                        raise AssertionError(f"reserved peer path was touched: {target}")
+
+                def guarded_lstat(path: Path, *args, **kwargs):
+                    guard(path)
+                    return original_lstat(path, *args, **kwargs)
+
+                def guarded_open(path: Path, *args, **kwargs):
+                    guard(path)
+                    return original_open(path, *args, **kwargs)
+
+                def guarded_read_text(path: Path, *args, **kwargs):
+                    guard(path)
+                    return original_read_text(path, *args, **kwargs)
+
+                def guarded_read_bytes(path: Path, *args, **kwargs):
+                    guard(path)
+                    return original_read_bytes(path, *args, **kwargs)
+
+                def guarded_is_file(path: Path):
+                    guard(path)
+                    return original_is_file(path)
+
+                with (
+                    mock.patch.object(Path, "lstat", guarded_lstat),
+                    mock.patch.object(Path, "open", guarded_open),
+                    mock.patch.object(Path, "read_text", guarded_read_text),
+                    mock.patch.object(Path, "read_bytes", guarded_read_bytes),
+                    mock.patch.object(Path, "is_file", guarded_is_file),
+                ):
+                    errors = STAGE_P_MODULE.validate_stage_p(
+                        root, FULL_VALIDATOR_MODULE
+                    )
+                self.assertTrue(
+                    any(
+                        "unsafe or" in error and "reserved" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
+    def test_p_receipt_has_exact_validator_insertion_and_no_helper_probe(self) -> None:
+        process = {
+            "degree_level": "masters",
+            "governing_local_files": [],
+            "frozen_pdf_file": "frozen-thesis.pdf",
+        }
+        expected_pair = [
+            "rules/scripts/validate_review_bundle.py",
+            "rules/scripts/validate_stage_p_output.py",
+        ]
+        with mock.patch.object(
+            FULL_VALIDATOR_MODULE,
+            "helper_inputs_for_recipient",
+            side_effect=AssertionError("P probed helpers"),
+        ):
+            opened = FULL_VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                process, 3, "P", Path("unused")
+            )
+        self.assertEqual(
+            opened[2 + len(FULL_VALIDATOR_MODULE.SKILL_REFERENCE_FILES):][:2],
+            expected_pair,
+        )
+        self.assertEqual(opened.count(expected_pair[0]), 1)
+        self.assertEqual(opened.count(expected_pair[1]), 1)
+        for actor in ("R1", "AI", "C", "S"):
+            actor_opened = FULL_VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                process, 3, actor
+            )
+            self.assertNotIn(expected_pair[1], actor_opened)
+        doctoral = dict(process)
+        doctoral["degree_level"] = "doctorate"
+        r5_opened = FULL_VALIDATOR_MODULE.canonical_stage_opened_inputs(
+            doctoral, 5, "R5"
+        )
+        self.assertIn("rules/scripts/validate_r5_output.py", r5_opened)
+        self.assertNotIn(expected_pair[1], r5_opened)
+
+    def test_manifest_and_policy_each_require_both_validator_rules(self) -> None:
+        for filename in ("00-manifest.md", "01-policy-basis.md"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_stage_p_only_fixture(root)
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "; rules/scripts/validate_stage_p_output.py", "", 1
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_stage_p_fails(
+                    root,
+                    "opened receipt must exactly equal the canonical ordered P allowlist",
+                )
+
+    def test_candidate_context_expansion_and_marker_mismatches_fail(self) -> None:
+        cases = (
+            (
+                "comma expansion",
+                lambda rows: rows.__setitem__(
+                    1, {**rows[1], "ExpandedNumbers": "3,8"}
+                ),
+                "canonical semicolon-separated marker expansion",
+            ),
+            (
+                "context",
+                lambda rows: rows.__setitem__(
+                    0,
+                    {
+                        **rows[0],
+                        "AdjacentPDFText": rows[0]["AdjacentPDFText"] + " wrong",
+                    },
+                ),
+                "deterministic frozen-PDF extraction window",
+            ),
+            (
+                "marker",
+                lambda rows: rows.__setitem__(
+                    0,
+                    {**rows[0], "Marker": "[2]", "ExpandedNumbers": "2"},
+                ),
+                "marker/expansion does not match the frozen-PDF extraction",
+            ),
+        )
+        for label, mutate, needle in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_stage_p_only_fixture(root)
+                path = root / "00-citation-candidate-ledger.csv"
+                headers, rows = read_rows(path)
+                mutate(rows)
+                write_rows(path, headers, rows)
+                self.assert_stage_p_fails(root, needle)
+
+    def test_scoped_and_full_gates_share_exact_candidate_contract(self) -> None:
+        cases = (
+            (
+                "generic evidence",
+                lambda rows: rows[0].__setitem__(
+                    "ClassificationEvidence", "non-citation"
+                ),
+                "ClassificationEvidence is not a concrete contextual reason",
+            ),
+            (
+                "noncanonical context bytes",
+                lambda rows: rows[0].__setitem__(
+                    "AdjacentPDFText",
+                    rows[0]["AdjacentPDFText"].replace(
+                        "fixture proposition", "fixture  proposition", 1
+                    ),
+                ),
+                "AdjacentPDFText",
+            ),
+            (
+                "noncanonical marker bytes",
+                lambda rows: rows[1].__setitem__("Marker", "[3, 8]"),
+                "Marker must equal its canonical whitespace/comma/dash normalization",
+            ),
+        )
+        for label, mutate, needle in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_full_fixture(root)
+                path = root / "00-citation-candidate-ledger.csv"
+                headers, rows = read_rows(path)
+                mutate(rows)
+                write_rows(path, headers, rows)
+                self.assert_stage_p_and_full_fail(root, needle)
+
+    def test_rendered_bibliography_entry_is_pdf_bound_in_both_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_full_fixture(root)
+            path = root / "00-bibliography-inventory.csv"
+            headers, rows = read_rows(path)
+            rows[0]["RenderedEntry"] += " fabricated"
+            write_rows(path, headers, rows)
+            self.assert_stage_p_and_full_fail(
+                root, "RenderedEntry does not exactly equal"
+            )
+
+    def test_duplicate_rendered_entries_remain_a_reviewable_paper_defect(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.rewrite_pdf_and_rehash(
+                root,
+                [
+                    "fixture proposition [1]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1].",
+                    "References\n[1] Duplicate reference.\n[2] Duplicate reference.",
+                ],
+            )
+            write_rows(
+                root / "00-bibliography-inventory.csv",
+                list(FULL_VALIDATOR_MODULE.BIB_INVENTORY_COLUMNS),
+                [
+                    {
+                        "ReferenceID": "REF0001",
+                        "DisplayedLabel": "[1]",
+                        "RenderedEntry": "Duplicate reference.",
+                        "Cited": "yes",
+                        "PDFSHA256": digest,
+                    },
+                    {
+                        "ReferenceID": "REF0002",
+                        "DisplayedLabel": "[2]",
+                        "RenderedEntry": "Duplicate reference.",
+                        "Cited": "no",
+                        "PDFSHA256": digest,
+                    },
+                ],
+            )
+            self.refresh_process_identity(root)
+            result = self.run_stage_p(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_dangling_displayed_reference_remains_visible_for_review(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.rewrite_pdf_and_rehash(
+                root,
+                [
+                    "fixture proposition [2]; quantization levels are [3, 8]; "
+                    "scale interval [0.85, 1].",
+                    "References\n[1] Fixture reference.",
+                ],
+            )
+            extraction_errors: list[str] = []
+            extracted, unmatched = FULL_VALIDATOR_MODULE.extract_numeric_bracket_candidates(
+                root / "frozen-thesis.pdf", {2}, extraction_errors
+            )
+            self.assertEqual([], extraction_errors)
+            self.assertEqual([], unmatched)
+            candidate_path = root / "00-citation-candidate-ledger.csv"
+            candidate_headers, candidate_rows = read_rows(candidate_path)
+            for row, source in zip(candidate_rows, extracted, strict=True):
+                row["Marker"] = source["Marker"]
+                row["ExpandedNumbers"] = (
+                    "N/A" if source["Expanded"] is None
+                    else ";".join(str(value) for value in source["Expanded"])
+                )
+                row["AdjacentPDFText"] = source["Adjacent"]
+                row["PDFSHA256"] = digest
+            write_rows(candidate_path, candidate_headers, candidate_rows)
+            citation_path = root / "00-citation-inventory.csv"
+            citation_headers, citation_rows = read_rows(citation_path)
+            citation_rows[0]["DisplayedReferenceID"] = "REF0002"
+            citation_rows[0]["AdjacentPDFText"] = extracted[0]["Adjacent"]
+            citation_rows[0]["PDFSHA256"] = digest
+            write_rows(citation_path, citation_headers, citation_rows)
+            bibliography_path = root / "00-bibliography-inventory.csv"
+            bibliography_headers, bibliography_rows = read_rows(bibliography_path)
+            bibliography_rows[0]["Cited"] = "no"
+            bibliography_rows[0]["PDFSHA256"] = digest
+            write_rows(bibliography_path, bibliography_headers, bibliography_rows)
+            self.refresh_process_identity(root)
+            result = self.run_stage_p(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_pair_ids_support_one_hundred_sources_and_numeric_sorting(self) -> None:
+        self.assertIsNotNone(FULL_VALIDATOR_MODULE.PAIR_ID_RE.fullmatch("C0001-S100"))
+        self.assertLess(
+            FULL_VALIDATOR_MODULE.pair_id_sort_key("C0001-S99"),
+            FULL_VALIDATOR_MODULE.pair_id_sort_key("C0001-S100"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = "A" * 64
+            numbers = list(range(1, 101))
+            context = "claim supported by the complete source range [1-100]"
+            write_rows(
+                root / "00-citation-candidate-ledger.csv",
+                list(FULL_VALIDATOR_MODULE.CITATION_CANDIDATE_COLUMNS),
+                [{
+                    "CandidateID": "BC0001",
+                    "PhysicalPage": "1",
+                    "Marker": "[1-100]",
+                    "ExpandedNumbers": ";".join(str(value) for value in numbers),
+                    "Classification": "citation",
+                    "ClassificationEvidence": "source marker attached to the claim",
+                    "MappedOccurrenceID": "C0001",
+                    "AdjacentPDFText": context,
+                    "PDFSHA256": digest,
+                }],
+            )
+            write_rows(
+                root / "00-unmatched-bracket-ledger.csv",
+                list(FULL_VALIDATOR_MODULE.UNMATCHED_BRACKET_COLUMNS),
+                [],
+            )
+            write_rows(
+                root / "00-citation-inventory.csv",
+                list(FULL_VALIDATOR_MODULE.CITATION_INVENTORY_COLUMNS),
+                [{
+                    "PairID": f"C0001-S{index:02d}",
+                    "OccurrenceID": "C0001",
+                    "PDFLocation": "physical p.1",
+                    "DisplayedReferenceID": f"REF{index:04d}",
+                    "AdjacentPDFText": context,
+                    "PDFSHA256": digest,
+                } for index in numbers],
+            )
+            bibliography = [{
+                "ReferenceID": f"REF{index:04d}",
+                "DisplayedLabel": f"[{index}]",
+                "RenderedEntry": f"Reference {index}.",
+                "Cited": "yes",
+                "PDFSHA256": digest,
+            } for index in numbers]
+            errors: list[str] = []
+            extracted = [{
+                "PhysicalPage": 1,
+                "Marker": "[1-100]",
+                "Expanded": numbers,
+                "Adjacent": context,
+                "Prefix": "claim cites the following sources ",
+            }]
+            with (
+                mock.patch.object(
+                    FULL_VALIDATOR_MODULE,
+                    "derive_and_validate_reference_pages",
+                    return_value=set(),
+                ),
+                mock.patch.object(
+                    FULL_VALIDATOR_MODULE,
+                    "extract_numeric_bracket_candidates",
+                    return_value=(extracted, []),
+                ),
+                mock.patch.object(FULL_VALIDATOR_MODULE, "validate_manifest"),
+            ):
+                STAGE_P_MODULE.validate_packet_reconciliation(
+                    FULL_VALIDATOR_MODULE,
+                    root,
+                    {"governing_rule_urls": []},
+                    root / "unused.pdf",
+                    digest,
+                    1,
+                    5,
+                    [{
+                        "PageID": "P0001",
+                        "PhysicalPage": "1",
+                        "PrintedPage": "",
+                        "Region": "chapter",
+                        "MechanicalSignals": "none",
+                        "PDFSHA256": digest,
+                    }],
+                    bibliography,
+                    errors,
+                )
+            self.assertEqual([], errors)
+
+    def test_citation_inventory_pair_page_reference_and_context_must_match(self) -> None:
+        cases = (
+            (
+                "reference order",
+                "DisplayedReferenceID",
+                "REF0002",
+                "citation candidate-to-inventory number mismatch",
+            ),
+            (
+                "physical page",
+                "PDFLocation",
+                "physical p.2",
+                "PDFLocation page does not match the mapped candidate",
+            ),
+            (
+                "candidate context",
+                "AdjacentPDFText",
+                "wrong occurrence context",
+                "AdjacentPDFText does not equal the mapped candidate context",
+            ),
+        )
+        for label, field, value, needle in cases:
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_stage_p_only_fixture(root)
+                path = root / "00-citation-inventory.csv"
+                headers, rows = read_rows(path)
+                rows[0][field] = value
+                write_rows(path, headers, rows)
+                self.assert_stage_p_fails(root, needle)
+
+    def test_unmatched_glyph_context_is_reconciled_exactly(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            digest = process["selected_pdf_sha256"]
+            write_rows(
+                root / "00-unmatched-bracket-ledger.csv",
+                list(FULL_VALIDATOR_MODULE.UNMATCHED_BRACKET_COLUMNS),
+                [{
+                    "GlyphID": "UBG0001",
+                    "PhysicalPage": "1",
+                    "Glyph": "[",
+                    "AdjacentPDFText": "wrong deterministic context",
+                    "Disposition": "rendered extraction artifact adjudicated manually",
+                    "PDFSHA256": digest,
+                }],
+            )
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace(
+                    "- Unmatched square-bracket glyphs: 0",
+                    "- Unmatched square-bracket glyphs: 1",
+                )
+                .replace(
+                    "- Unmatched glyph dispositions: No unmatched glyph was found in the rendered fixture page.",
+                    "- Unmatched glyph dispositions: 1 glyph is adjudicated in 00-unmatched-bracket-ledger.csv.",
+                ),
+                encoding="utf-8",
+            )
+            original_extract = (
+                FULL_VALIDATOR_MODULE.extract_numeric_bracket_candidates
+            )
+
+            def injected_extract(pdf_path, reference_pages, errors):
+                candidates, _unmatched = original_extract(
+                    pdf_path, reference_pages, errors
+                )
+                return candidates, [{
+                    "PhysicalPage": 1,
+                    "Glyph": "[",
+                    "Adjacent": "expected deterministic context",
+                }]
+
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "extract_numeric_bracket_candidates",
+                side_effect=injected_extract,
+            ):
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertTrue(
+                any(
+                    "00-unmatched-bracket-ledger.csv:2: AdjacentPDFText"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_planned_stage_v_does_not_probe_stage_v_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["actor_prompt_sha256"]["V"] = "F" * 64
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?m)^- Process-parameter file and SHA-256: .*$",
+                    "- Process-parameter file and SHA-256: "
+                    f"00-process-parameters.json / {process_digest}",
+                    manifest.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+            original_is_file = Path.is_file
+
+            def guarded_is_file(path: Path):
+                if path.name == "94-post-freeze-prior-issue-closure.md":
+                    raise AssertionError("Stage-P gate probed Stage V")
+                return original_is_file(path)
+
+            with mock.patch.object(Path, "is_file", guarded_is_file):
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertEqual([], errors)
+
+    def test_missing_owned_file_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            (root / "00-citation-inventory.csv").unlink()
+            self.assert_stage_p_fails(
+                root, "missing or unsafe exact Stage-P path: 00-citation-inventory.csv"
+            )
+
+    def test_documented_contract_exposes_exact_extraction_and_pass_gate(self) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        skill_text = (skill_root / "SKILL.md").read_text(encoding="utf-8")
+        ledger_text = (
+            skill_root / "references" / "ledger-validation.md"
+        ).read_text(encoding="utf-8")
+        template_text = (
+            skill_root / "references" / "report-template.md"
+        ).read_text(encoding="utf-8")
+        for text in (skill_text, ledger_text, template_text):
+            self.assertIn("validate_stage_p_output.py", text)
+        self.assertIn("PdfReader(..., strict=False)", skill_text)
+        self.assertIn("semicolon-separated", skill_text)
+        self.assertIn("first nonempty stdout line is exactly `PASS`", skill_text)
+
+
+if __name__ == "__main__":
+    unittest.main()

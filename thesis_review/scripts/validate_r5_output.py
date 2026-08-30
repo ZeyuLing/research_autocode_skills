@@ -38,6 +38,18 @@ REQUIRED_FILES = (
 )
 
 
+def safe_dynamic_round_basename(module: Any, value: Any) -> bool:
+    """Reject a process name that aliases staged/current/downstream artifacts."""
+
+    return (
+        isinstance(value, str)
+        and module.is_neutral_portable_basename(value)
+        and module.portable_basename_key(value)
+        not in module.RESERVED_ROUND_BASENAME_KEYS
+        and module.RENDER_ARTIFACT_BASENAME_RE.fullmatch(value) is None
+    )
+
+
 def load_validator() -> Any:
     """Load the sibling full validator from the same rules/scripts directory."""
 
@@ -72,36 +84,45 @@ def require_r5_inputs(module: Any, root: Path, errors: list[str]) -> None:
             errors.append(f"missing or unsafe required R5 input: {filename}")
 
 
-def preflight_r5_boundary(module: Any, root: Path, errors: list[str]) -> bool:
+def preflight_r5_boundary(
+    module: Any, root: Path, errors: list[str]
+) -> dict[str, Any] | None:
     """Reject aliases on exact R5 paths without enumerating the bundle root."""
 
     if module.is_link_or_reparse(root) or not root.is_dir():
         errors.append("round directory is missing or is a symlink/junction/reparse point")
-        return False
+        return None
     process_path = root / "00-process-parameters.json"
     if module.is_link_or_reparse(process_path) or not process_path.is_file():
         errors.append("missing or unsafe required R5 input: 00-process-parameters.json")
-        return False
+        return None
     try:
         process = json.loads(process_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"cannot safely preflight 00-process-parameters.json: {exc}")
-        return False
+        return None
+    if not isinstance(process, dict):
+        errors.append("00-process-parameters.json root must be an object")
+        return None
     exact_paths = [root / filename for filename in REQUIRED_FILES]
-    if isinstance(process, dict):
-        frozen_name = process.get("frozen_pdf_file")
-        if isinstance(frozen_name, str) and module.is_neutral_portable_basename(
-            frozen_name
-        ):
-            exact_paths.append(root / frozen_name)
-        local_files = process.get("governing_local_files")
-        if isinstance(local_files, list):
-            for item in local_files:
-                filename = item.get("neutral_file") if isinstance(item, dict) else None
-                if isinstance(filename, str) and module.is_neutral_portable_basename(
-                    filename
-                ):
-                    exact_paths.append(root / filename)
+    frozen_name = process.get("frozen_pdf_file")
+    if safe_dynamic_round_basename(module, frozen_name):
+        exact_paths.append(root / frozen_name)
+    elif frozen_name is not None:
+        errors.append(
+            "frozen_pdf_file is unsafe or collides with a reserved round basename"
+        )
+    local_files = process.get("governing_local_files")
+    if isinstance(local_files, list):
+        for item in local_files:
+            filename = item.get("neutral_file") if isinstance(item, dict) else None
+            if safe_dynamic_round_basename(module, filename):
+                exact_paths.append(root / filename)
+            elif filename is not None:
+                errors.append(
+                    "governing_local_files contains an unsafe or reserved "
+                    "neutral_file"
+                )
     unsafe = sorted(
         path.name for path in exact_paths if module.is_link_or_reparse(path)
     )
@@ -129,7 +150,7 @@ def preflight_r5_boundary(module: Any, root: Path, errors: list[str]) -> bool:
             errors.append(
                 f"{directory_name} contains unsafe aliases: {child_aliases}"
             )
-    return not errors
+    return process if not errors else None
 
 
 def validate_packet_inputs(
@@ -222,9 +243,7 @@ def validate_packet_inputs(
                     f"00-unmatched-bracket-ledger.csv:{line}: Glyph does not "
                     "match the frozen-PDF extraction"
                 )
-            if module.normalize_extracted_text(
-                row.get("AdjacentPDFText", "")
-            ) != extracted["Adjacent"]:
+            if row.get("AdjacentPDFText", "") != extracted["Adjacent"]:
                 errors.append(
                     f"00-unmatched-bracket-ledger.csv:{line}: AdjacentPDFText "
                     "does not match the frozen-PDF extraction"
@@ -263,6 +282,11 @@ def validate_packet_inputs(
                 f"00-citation-candidate-ledger.csv:{line}: invalid PhysicalPage"
             )
         marker = module.normalize_numeric_marker(row.get("Marker", ""))
+        if row.get("Marker", "") != marker:
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: Marker must equal "
+                "its canonical whitespace/comma/dash normalization"
+            )
         parsed_numbers = module.expand_numeric_marker(row.get("Marker", ""))
         expected_expansion = (
             "N/A" if parsed_numbers is None
@@ -280,14 +304,15 @@ def validate_packet_inputs(
                     f"00-citation-candidate-ledger.csv:{line}: PhysicalPage does "
                     "not match the frozen-PDF extraction"
                 )
-            if marker != extracted["Marker"] or parsed_numbers != extracted["Expanded"]:
+            if (
+                row.get("Marker", "") != extracted["Marker"]
+                or parsed_numbers != extracted["Expanded"]
+            ):
                 errors.append(
                     f"00-citation-candidate-ledger.csv:{line}: marker/expansion "
                     "does not match the frozen-PDF extraction"
                 )
-            if module.normalize_extracted_text(
-                row.get("AdjacentPDFText", "")
-            ) != extracted["Adjacent"]:
+            if row.get("AdjacentPDFText", "") != extracted["Adjacent"]:
                 errors.append(
                     f"00-citation-candidate-ledger.csv:{line}: AdjacentPDFText "
                     "does not match the frozen-PDF extraction"
@@ -300,8 +325,8 @@ def validate_packet_inputs(
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: invalid Classification"
             )
-        evidence = row.get("ClassificationEvidence", "").strip()
-        if len(evidence) < 12 or module.is_placeholder(evidence):
+        evidence = row.get("ClassificationEvidence", "")
+        if not module.valid_candidate_classification_evidence(evidence):
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: "
                 "ClassificationEvidence is not a concrete contextual reason"
@@ -327,9 +352,7 @@ def validate_packet_inputs(
                 )
             occurrence_numbers[mapped] = parsed_numbers or []
             occurrence_pages[mapped] = physical_page
-            occurrence_contexts[mapped] = module.normalize_extracted_text(
-                row.get("AdjacentPDFText", "")
-            )
+            occurrence_contexts[mapped] = row.get("AdjacentPDFText", "")
         elif classification == "non-citation" and mapped != "N/A":
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: non-citation must use "
@@ -357,7 +380,6 @@ def validate_packet_inputs(
     current_occurrence = 0
     current_source_ordinal = 0
     inventory_numbers: dict[str, list[int]] = defaultdict(list)
-    bibliography_ids = {row.get("ReferenceID", "") for row in bibliography_inventory}
     for line, row in enumerate(citation_inventory, start=2):
         occurrence_match = module.OCCURRENCE_ID_RE.fullmatch(
             row.get("OccurrenceID", "")
@@ -394,6 +416,14 @@ def validate_packet_inputs(
                 f"00-citation-inventory.csv:{line}: source ordinals are not "
                 "continuous within the occurrence"
             )
+        expected_pair_id = (
+            f"C{occurrence_number:04d}-S{current_source_ordinal:02d}"
+        )
+        if row.get("PairID", "") != expected_pair_id:
+            errors.append(
+                f"00-citation-inventory.csv:{line}: PairID must equal canonical "
+                f"reading-order ID {expected_pair_id}"
+            )
         reference_match = module.REFERENCE_ID_RE.fullmatch(
             row.get("DisplayedReferenceID", "")
         )
@@ -405,11 +435,6 @@ def validate_packet_inputs(
             inventory_numbers[row["OccurrenceID"]].append(
                 int(reference_match.group(1))
             )
-            if row["DisplayedReferenceID"] not in bibliography_ids:
-                errors.append(
-                    f"00-citation-inventory.csv:{line}: DisplayedReferenceID is "
-                    "absent from 00-bibliography-inventory.csv"
-                )
         located_page = module.parse_physical_page_locator(row.get("PDFLocation", ""))
         expected_page = occurrence_pages.get(row["OccurrenceID"])
         if located_page is None or located_page < 1 or located_page > page_count:
@@ -423,9 +448,10 @@ def validate_packet_inputs(
                 "match the mapped candidate"
             )
         expected_context = occurrence_contexts.get(row["OccurrenceID"])
-        if expected_context is not None and module.normalize_extracted_text(
-            row.get("AdjacentPDFText", "")
-        ) != expected_context:
+        if (
+            expected_context is not None
+            and row.get("AdjacentPDFText", "") != expected_context
+        ):
             errors.append(
                 f"00-citation-inventory.csv:{line}: AdjacentPDFText does not "
                 "equal the mapped candidate context"
@@ -750,16 +776,6 @@ def validate_bibliography_outputs(
                 f"00-bibliography-inventory.csv:{index + 1}: "
                 "ReferenceID sequence mismatch"
             )
-    duplicates = sorted(
-        value for value, count in Counter(
-            row.get("RenderedEntry", "") for row in bibliography_inventory
-        ).items() if value and count > 1
-    )
-    if duplicates:
-        errors.append(
-            "00-bibliography-inventory.csv: duplicate exact RenderedEntry values"
-        )
-
     cited_ids = {
         row.get("DisplayedReferenceID", "") for row in citation_inventory
         if module.REFERENCE_ID_RE.fullmatch(row.get("DisplayedReferenceID", ""))
@@ -940,11 +956,19 @@ def validate_report_links(
 
 def validate_r5(root: Path, module: Any) -> list[str]:
     errors: list[str] = []
-    if not preflight_r5_boundary(module, root, errors):
+    preflight_process = preflight_r5_boundary(module, root, errors)
+    if preflight_process is None:
         return errors
+    prompt_map = preflight_process.get("actor_prompt_sha256")
     process, frozen_path, expected_hash, page_count, reviewer_count, pdf_sizes = (
         module.validate_process(
-            root, errors, enforce_single_reviewer_pdf=False
+            root,
+            errors,
+            enforce_single_reviewer_pdf=False,
+            process_override=preflight_process,
+            stage_v_present_override=(
+                isinstance(prompt_map, dict) and "V" in prompt_map
+            ),
         )
     )
     if errors:
