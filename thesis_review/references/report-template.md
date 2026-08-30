@@ -132,6 +132,8 @@ When the unmatched count is positive, `00-unmatched-bracket-ledger.csv` is the r
 
 Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: exact `Actor ID`, `Review round ID`, and `Review retry ID`; fresh-context declaration using the exact no-inherited-turn wording above; one input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, the allowed `public_endpoints=[...]`, and the three boundary confirmations; the process-bound operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
 
+For doctoral R5, the canonical `opened=[...]` sequence has one fixed R5-only insertion: immediately after `ai-style-audit.md`, include `rules/scripts/validate_review_bundle.py; rules/scripts/validate_r5_output.py`, then continue with process-ordered governing local files, `<frozen_pdf_file>`, the seven Stage-P packet artifacts in canonical order, and any R5-recipient helper provenance/outputs. The same sequence appears byte-for-byte in `R5-comprehensive-review.md`, `02-page-layout-ledger.md`, and `03-bibliography-audit-ledger.md`. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. The scripts are mechanical rule inputs, not thesis evidence, and are absent from every other reviewer's receipt.
+
 ## Independent reviewer report
 
 ```markdown
@@ -206,7 +208,7 @@ Explain the additional scrutiny performed because of this reviewer's expertise. 
 - S0 subtype: procedural / integrity/foundational / N/A
 - Remedy: W/E/N/P
 - Required for the current defense conclusion: yes/no; if `yes` with remedy `N`, the skill-default grade cannot exceed C until the evidence is supplied or the dependent claim is validly narrowed
-- Location: exact PDF physical/logical page and section/table/figure/equation
+- Location: `physical p.<n>` within `1..physical_page_count`, optionally followed by logical page and section/table/figure/equation detail
 - Observation: directly visible fact
 - Why it matters: affected rule, claim, or reader task
 - Evidence: visible PDF excerpt/data or a permitted public source used to verify a citation, without excessive quotation
@@ -222,6 +224,8 @@ Explain the additional scrutiny performed because of this reviewer's expertise. 
 ...
 ```
 
+Every Gate A--I row, every finding block, and every nonempty question row contains at least one physical-page anchor within `1..physical_page_count`; new artifacts emit that anchor as `physical p.<n>`. A logical page, section, table, figure, or equation locator may follow but never replaces the physical anchor. Finding headings use continuous `Rn-F01...` IDs in report order, with no gap or duplicate. Nonempty question rows use continuous `Rn-Q01...` IDs in report order; the header-only canonical question table is the explicit no-question result.
+
 The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
 
 ```markdown
@@ -233,6 +237,8 @@ The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally r
 - Machine-readable master: 02-page-layout-ledger.csv; duplicate/missing/extra page IDs:
 - Source-forcing cause: not verifiable from the PDF
 ```
+
+In the final `02-page-layout-ledger.csv`, every `Disposition` is exactly `clean`, `intentional`, or `finding Rn-Fxx`, where `Rn` is the assigned page owner. `recheck after edit` is an intermediate work state and is invalid in a frozen final ledger. Every referenced finding ID must exist in the current owner's report. `Actionable layout findings` is the number of distinct referenced finding IDs, not the number of page rows; one finding may anchor several pages and still counts once.
 
 The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
 
@@ -271,9 +277,9 @@ The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionall
 - Machine-readable master: 04-citation-claim-audit-ledger.csv; duplicate/missing/extra Pair IDs:
 ```
 
-Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals, suspect/resolved/unresolved counts, and Gate-I actionable-finding counts reconcile to `02`; bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
+Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals and suspect/resolved/unresolved counts reconcile to `02`, while `Actionable layout findings` equals the distinct current-owner finding IDs referenced by exact final `02` dispositions; unrelated Gate-I findings do not inflate it. Bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
 
-Questions are not counted as defects until evidence supports them. Use continuous `Rn-Q01...` IDs in report order; an empty canonical table is the explicit no-question result. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.
+Questions are not counted as defects until evidence supports them. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.
 
 Before freezing an R-numbered report, verify that the decision regime, category, recommendation, severity profile, and required revision path are consistent with `grading-and-verdicts.md`.
 

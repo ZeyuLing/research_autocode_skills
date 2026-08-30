@@ -335,6 +335,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
         self.assertEqual(parse("物理页面：041"), 41)
         self.assertEqual(parse("物理第 52 页"), 52)
         self.assertIsNone(parse("printed p.7"))
+        parse_canonical = VALIDATOR_MODULE.parse_canonical_physical_page_locator
+        self.assertEqual(parse_canonical("physical p.7, section"), 7)
+        self.assertIsNone(parse_canonical("physical page 7"))
+        self.assertIsNone(parse_canonical("物理页 7"))
 
     def test_persona_signal_matching_rejects_accidental_latin_substrings(self) -> None:
         match = VALIDATOR_MODULE.contains_persona_signal
@@ -1415,6 +1419,15 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + (bib_section.group(0).strip() if bib_section else "")
             + "\n"
         )
+        r5_opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 5, "R5")
+        )
+        non_r5_opened = "; ".join(
+            VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 5, "R1")
+        )
+        r5_text = r5_text.replace(
+            f"opened=[{non_r5_opened}]", f"opened=[{r5_opened}]"
+        )
         (root / "R4-comprehensive-review.md").write_text(r4_text, encoding="utf-8")
         (root / "R5-comprehensive-review.md").write_text(r5_text, encoding="utf-8")
 
@@ -1432,6 +1445,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ACTOR_PROMPT_HASHES[new_actor],
                 1,
             )
+            if new_actor == "R5":
+                text = text.replace(
+                    f"opened=[{non_r5_opened}]", f"opened=[{r5_opened}]"
+                )
             path.write_text(text, encoding="utf-8")
 
         old_sources = "R1-F01, R2-F01, R3-F01"
@@ -2736,28 +2753,29 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
 
     def test_page_layout_disposition_uses_closed_final_grammar(self) -> None:
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            self.build_bundle(root)
-            csv_path = root / "02-page-layout-ledger.csv"
-            csv_path.write_text(
-                csv_path.read_text(encoding="utf-8").replace(
-                    ",clean,", ",no finding R3-F01,", 1
-                ),
-                encoding="utf-8",
-            )
-            markdown_path = root / "02-page-layout-ledger.md"
-            markdown_path.write_text(
-                markdown_path.read_text(encoding="utf-8").replace(
-                    "| clean |", "| no finding R3-F01 |", 1
-                ),
-                encoding="utf-8",
-            )
-            self.assert_fails(
-                root,
-                "Disposition must be exactly clean, intentional, recheck after "
-                "edit, or finding R3-Fxx",
-            )
+        for invalid in ("no finding R3-F01", "recheck after edit"):
+            with self.subTest(invalid=invalid), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_bundle(root)
+                csv_path = root / "02-page-layout-ledger.csv"
+                csv_path.write_text(
+                    csv_path.read_text(encoding="utf-8").replace(
+                        ",clean,", f",{invalid},", 1
+                    ),
+                    encoding="utf-8",
+                )
+                markdown_path = root / "02-page-layout-ledger.md"
+                markdown_path.write_text(
+                    markdown_path.read_text(encoding="utf-8").replace(
+                        "| clean |", f"| {invalid} |", 1
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_fails(
+                    root,
+                    "Disposition must be exactly clean, intentional, or finding "
+                    "R3-Fxx; recheck after edit is not a valid final disposition",
+                )
 
     def test_reviewer_persona_cannot_be_copied_from_another_role(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4178,6 +4196,12 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "03/04 audit ledgers reference unknown current owning-reviewer "
                 "finding/question IDs ['R3-F99']",
             ),
+            (
+                "owner item plus prose",
+                "R3-F01; explanatory prose",
+                "the whole cell must be exactly one current owner ID with no "
+                "prose or second ID",
+            ),
         )
         for label, disposition, error in cases:
             with self.subTest(case=label), tempfile.TemporaryDirectory() as directory:
@@ -4185,6 +4209,18 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 self.build_bundle(root)
                 self.set_bibliography_mismatch(root, disposition)
                 self.assert_fails(root, error)
+
+        with self.subTest(case="REF token outside ID column"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            path = root / "03-bibliography-audit-ledger.csv"
+            headers, rows = read_csv(path)
+            rows[0]["EvidenceNote"] += " REF0001"
+            write_csv(path, headers, rows)
+            self.assert_fails(
+                root,
+                "REFnnnn tokens are allowed only in the ReferenceID column",
+            )
 
     def test_citation_mismatch_cannot_have_none_as_disposition(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

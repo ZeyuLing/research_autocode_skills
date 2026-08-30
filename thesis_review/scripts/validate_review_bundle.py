@@ -284,6 +284,10 @@ SKILL_REFERENCE_FILES = [
     "report-template.md", "ledger-validation.md", "rendered-pagination-audit.md",
     "citation-audit.md", "ai-style-audit.md",
 ]
+R5_VALIDATOR_RULE_INPUTS = [
+    "rules/scripts/validate_review_bundle.py",
+    "rules/scripts/validate_r5_output.py",
+]
 
 
 def portable_basename_key(value: str) -> str:
@@ -446,6 +450,7 @@ def preflight_reparse_boundary(root: Path, errors: list[str]) -> bool:
 # would make basename-only opened-input receipts ambiguous even when the bytes hash.
 RESERVED_ROUND_BASENAMES = {
     "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
+    *(Path(value).name for value in R5_VALIDATOR_RULE_INPUTS),
     "00-manifest.md", "00-page-inventory.csv",
     "00-bibliography-inventory.csv", "00-citation-candidate-ledger.csv",
     "00-unmatched-bracket-ledger.csv", "00-citation-inventory.csv",
@@ -784,6 +789,17 @@ def parse_physical_page_locator(value: str) -> int | None:
     if match is None:
         return None
     return int(next(group for group in match.groups() if group is not None))
+
+
+def parse_canonical_physical_page_locator(value: str) -> int | None:
+    """Return the first canonical blind-review locator, ``physical p.<n>``."""
+
+    match = re.search(
+        r"(?i)(?<![A-Za-z0-9])physical[ \t]+p\.[ \t]*0*(\d+)"
+        r"(?![A-Za-z0-9])",
+        value,
+    )
+    return int(match.group(1)) if match is not None else None
 
 
 def contains_persona_signal(value: str, signal: str) -> bool:
@@ -1522,7 +1538,7 @@ def canonical_stage_opened_inputs(
     process: dict[str, Any], reviewer_count: int, actor_id: str,
     root: Path | None = None,
 ) -> list[str]:
-    """Return the only local basenames a substantive actor may open."""
+    """Return the only ordered local rule/input paths a substantive actor may open."""
 
     governing = [
         str(item.get("neutral_file"))
@@ -1530,9 +1546,14 @@ def canonical_stage_opened_inputs(
         if isinstance(item, dict) and item.get("neutral_file")
     ]
     frozen = str(process.get("frozen_pdf_file", ""))
+    r5_validator_rules = (
+        R5_VALIDATOR_RULE_INPUTS
+        if process.get("degree_level") == "doctorate" and actor_id == "R5"
+        else []
+    )
     base_rules = [
         "00-process-parameters.json", "SKILL.md", *SKILL_REFERENCE_FILES,
-        *governing, frozen,
+        *r5_validator_rules, *governing, frozen,
     ]
     packet = [
         "00-manifest.md", "01-policy-basis.md", "00-page-inventory.csv",
@@ -2094,13 +2115,18 @@ def parse_reviewer_findings(
             errors.append(
                 f"{filename}: {finding_id} defense-conclusion field must start yes/no"
             )
-        finding_page = parse_physical_page_locator(normalized_fields["Location"])
+        finding_page = parse_canonical_physical_page_locator(
+            normalized_fields["Location"]
+        )
         if (
             finding_page is None
             or finding_page < 1
             or finding_page > physical_page_count
         ):
-            errors.append(f"{filename}: {finding_id} lacks a physical-PDF location")
+            errors.append(
+                f"{filename}: {finding_id} Location requires an in-range "
+                "canonical physical p.<n> anchor"
+            )
         if normalized_fields["Confidence"].casefold() not in {
             "high", "medium", "low"
         }:
@@ -2150,9 +2176,12 @@ def parse_reviewer_questions(
             continue
         numbers.append(int(match.group(1)))
         result[row[0]] = row
-        page = parse_physical_page_locator(row[1])
+        page = parse_canonical_physical_page_locator(row[1])
         if page is None or page < 1 or page > physical_page_count:
-            errors.append(f"{filename}: {row[0]} lacks a valid physical-PDF anchor")
+            errors.append(
+                f"{filename}: {row[0]} Exact PDF anchor requires an in-range "
+                "canonical physical p.<n> anchor"
+            )
         if any(len(cell) < 8 or is_placeholder(cell) for cell in row[2:]):
             errors.append(f"{filename}: {row[0]} question row is incomplete")
     if numbers != list(range(1, len(numbers) + 1)):
@@ -2435,7 +2464,7 @@ def validate_reviewer_report(
             errors.append(f"{path.name}: Gate {gate} has invalid review depth")
         if cells[2].casefold() not in {"adequate", "concern", "unverifiable", "n/a"}:
             errors.append(f"{path.name}: Gate {gate} has invalid disposition")
-        gate_page = parse_physical_page_locator(cells[3])
+        gate_page = parse_canonical_physical_page_locator(cells[3])
         if (
             len(cells[3]) < 5
             or is_placeholder(cells[3])
@@ -2443,7 +2472,10 @@ def validate_reviewer_report(
             or gate_page < 1
             or gate_page > physical_page_count
         ):
-            errors.append(f"{path.name}: Gate {gate} lacks decisive anchored evidence")
+            errors.append(
+                f"{path.name}: Gate {gate} evidence requires an in-range "
+                "canonical physical p.<n> anchor"
+            )
         related_finding_ids = parse_related_finding_ids(cells[4])
         if (
             related_finding_ids is None
@@ -5699,7 +5731,10 @@ def validate_manifest(
 
 
 def validate_process(
-    root: Path, errors: list[str]
+    root: Path,
+    errors: list[str],
+    *,
+    enforce_single_reviewer_pdf: bool = True,
 ) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
     process_path = root / "00-process-parameters.json"
     try:
@@ -5868,17 +5903,20 @@ def validate_process(
         errors.append(
             f"frozen_pdf_file {frozen_name!r} collides with a governing local file"
         )
-    reviewer_visible_pdfs = sorted(
-        path.name for path in root.iterdir()
-        if path.is_file()
-        and path.suffix.casefold() == ".pdf"
-        and portable_basename_key(path.name) not in governing_basenames
-    )
-    if reviewer_visible_pdfs != [frozen_name]:
-        errors.append(
-            "round directory must contain exactly the one process-selected "
-            f"reviewer-visible thesis PDF; observed={reviewer_visible_pdfs}"
+    if enforce_single_reviewer_pdf:
+        reviewer_visible_pdfs = sorted(
+            path.name for path in root.iterdir()
+            if path.is_file()
+            and path.suffix.casefold() == ".pdf"
+            and portable_basename_key(path.name) not in governing_basenames
         )
+        if reviewer_visible_pdfs != [frozen_name]:
+            errors.append(
+                "round directory must contain exactly the one process-selected "
+                f"reviewer-visible thesis PDF; observed={reviewer_visible_pdfs}"
+            )
+    elif frozen_name and Path(frozen_name).suffix.casefold() != ".pdf":
+        errors.append("frozen_pdf_file must name the process-selected PDF")
     expected_hash = str(process.get("selected_pdf_sha256") or "").upper()
     if not HEX64_RE.fullmatch(expected_hash):
         errors.append("selected_pdf_sha256 must be 64 hexadecimal characters")
@@ -5963,6 +6001,21 @@ def validate_rows_mandatory(
                 row, field, f"{filename}:{line}", errors,
                 allow_blank=field in allowed,
             )
+
+
+def validate_reference_ids_only_in_id_column(
+    rows: list[dict[str, str]], filename: str, errors: list[str]
+) -> None:
+    """Keep canonical REFnnnn tokens exclusively in the ReferenceID column."""
+
+    token_re = re.compile(r"(?<![A-Za-z0-9])REF\d{4}(?![A-Za-z0-9])")
+    for line, row in enumerate(rows, start=2):
+        for field, value in row.items():
+            if field != "ReferenceID" and token_re.search(value or ""):
+                errors.append(
+                    f"{filename}:{line}: REFnnnn tokens are allowed only in the "
+                    f"ReferenceID column; found one in {field}"
+                )
 
 
 def page_layout_finding_ids(
@@ -6357,16 +6410,16 @@ def main(argv: list[str] | None = None) -> int:
             rf"(?i)finding[ \t]+{page_owner_id}-F\d{{2,4}}",
             disposition_value,
         )
-        if (
-            disposition not in {"clean", "intentional", "recheck after edit"}
-            and valid_layout_finding is None
-        ):
+        if disposition not in {"clean", "intentional"} and valid_layout_finding is None:
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: Disposition must be exactly "
-                f"clean, intentional, recheck after edit, or finding "
-                f"{page_owner_id}-Fxx"
+                f"clean, intentional, or finding {page_owner_id}-Fxx; "
+                "recheck after edit is not a valid final disposition"
             )
-        if any(token in disposition for token in ("pending", "unchecked", "recheck")):
+        if any(
+            token in disposition
+            for token in ("pending", "unchecked", "recheck", "open", "unresolved")
+        ):
             errors.append(
                 f"02-page-layout-ledger.csv:{line}: unresolved disposition "
                 f"{row['Disposition']!r}"
@@ -6720,6 +6773,9 @@ def main(argv: list[str] | None = None) -> int:
         BIB_LEDGER_COLUMNS, errors,
         blank_allowed={"EvidenceEndpoint"},
     )
+    validate_reference_ids_only_in_id_column(
+        bib_ledger, "03-bibliography-audit-ledger.csv", errors
+    )
     validate_pdf_hash(
         bib_ledger, "03-bibliography-audit-ledger.csv", expected_hash, errors
     )
@@ -6810,20 +6866,28 @@ def main(argv: list[str] | None = None) -> int:
                 "unverifiable row lacks attempted-route note"
             )
         if verdict == "mismatch":
-            has_bibliography_link = bool(
-                bibliography_link_re.search(row["FindingDisposition"])
+            finding_disposition = row["FindingDisposition"].strip()
+            has_exact_bibliography_link = bool(
+                bibliography_link_re.fullmatch(finding_disposition)
             )
-            if not has_bibliography_link:
+            if not has_exact_bibliography_link:
+                has_embedded_link = bool(
+                    bibliography_link_re.search(finding_disposition)
+                )
+                if has_embedded_link and BIB_MISMATCH_EXEMPTION_RE.search(
+                    finding_disposition
+                ):
+                    errors.append(
+                        f"03-bibliography-audit-ledger.csv:{line}: mismatch "
+                        "FindingDisposition cannot mix an owning-reviewer link "
+                        "with a non-finding exemption phrase"
+                    )
+                    continue
                 errors.append(
                     f"03-bibliography-audit-ledger.csv:{line}: {verdict} row must "
                     f"link an owning-reviewer R{bibliography_owner}-Fxx or "
-                    f"R{bibliography_owner}-Qxx disposition"
-                )
-            elif BIB_MISMATCH_EXEMPTION_RE.search(row["FindingDisposition"]):
-                errors.append(
-                    f"03-bibliography-audit-ledger.csv:{line}: mismatch "
-                    "FindingDisposition cannot mix an owning-reviewer link with "
-                    "a non-finding exemption phrase"
+                    f"R{bibliography_owner}-Qxx disposition; the whole cell must "
+                    "be exactly one current owner ID with no prose or second ID"
                 )
     duplicate_bib_keys = sorted(
         key for key, count in bib_keys.items() if count > 1

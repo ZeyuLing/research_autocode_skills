@@ -146,7 +146,7 @@ Each reviewer must:
 - inspect the complete thesis, not only their specialty pages;
 - complete all nine Gate A--I rows in the common whole-thesis assessment matrix from `references/report-template.md` before the persona-weighted deep review, with evidence anchors and no unjustified `N/A`;
 - prioritize the assigned lens for extra depth without treating any other domain as outside scope;
-- cite exact PDF physical/logical page, section, table, figure, or equation; never use a source-line anchor in blind review;
+- give every Gate A--I evidence cell, every finding `Location`, and every nonempty question `Exact PDF anchor` at least one in-range physical-page locator in the canonical form `physical p.<n>`, where `1 <= n <= physical_page_count`; logical page, section, table, figure, or equation detail may follow only as supplementary context, and a logical-only or source-line anchor never satisfies blind review;
 - distinguish direct observation, inference, and unverified concern;
 - test the thesis's strongest claims against its evidence;
 - state what was checked and what could not be verified;
@@ -225,6 +225,8 @@ Apply the full protocol in `references/rendered-pagination-audit.md`. Its requir
 - for cropped or continued figures, verify visible seams, numbering, labels, and semantic continuity from the rendered parts; if completeness requires an unavailable original, state `not verifiable from the PDF`.
 
 R5 owns only the doctoral exhaustive page-ledger deliverable and its 100-percent closure. Gate I remains a mandatory whole-thesis judgment domain for every reviewer, and every reviewer must report any visible page defect encountered. A statement such as “all pages viewed” is insufficient for the R5 ledger without the completed page rows and suspect-page dispositions.
+
+For doctoral R5 only, the canonical opened-input receipt inserts `rules/scripts/validate_review_bundle.py` followed immediately by `rules/scripts/validate_r5_output.py` after the ten skill reference files and before any process-ordered governing local files and the frozen PDF; no other reviewer receives these script inputs. `rules/` is the read-only staged skill-rule mount, not a current-round bundle directory, so neither script is copied into the closed bundle root. Before final freeze and exit, R5 must repeatedly run `python rules/scripts/validate_r5_output.py <exact-round-root>` without skipping, patching, mocking, or replacing either validator until the process exits `0` and its first nonempty stdout line is exactly `PASS`. A failed run requires correction of R5's current report/`02`/`03`/render or packet/receipt input and a fresh rerun. Both scripts are read-only mechanical rule infrastructure: they are never thesis evidence, citation evidence, a source of findings, or a substitute for R5's semantic/visual sign-off or the complete post-Stage-S bundle validator.
 
 Apply the full protocol in `references/citation-audit.md` as two independent gates. For a doctorate, R5 must complete the field-by-field bibliography and existence audit, while R4 must complete the occurrence-by-occurrence claim--source audit; for a master's thesis, R3 completes both. Every mismatch, inaccessible field, ambiguous source, and unsupported occurrence must be recorded explicitly. Rendered-marker closure, an aggregate metadata match, or a spot check does not pass either gate. A substantiated fabricated or nonexistent citation is an `S0` integrity blocker.
 
