@@ -434,8 +434,12 @@ def validate_packet_reconciliation(
                     "does not match the deterministic frozen-PDF extraction window"
                 )
             obvious_reason = module.obvious_non_citation_reason(extracted)
+            deterministic_reason = module.deterministic_non_citation_reason(
+                extracted, row.get("ClassificationEvidence", "")
+            )
         else:
             obvious_reason = None
+            deterministic_reason = None
         classification = row.get("Classification", "").strip().casefold()
         if classification not in module.CANDIDATE_CLASSIFICATIONS:
             errors.append(
@@ -451,6 +455,12 @@ def validate_packet_reconciliation(
             errors.append(
                 f"00-citation-candidate-ledger.csv:{line}: obvious non-citation "
                 f"classified as citation ({obvious_reason})"
+            )
+        if classification == "non-citation" and deterministic_reason is None:
+            errors.append(
+                f"00-citation-candidate-ledger.csv:{line}: non-citation candidate "
+                "lacks a canonical predicate or the exact derived "
+                "role token"
             )
         mapped = row.get("MappedOccurrenceID", "").strip()
         if classification == "citation":

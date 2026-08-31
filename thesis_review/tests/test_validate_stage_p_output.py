@@ -401,6 +401,26 @@ class ValidateStagePOutputTests(unittest.TestCase):
     def test_scoped_and_full_gates_share_exact_candidate_contract(self) -> None:
         cases = (
             (
+                "pure source marker suppressed",
+                lambda rows: rows[0].update({
+                    "Classification": "non-citation",
+                    "ClassificationEvidence": (
+                        "local prose mentions a model or numeric specification"
+                    ),
+                    "MappedOccurrenceID": "N/A",
+                }),
+                "lacks a canonical predicate or the exact derived "
+                "role token",
+            ),
+            (
+                "derived non-citation role token mismatch",
+                lambda rows: rows[1].__setitem__(
+                    "ClassificationEvidence", "non-citation-role:coordinate"
+                ),
+                "lacks a canonical predicate or the exact derived "
+                "role token",
+            ),
+            (
                 "generic evidence",
                 lambda rows: rows[0].__setitem__(
                     "ClassificationEvidence", "non-citation"

@@ -1515,7 +1515,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "ExpandedNumbers": "3;8",
                 "Classification": "non-citation",
                 "ClassificationEvidence": (
-                    "numeric quantization-level list introduced by levels are"
+                    "non-citation-role:declared-numeric-collection"
                 ),
                 "MappedOccurrenceID": "N/A",
                 "AdjacentPDFText": (
@@ -1529,9 +1529,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "Marker": "[0.85,1]",
                 "ExpandedNumbers": "N/A",
                 "Classification": "non-citation",
-                "ClassificationEvidence": (
-                    "decimal scale interval rather than a source marker"
-                ),
+                "ClassificationEvidence": "non-citation-role:non-integer-expression",
                 "MappedOccurrenceID": "N/A",
                 "AdjacentPDFText": (
                     "fixture proposition [1]; quantization levels are [3, 8]; "
@@ -2925,6 +2923,164 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "obvious non-citation classified as citation")
 
+    def test_pure_source_marker_cannot_be_suppressed_by_freeform_reason(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "00-citation-candidate-ledger.csv")
+            rows[0]["Classification"] = "non-citation"
+            rows[0]["ClassificationEvidence"] = (
+                "local prose mentions a model or numeric specification"
+            )
+            rows[0]["MappedOccurrenceID"] = "N/A"
+            write_csv(
+                root / "00-citation-candidate-ledger.csv",
+                CITATION_CANDIDATE_COLUMNS,
+                rows,
+            )
+            self.assert_fails(
+                root,
+                "lacks a canonical predicate or the exact derived "
+                "role token",
+            )
+
+    def test_canonical_non_citation_roles_cover_safe_integer_syntax(
+        self,
+    ) -> None:
+        accepted = (
+            (
+                {"Expanded": [1], "Marker": "[1]", "Prefix": "x", "Suffix": " = value"},
+                "index-expression",
+            ),
+            (
+                {
+                    "Expanded": [1],
+                    "Marker": "[1]",
+                    "Prefix": "Answers: ",
+                    "Suffix": " Yes; [2] No",
+                },
+                "enumeration-run",
+            ),
+            (
+                {
+                    "Expanded": [12, 37],
+                    "Marker": "[12,37]",
+                    "Prefix": "coordinate ",
+                    "Suffix": "",
+                },
+                "coordinate",
+            ),
+            (
+                {
+                    "Expanded": [1, 5, 10],
+                    "Marker": "[1,5,10]",
+                    "Prefix": "top-k values ",
+                    "Suffix": "",
+                },
+                "parameter-list",
+            ),
+        )
+        for candidate, expected_role in accepted:
+            with self.subTest(expected_role=expected_role):
+                self.assertEqual(
+                    VALIDATOR_MODULE.canonical_non_citation_role(candidate),
+                    expected_role,
+                )
+                evidence = VALIDATOR_MODULE.non_citation_evidence_for_role(
+                    expected_role
+                )
+                self.assertIsNotNone(
+                    VALIDATOR_MODULE.deterministic_non_citation_reason(
+                        candidate, evidence
+                    )
+                )
+
+    def test_canonical_roles_do_not_hide_named_source_markers(self) -> None:
+        source_candidates = (
+            {
+                "Expanded": [11], "Marker": "[11]", "Prefix": "ACTOR",
+                "Suffix": " introduces a Transformer encoder",
+            },
+            {
+                "Expanded": [9], "Marker": "[9]", "Prefix": "运动图",
+                "Suffix": "等数据驱动方法",
+            },
+            {
+                "Expanded": [12, 37], "Marker": "[12,37]",
+                "Prefix": "coordinate methods ", "Suffix": "propose",
+            },
+            {
+                "Expanded": [1, 5, 10], "Marker": "[1,5,10]",
+                "Prefix": "parameters follow prior work ", "Suffix": "closely",
+            },
+        )
+        for candidate in source_candidates:
+            with self.subTest(candidate=candidate):
+                self.assertIsNone(
+                    VALIDATOR_MODULE.canonical_non_citation_role(candidate)
+                )
+
+    def test_non_citation_evidence_is_the_exact_derived_role_token(self) -> None:
+        candidate = {
+            "Expanded": [1], "Marker": "[1]", "Prefix": "x", "Suffix": " = 2",
+        }
+        canonical = "non-citation-role:index-expression"
+        self.assertIsNotNone(
+            VALIDATOR_MODULE.deterministic_non_citation_reason(candidate, canonical)
+        )
+        for invalid in (
+            "non-citation-role:INDEX-EXPRESSION",
+            " non-citation-role:index-expression",
+            "non-citation-role:index-expression ",
+            "non-citation-role:index-expression; checked",
+            "role=index; context=x[1] is an index",
+        ):
+            with self.subTest(invalid=invalid):
+                self.assertIsNone(
+                    VALIDATOR_MODULE.deterministic_non_citation_reason(
+                        candidate, invalid
+                    )
+                )
+
+    def test_zero_and_duplicate_markers_need_local_non_citation_syntax(
+        self,
+    ) -> None:
+        self.assertIsNone(VALIDATOR_MODULE.canonical_non_citation_role({
+            "Expanded": None, "Marker": "[1a]", "Prefix": "claim ",
+            "Suffix": "continues",
+        }))
+        self.assertEqual(
+            VALIDATOR_MODULE.canonical_non_citation_role({
+                "Expanded": None, "Marker": "[0.85,1]", "Prefix": "range ",
+                "Suffix": "",
+            }),
+            "non-integer-expression",
+        )
+        self.assertIsNone(VALIDATOR_MODULE.obvious_non_citation_reason({
+            "Expanded": [0], "Marker": "[0]", "Prefix": "unsupported claim ",
+            "Suffix": "continues",
+        }))
+        self.assertIsNone(VALIDATOR_MODULE.obvious_non_citation_reason({
+            "Expanded": [8, 8], "Marker": "[8,8]", "Prefix": "two sources ",
+            "Suffix": "support the claim",
+        }))
+        self.assertEqual(
+            VALIDATOR_MODULE.canonical_non_citation_role({
+                "Expanded": [0, 1], "Marker": "[0,1]", "Prefix": "t ∈ ",
+                "Suffix": "",
+            }),
+            "math-domain",
+        )
+        self.assertEqual(
+            VALIDATOR_MODULE.canonical_non_citation_role({
+                "Expanded": [0, 1], "Marker": "[0,1]", "Prefix": "t ∼ U",
+                "Suffix": "",
+            }),
+            "math-domain",
+        )
+
     def test_candidate_numbers_must_equal_citation_inventory_sources(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3081,9 +3237,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
     def test_duplicate_number_vector_has_deterministic_non_citation_reason(self) -> None:
         reason = VALIDATOR_MODULE.obvious_non_citation_reason({
             "Expanded": [1, 1],
+            "Marker": "[1,1]",
             "Prefix": "tensor shape is ",
+            "Suffix": "",
         })
-        self.assertEqual(reason, "duplicate-number vector/array")
+        self.assertEqual(
+            reason, "canonical role declared-numeric-collection"
+        )
 
     def test_documented_unverifiable_citation_allows_missing_content_source(
         self,

@@ -1097,45 +1097,156 @@ def extract_numeric_bracket_candidates(
                 "Expanded": expand_numeric_marker(match.group(0)),
                 "Adjacent": normalize_extracted_text(text[start:end]),
                 "Prefix": text[max(0, match.start() - 100):match.start()],
+                "Suffix": text[match.end():min(len(text), match.end() + 100)],
             })
     return candidates, unmatched_glyphs
 
 
-def obvious_non_citation_reason(candidate: dict[str, Any]) -> str | None:
-    """Reject high-certainty numeric-bracket lookalikes mechanically."""
-    if candidate["Expanded"] is None:
-        return "numeric bracket is not a pure integer citation marker"
-    numbers = list(candidate["Expanded"])
-    if 0 in numbers:
-        return "zero-bearing numeric interval/vector"
-    if len(numbers) != len(set(numbers)):
-        return "duplicate-number vector/array"
-    prefix = re.sub(r"\s+", " ", str(candidate["Prefix"])).strip()
+NON_CITATION_EVIDENCE_PREFIX = "non-citation-role:"
+
+
+def canonical_non_citation_role(candidate: dict[str, Any]) -> str | None:
+    """Derive the one closed non-citation role from frozen-PDF syntax."""
+
+    marker = str(candidate.get("Marker", ""))
+    expanded = candidate.get("Expanded")
+    if expanded is None:
+        strong_expression_syntax = bool(re.search(
+            r"(?:\d\.\d|[()*/+=^∥]|\.\.\.|…|···|"
+            r"[Α-Ωα-ωρϕβτδθµ]|[∑∏√])",
+            marker,
+        ))
+        return "non-integer-expression" if strong_expression_syntax else None
+    numbers = list(expanded)
+    prefix_raw = str(candidate.get("Prefix", ""))
+    suffix_raw = str(candidate.get("Suffix", ""))
+    prefix = re.sub(r"\s+", " ", prefix_raw).strip()
+    suffix = re.sub(r"\s+", " ", suffix_raw).strip()
+
     if re.search(r"(?:∈|\\in)\s*$", prefix):
-        return "mathematical set/interval membership"
-    if re.search(
-        r"(?:档数(?:依次)?为|量化(?:档|级别)(?:依次)?为|数组(?:为)?|"
-        r"向量(?:为)?|形状(?:为)?|尺寸(?:为)?|维度(?:为)?|大小(?:为)?|"
-        r"levels?\s*(?:are|=)|array\s*(?:is|=)|vector\s*(?:is|=)|"
-        r"(?:tensor\s+)?shape\s*(?:is|=)|size\s*(?:is|=)|=)\s*$",
+        return "math-domain"
+    if len(numbers) == 2 and re.search(
+        r"(?:~|∼)\s*(?:U|Uniform|DiscreteUniform)\s*$",
         prefix,
         flags=re.IGNORECASE,
     ):
-        return "explicit numeric vector/array introduction"
-    if re.search(
-        r"(?:\b(?:interval|range|domain|shape|sizes?|levels?|array|vector)"
-        r"(?:\s+(?:is|are|of))?|区间|范围|集合|形状|大小|尺寸|维度)\s*$",
+        return "math-domain"
+    if len(numbers) == 2 and re.search(
+        r"(?:interval|range|domain|set|区间|范围|定义域|取值域|集合)"
+        r"\s*(?:is|are|=|为|是|:|：)\s*$",
         prefix,
         flags=re.IGNORECASE,
     ):
-        return "explicit interval/vector grammatical role"
-    if re.search(
-        r"\b(?:tensor|array|vector|matrix)\s+[A-Za-z_]\w*\s*$",
+        return "math-domain"
+
+    identifier_match = re.search(
+        r"(?P<name>[A-Za-z_][A-Za-z0-9_]*|[Α-Ωα-ω])\s*$", prefix_raw
+    )
+    expression_suffix = bool(re.match(
+        r"^(?:=|:=|\+=|-=|\*=|/=|\+|-|−|\*|/|\^|<|>|\.|\[)",
+        suffix,
+    ))
+    if identifier_match is not None and expression_suffix:
+        name = identifier_match.group("name")
+        explicit_index_cue = bool(re.search(
+            r"(?:index|element|entry|tensor|array|matrix|vector|buffer|"
+            r"索引|元素|张量|数组|矩阵|向量)\s*(?:of|for|为|中的)?\s*"
+            rf"{re.escape(name)}\s*$",
+            prefix,
+            flags=re.IGNORECASE,
+        ))
+        code_like_base = (
+            len(name) == 1
+            or "_" in name
+            or "." in name
+            or "->" in name
+            or name.casefold() in {"buffer", "tensor", "array", "matrix", "vector"}
+        )
+        if explicit_index_cue or code_like_base:
+            return "index-expression"
+
+    comma_list = not marker or ("," in marker and "-" not in marker)
+    if 2 <= len(numbers) <= 3 and comma_list and re.search(
+        r"(?:pixel\s+coordinates?|coordinates?|point|position|像素坐标|"
+        r"点坐标|坐标|点位|位置)\s*(?:are|is|=|为|是|:|：)?\s*$",
         prefix,
         flags=re.IGNORECASE,
     ):
-        return "tensor/array index notation"
+        return "coordinate"
+
+    if len(numbers) >= 2 and re.search(
+        r"(?:top[- ]?k\s+values?|kernel\s+sizes?|strides?|heads?|layers?|"
+        r"steps?|rates?|candidate\s+values?|参数取值|超参数候选值|"
+        r"候选步数|层数|头数|步数)"
+        r"\s*(?:are|is|include|includes|=|为|是|包括|:|：)?\s*$",
+        prefix,
+        flags=re.IGNORECASE,
+    ):
+        return "parameter-list"
+
+    if len(numbers) >= 2 and re.search(
+        r"(?:档数(?:依次)?为|量化(?:档|档位|级别)(?:依次)?为|"
+        r"数组\s*(?:为|=|:|：)|向量\s*(?:为|=|:|：)|"
+        r"形状\s*(?:为|=|:|：)|尺寸\s*(?:为|=|:|：)|"
+        r"维度\s*(?:为|=|:|：)|大小\s*(?:为|=|:|：)|"
+        r"(?:quantization\s+)?levels?\s*(?:are|is|=|:)|"
+        r"array\s*(?:is|=|:)|vector\s*(?:is|=|:)|"
+        r"(?:tensor\s+)?shape\s*(?:is|=|:)|sizes?\s*(?:are|is|=|:))\s*$",
+        prefix,
+        flags=re.IGNORECASE,
+    ):
+        return "declared-numeric-collection"
+
+    enumeration_boundary = not prefix_raw.strip() or bool(re.search(
+        r"(?:^|[\n;；:：])\s*$", prefix_raw
+    ))
+    enumeration_header = bool(re.search(
+        r"(?:options?|choices?|steps?|cases?|items?|answers?|选项|步骤|"
+        r"情况|类别|答案)(?:\s+(?:are|include|如下|包括))?\s*[:：]"
+        r"[^\n]{0,80}$",
+        prefix,
+        flags=re.IGNORECASE,
+    ))
+    enumeration_label = bool(re.match(
+        r"^(?:yes|no|true|false|unknown|是|否|同意|不同意|不确定)"
+        r"(?:\b|[；;，,。.]|$)",
+        suffix,
+        flags=re.IGNORECASE,
+    ))
+    enumeration_sibling = bool(re.search(r"[;；]\s*\[\d{1,4}\]", suffix_raw))
+    if (
+        len(numbers) == 1
+        and enumeration_boundary
+        and enumeration_header
+        and (enumeration_label or enumeration_sibling)
+    ):
+        return "enumeration-run"
+
+    if re.search(r"(?:=|:=|return|返回)\s*$", prefix) and len(numbers) >= 2:
+        return "code-data-literal"
     return None
+
+
+def non_citation_evidence_for_role(role: str) -> str:
+    return f"{NON_CITATION_EVIDENCE_PREFIX}{role}"
+
+
+def obvious_non_citation_reason(candidate: dict[str, Any]) -> str | None:
+    """Return a high-certainty reason derived only from frozen-PDF syntax."""
+
+    role = canonical_non_citation_role(candidate)
+    return None if role is None else f"canonical role {role}"
+
+
+def deterministic_non_citation_reason(
+    candidate: dict[str, Any], evidence: str
+) -> str | None:
+    """Accept only the exact canonical role token, never free-form suppression."""
+
+    role = canonical_non_citation_role(candidate)
+    if role is None or evidence != non_citation_evidence_for_role(role):
+        return None
+    return f"canonical role {role}"
 
 
 def derive_and_validate_reference_pages(
@@ -7670,13 +7781,21 @@ def main(argv: list[str] | None = None) -> int:
                 "ClassificationEvidence is not a concrete contextual reason"
             )
         if index <= len(extracted_candidates):
-            obvious_reason = obvious_non_citation_reason(
-                extracted_candidates[index - 1]
+            extracted_candidate = extracted_candidates[index - 1]
+            obvious_reason = obvious_non_citation_reason(extracted_candidate)
+            deterministic_reason = deterministic_non_citation_reason(
+                extracted_candidate, evidence
             )
             if obvious_reason and classification != "non-citation":
                 errors.append(
                     f"00-citation-candidate-ledger.csv:{line}: obvious "
                     f"non-citation classified as citation ({obvious_reason})"
+                )
+            if classification == "non-citation" and deterministic_reason is None:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: non-citation "
+                    "candidate lacks a canonical predicate or the "
+                    "exact derived role token"
                 )
         mapped = row["MappedOccurrenceID"].strip()
         if classification == "citation":
