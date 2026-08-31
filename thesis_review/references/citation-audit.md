@@ -68,6 +68,25 @@ The authoritative machine-readable master is `03-bibliography-audit-ledger.csv` 
 
 For every rendered entry, include exactly one row for each mandatory field: `type`, `title`, `ordered_authors`, `year`, `venue`, `publication_status`, `volume`, `issue`, `pages_or_article_number`, `doi`, `arxiv_id`, `arxiv_version`, `url`, `access_date`, `isbn_or_other_persistent_id`, `existence`, and `retraction_withdrawal_correction_superseding`. Each field verdict is `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`; do not collapse fields into one check mark. Record both rendered and canonical values for every row, not only mismatches. Every row, including an `unverifiable` row, records the one complete `http(s)` authoritative endpoint actually attempted in `EvidenceEndpoint` and an ISO-8601 `CheckedAt`; “not opened,” a blank endpoint, or an unattempted source wishlist is not a completed audit. If the official route is inaccessible, keep its complete attempted endpoint, use `unverifiable`, and record the access result in `EvidenceNote`. When the rendered entry contains a DOI, arXiv ID, or official URL, the endpoint must preserve that complete work identity: a shortened DOI prefix is invalid even when it is a well-formed URL. `EvidenceEndpoint` is the primary authoritative route for that field verdict. Every additional redirect, failed official route, or fallback actually opened is recorded in `EvidenceNote` with the closed marker `accessed endpoint: <URL>`; the marker starts the field or follows a semicolon/newline, and the URL ends at a semicolon, newline, or field end. A bare URL in `EvidenceNote` is invalid because it cannot distinguish an accessed route from metadata text. Every `mismatch` row uses `FindingDisposition` as a closed single-ID reference: the whole cell is exactly one actual current owning-reviewer finding or question (`R5-Fxx`/`R5-Qxx` for a doctorate; `R3-Fxx`/`R3-Qxx` for a master's thesis), with no prefix, suffix, second ID, or free prose. `none`, `no finding`, `N/A`, `not applicable`, and equivalents are invalid alone or mixed with an owner ID. An `unverifiable` row instead follows the attempted-route contract and may remain a calibrated limitation unless the owner elevates it. Style-required capitalization, name abbreviation, or punctuation normalization is not a factual mismatch, but changed title content, omitted/reordered authors, wrong year, false venue/status, and wrong pages or article number are factual mismatches.
 
+Each long-form row contains only the named field. Never paste the complete
+rendered citation into `type`, `title`, `ordered_authors`, `venue`,
+`publication_status`, `pages_or_article_number`, `access_date`, `existence`, or
+correction/status rows. `title` is the title alone; `ordered_authors` is the
+complete ordered author list alone; `year` is one four-digit year; venue and
+publication/acceptance status are separate; pages or article number is not a
+copy of the proceedings record; DOI and arXiv values are complete single work
+identifiers; and `url`/`access_date` describe what the thesis bibliography
+renders, not the auditor's endpoint/date. A `legitimate N/A` row uses an
+explicit absent value in both value cells. The accepted grammar includes
+`N/A`, `none`, `not applicable`, `not rendered [in the bibliography]`,
+`not available/provided/stated/assigned`, field-specific forms such as
+`no issue assigned`, and their unambiguous Chinese equivalents such as
+`不适用`, `未著录`, or `无卷号`. A field-specific marker must match its row:
+`无卷号` is valid only for `volume`, `no issue assigned` only for `issue`, and
+`无页码` only for `pages_or_article_number`; it never includes a complete citation string.
+Reusing one entry-level string across unrelated fields is an invalid audit even
+when every row has an endpoint and the row count is correct.
+
 `EvidenceEndpoint` and `CheckedAt` document what the auditor used; they are not automatically fields that must be printed in the thesis bibliography. Whether the rendered reference itself must contain a URL or access date is controlled by the verified institutional template/citation style and the source type. When no binding rule requires a rendered URL or access date, an absent value is `legitimate N/A`, creates no finding, and does not affect the grade. A wrong printed URL that identifies a different object remains a factual identity mismatch. A repository's current archived/read-only state is a finding only when it contradicts a material availability/status claim made by the PDF; it is otherwise audit context.
 
 Do not hand-copy any `03` or `04` deterministic Markdown row or any endpoint
@@ -197,6 +216,19 @@ For every citation--source pair:
 7. for comparisons or priority claims such as “first,” “most,” “state of the art,” “widely used,” or “few studies,” verify the search/date boundary or require narrower wording;
 8. for quotations, definitions, numerical values, dataset statistics, policy rules, and attributed limitations, verify exactness and context;
 9. for inaccessible source content, record the attempted persistent identifier or official endpoint and classify substantive support as `unverifiable`, never `direct`/`partial`/`context-only` from metadata alone. The exception is when the attached proposition is itself only publication metadata, in which case the official metadata record is content-appropriate evidence.
+
+For `unverifiable`, distinguish an identifier from opened source content.
+`ContentSourceOpened` names content that was actually opened; “source-content
+access attempt” is not an exact locator. Record a concrete source-specific
+failure or insufficiency result (for example HTTP status, timeout, connection
+reset, access denial/paywall, or an identified abstract that does not expose
+the needed proposition). Do not reuse one blanket “unavailable in this review
+environment” waiver across unrelated references. Repeated citations to the
+same inaccessible work may share the same source-specific disposition, but a
+whole bibliography cannot be converted into schema-valid `unverifiable` rows
+by changing only the URL, identifier, or quoted/unquoted work title. The
+dominance check targets a clear majority pattern rather than a minority of
+independently documented sources that happen to share one HTTP failure class.
 
 Assign one support status:
 

@@ -704,10 +704,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             1,
         ).replace(
             "| REF0001 | [1] | C0001-S01 | C0001-S01=>doi:fixture @ "
-            f"{CITATION_ENDPOINT} | title=fixture ; ordered_authors=fixture ; "
-            "year=fixture ; venue=fixture ; publication_status=fixture ; doi=fixture ; "
+            f"{CITATION_ENDPOINT} | title=Fixture reference ; ordered_authors=Jane Doe, John Roe ; "
+            "year=2024 ; venue=Fixture Proceedings ; publication_status=published ; doi=10.1145/3442188.3445922 ; "
             "arxiv_id=N/A ; arxiv_version=N/A ; url=N/A ; "
-            "isbn_or_other_persistent_id=N/A ; existence=fixture | agree | none | "
+            "isbn_or_other_persistent_id=N/A ; existence=confirmed | agree | none | "
             "none | closed |",
             "| REF0002 | [2] | C0001-S01 | C0001-S01=>no rendered "
             "bibliography entry @ N/A | no rendered bibliography entry | disagree | "
@@ -982,7 +982,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "Chair finding ID(s) | Resolution (`closed` / `open`) |\n"
             + "|---|---|---|---|---|---|---|---|---|\n"
             + "| REF0001 | [1] | C0001-S01 | C0001-S01=>doi:fixture @ https://dl.acm.org/doi/pdf/10.1145/3442188.3445922 | "
-            + "title=fixture ; ordered_authors=fixture ; year=fixture ; venue=fixture ; publication_status=fixture ; doi=fixture ; arxiv_id=N/A ; arxiv_version=N/A ; url=N/A ; isbn_or_other_persistent_id=N/A ; existence=fixture | "
+            + "title=Fixture reference ; ordered_authors=Jane Doe, John Roe ; year=2024 ; venue=Fixture Proceedings ; publication_status=published ; doi=10.1145/3442188.3445922 ; arxiv_id=N/A ; arxiv_version=N/A ; url=N/A ; isbn_or_other_persistent_id=N/A ; existence=confirmed | "
             + "agree | none | none | closed |\n\n"
             + "- Unique cited rendered references joined: 1\n"
             + "- Identity-agreement count: 1\n"
@@ -1289,25 +1289,37 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "Cited": "yes",
             "PDFSHA256": digest,
         }]
+        field_values = {
+            "type": "conference paper",
+            "title": "Fixture reference",
+            "ordered_authors": "Jane Doe, John Roe",
+            "year": "2024",
+            "venue": "Fixture Proceedings",
+            "publication_status": "published",
+            "doi": "10.1145/3442188.3445922",
+            "existence": "confirmed",
+            "retraction_withdrawal_correction_superseding": (
+                "no retraction, withdrawal, correction, or superseding record"
+            ),
+        }
+        absent_fields = {
+            "volume", "issue", "pages_or_article_number", "arxiv_id",
+            "arxiv_version", "url", "access_date",
+            "isbn_or_other_persistent_id",
+        }
         bibliography_ledger_rows = [{
             "ReferenceID": "REF0001",
             "DisplayedLabel": "[1]",
             "Cited": "yes",
             "Field": field,
-            "RenderedValue": "fixture",
+            "RenderedValue": (
+                "N/A" if field in absent_fields else field_values[field]
+            ),
             "CanonicalValue": (
-                "N/A" if field in {
-                    "volume", "issue", "pages_or_article_number", "arxiv_id",
-                    "arxiv_version", "url", "access_date",
-                    "isbn_or_other_persistent_id",
-                } else "fixture"
+                "N/A" if field in absent_fields else field_values[field]
             ),
             "Verdict": (
-                "legitimate N/A" if field in {
-                    "volume", "issue", "pages_or_article_number", "arxiv_id",
-                    "arxiv_version", "url", "access_date",
-                    "isbn_or_other_persistent_id",
-                } else "exact"
+                "legitimate N/A" if field in absent_fields else "exact"
             ),
             "EvidenceEndpoint": "https://doi.org/10.1145/3442188.3445922",
             "EndpointType": "official fixture",
@@ -2196,7 +2208,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "03-bibliography-audit-ledger.md"
             text = path.read_text(encoding="utf-8").replace(
-                '"canonical":"fixture"',
+                '"canonical":"conference paper"',
                 '"canonical":"invented different value"',
                 1,
             )
@@ -2472,6 +2484,451 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 for error in errors
             ),
             errors,
+        )
+
+    def test_bibliography_field_audit_rejects_entry_string_replication(
+        self,
+    ) -> None:
+        entry = (
+            "DOE J, ROE J. A field-specific fixture paper [C]//Fixture "
+            "Proceedings. 2024: 10-20. DOI: 10.1234/fixture.1."
+        )
+        rows = []
+        for field in ("type", "title", "ordered_authors", "venue"):
+            rows.append({
+                "ReferenceID": "REF0001",
+                "Field": field,
+                "RenderedValue": entry,
+                "CanonicalValue": entry,
+                "Verdict": "exact",
+            })
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows,
+            {"REF0001": {"RenderedEntry": entry}},
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any("repeats the complete rendered bibliography entry" in e for e in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("reuses one CanonicalValue" in e for e in errors),
+            errors,
+        )
+
+    def test_bibliography_legitimate_na_requires_absent_field_values(self) -> None:
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            [{
+                "ReferenceID": "REF0001",
+                "Field": "access_date",
+                "RenderedValue": "DOE J. Complete citation. 2024.",
+                "CanonicalValue": "DOE J. Complete citation. 2024.",
+                "Verdict": "legitimate N/A",
+            }],
+            {"REF0001": {"RenderedEntry": "DOE J. Complete citation. 2024."}},
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any("legitimate N/A requires field-specific absent values" in e for e in errors),
+            errors,
+        )
+
+    def test_bibliography_legitimate_na_accepts_common_field_specific_forms(
+        self,
+    ) -> None:
+        cases = (
+            ("access_date", "not rendered in the bibliography"),
+            ("issue", "no issue assigned"),
+            ("isbn_or_other_persistent_id", "未著录"),
+            ("volume", "无卷号"),
+        )
+        rows = [
+            {
+                "ReferenceID": "REF0001",
+                "Field": field,
+                "RenderedValue": absent_value,
+                "CanonicalValue": absent_value,
+                "Verdict": "legitimate N/A",
+            }
+            for field, absent_value in cases
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows,
+            {"REF0001": {"RenderedEntry": "DOE J. Fixture paper. 2024."}},
+            "03.csv",
+            errors,
+        )
+        self.assertEqual([], errors)
+
+        for field, absent_value in cases:
+            with self.subTest(field=field, absent_value=absent_value):
+                self.assertTrue(
+                    VALIDATOR_MODULE.bibliography_value_is_absent(absent_value)
+                )
+                self.assertTrue(
+                    VALIDATOR_MODULE.bibliography_value_is_absent(
+                        absent_value, field
+                    )
+                )
+
+    def test_bibliography_field_specific_absence_rejects_wrong_field(
+        self,
+    ) -> None:
+        cases = (
+            ("title", "无卷号"),
+            ("year", "no issue assigned"),
+            ("doi", "无页码"),
+        )
+        rows = [
+            {
+                "ReferenceID": "REF0001",
+                "Field": field,
+                "RenderedValue": absent_value,
+                "CanonicalValue": absent_value,
+                "Verdict": "legitimate N/A",
+            }
+            for field, absent_value in cases
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows,
+            {"REF0001": {"RenderedEntry": "DOE J. Fixture paper. 2024."}},
+            "03.csv",
+            errors,
+        )
+        self.assertEqual(3, len(errors), errors)
+        self.assertTrue(
+            all(
+                "legitimate N/A requires field-specific absent values" in error
+                for error in errors
+            ),
+            errors,
+        )
+        for field, absent_value in cases:
+            with self.subTest(field=field, absent_value=absent_value):
+                self.assertFalse(
+                    VALIDATOR_MODULE.bibliography_value_is_absent(
+                        absent_value, field
+                    )
+                )
+
+    def test_bibliography_legitimate_na_rejects_complete_citation_string(
+        self,
+    ) -> None:
+        complete_entry = (
+            "DOE J, ROE J. A complete fixture citation [C]//Fixture "
+            "Proceedings. 2024: 10-20. DOI: 10.1234/fixture.1."
+        )
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            [{
+                "ReferenceID": "REF0001",
+                "Field": "issue",
+                "RenderedValue": complete_entry,
+                "CanonicalValue": complete_entry,
+                "Verdict": "legitimate N/A",
+            }],
+            {"REF0001": {"RenderedEntry": complete_entry}},
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any(
+                "legitimate N/A requires field-specific absent values" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_explicit_doi_field_overrides_line_broken_doi_url(self) -> None:
+        rendered = (
+            "DOE J, ROE J. Fixture paper. DOI: 10.1234/foo.12345. "
+            "https://doi.org/10.1234/foo.1234 5."
+        )
+        self.assertEqual(
+            {"10.1234/foo.12345"},
+            VALIDATOR_MODULE.rendered_doi_tokens(rendered),
+        )
+        bibliography = {"REF0001": {"RenderedEntry": rendered}}
+
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://doi.org/10.1234/foo.12345",
+            }],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertEqual([], errors)
+
+        errors = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://doi.org/10.1234/foo.1234",
+            }],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any(
+                "EvidenceEndpoint is not bound to the complete rendered DOI"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_explicit_arxiv_field_binds_over_line_broken_url_fragment(self) -> None:
+        rendered = (
+            "YIN K, et al. UniTracker. arXiv: 2507.07356. "
+            "https://arxiv.org/abs/2507.0735 6."
+        )
+        self.assertEqual(
+            {"2507.07356"}, VALIDATOR_MODULE.rendered_arxiv_ids(rendered)
+        )
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://arxiv.org/abs/2507.0735",
+            }],
+            {"REF0001": {"RenderedEntry": rendered}},
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any("complete rendered arXiv ID" in e for e in errors), errors
+        )
+
+    def test_citation_audit_rejects_vague_and_blanket_unverifiable_rows(
+        self,
+    ) -> None:
+        rows = []
+        for index in range(1, 13):
+            rows.append({
+                "ReferenceID": f"REF{index:04d}",
+                "Support": "unverifiable",
+                "MetadataStatus": "unverifiable",
+                "ExactSourceLocator": "official record: source-content access attempt",
+                "DispositionEvidence": (
+                    "reasoned non-finding: network error prevented source access; "
+                    f"accessed endpoint: https://example.org/work/{index}"
+                ),
+            })
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_unverifiable_semantics(
+            rows, "04.csv", errors
+        )
+        self.assertTrue(
+            any("access attempt is not an exact content locator" in e for e in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("blanket unverifiable disposition" in e for e in errors), errors
+        )
+
+    def test_citation_blanket_unverifiable_cannot_hide_behind_work_identity(
+        self,
+    ) -> None:
+        rows = []
+        for index in range(1, 13):
+            rows.append({
+                "ReferenceID": f"REF{index:04d}",
+                "Support": "unverifiable",
+                "MetadataStatus": "unverifiable",
+                "ExactSourceLocator": "publisher record metadata",
+                "DispositionEvidence": (
+                    "network error prevented source access for "
+                    f"REF{index:04d} [{index}], DOI 10.1234/work.{index:04d}, "
+                    f"arXiv: 2501.{index:05d}, title \"Unique work {index}\"; "
+                    "accessed endpoint: "
+                    f"https://publisher.example/work/{index:04d}"
+                ),
+            })
+
+        signatures = {
+            VALIDATOR_MODULE.normalized_unverifiable_signature(
+                row["DispositionEvidence"]
+            )
+            for row in rows
+        }
+        self.assertEqual(1, len(signatures), signatures)
+
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_unverifiable_semantics(
+            rows, "04.csv", errors
+        )
+        self.assertTrue(
+            any("blanket unverifiable disposition" in error for error in errors),
+            errors,
+        )
+
+    def test_citation_blanket_normalizes_unquoted_labeled_work_titles(
+        self,
+    ) -> None:
+        work_names = (
+            "Alpha Motion Model",
+            "Beta Motion Model",
+            "Gamma Motion Model",
+            "Delta Motion Model",
+            "Epsilon Motion Model",
+            "Zeta Motion Model",
+            "Eta Motion Model",
+            "Theta Motion Model",
+            "Iota Motion Model",
+            "Kappa Motion Model",
+            "Lambda Motion Model",
+            "Mu Motion Model",
+        )
+        rows = [
+            {
+                "ReferenceID": f"REF{index:04d}",
+                "Support": "unverifiable",
+                "MetadataStatus": "unverifiable",
+                "ExactSourceLocator": "publisher record metadata",
+                "DispositionEvidence": (
+                    "network error prevented source access for paper "
+                    f"{work_name}; official source returned no content"
+                ),
+            }
+            for index, work_name in enumerate(work_names, start=1)
+        ]
+        signatures = {
+            VALIDATOR_MODULE.normalized_unverifiable_signature(
+                row["DispositionEvidence"]
+            )
+            for row in rows
+        }
+        self.assertEqual(1, len(signatures), signatures)
+
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_unverifiable_semantics(
+            rows, "04.csv", errors
+        )
+        self.assertTrue(
+            any("blanket unverifiable disposition" in error for error in errors),
+            errors,
+        )
+
+    def test_citation_five_of_twelve_shared_failures_do_not_trigger_blanket(
+        self,
+    ) -> None:
+        repeated = "HTTP 403 forbidden response from the official publisher"
+        failure_details = (
+            *([repeated] * 5),
+            "HTTP 404 not found response for the official record",
+            "HTTP 429 rate-limit response returned by the official API",
+            "HTTP 500 internal server error returned by the publisher",
+            "timeout while requesting the official full-text page",
+            "connection reset while reading the publisher response",
+            "TLS certificate negotiation failed at the official host",
+            "DNS resolution failed for the official publisher host",
+        )
+        rows = [
+            {
+                "ReferenceID": f"REF{index:04d}",
+                "Support": "unverifiable",
+                "MetadataStatus": "unverifiable",
+                "ExactSourceLocator": "publisher record metadata",
+                "DispositionEvidence": detail,
+            }
+            for index, detail in enumerate(failure_details, start=1)
+        ]
+        normalized = [
+            VALIDATOR_MODULE.normalized_unverifiable_signature(
+                row["DispositionEvidence"]
+            )
+            for row in rows
+        ]
+        self.assertEqual(5, normalized.count(normalized[0]), normalized)
+
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_unverifiable_semantics(
+            rows, "04.csv", errors
+        )
+        self.assertFalse(
+            any("blanket unverifiable disposition" in error for error in errors),
+            errors,
+        )
+        self.assertEqual([], errors)
+
+    def test_citation_source_specific_failure_categories_are_not_blanket(
+        self,
+    ) -> None:
+        failure_details = (
+            "HTTP 401 authentication challenge returned by the publisher",
+            "HTTP 403 forbidden response returned by the publisher",
+            "HTTP 404 not found response for the official record",
+            "HTTP 429 rate-limit response returned by the API",
+            "HTTP 500 internal server error returned by the publisher",
+            "HTTP 502 gateway error returned by the publisher",
+            "HTTP 503 service unavailable response from the publisher",
+            "timeout while requesting the official full-text page",
+            "connection reset while reading the publisher response",
+            "TLS certificate negotiation failed at the official host",
+            "DNS resolution failed for the official publisher host",
+            "robots policy blocked retrieval of the official content",
+        )
+        rows = [
+            {
+                "ReferenceID": f"REF{index:04d}",
+                "Support": "unverifiable",
+                "MetadataStatus": "unverifiable",
+                "ExactSourceLocator": "publisher record metadata",
+                "DispositionEvidence": detail,
+            }
+            for index, detail in enumerate(failure_details, start=1)
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_unverifiable_semantics(
+            rows, "04.csv", errors
+        )
+        self.assertFalse(
+            any("blanket unverifiable disposition" in error for error in errors),
+            errors,
+        )
+        self.assertEqual([], errors)
+
+    def test_page_audit_rejects_whole_document_template_filling(self) -> None:
+        inventory = {}
+        rows = []
+        for index in range(1, 21):
+            page_id = f"P{index:04d}"
+            inventory[page_id] = {
+                "MechanicalSignals": f"extracted_text_chars={index * 100}; text extracted"
+            }
+            rows.append({
+                "PageID": page_id,
+                "Region": "Chapter 1 introduction",
+                "DominantContent": "Chapter 1 introduction",
+                "Signals": "full visual audit; text extraction reviewed",
+                "Disposition": "clean",
+                "Evidence": (
+                    "180 dpi inspection; no clipping, overlap, or float issue observed."
+                ),
+            })
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_page_audit_specificity(
+            rows, inventory, "02.csv", errors
+        )
+        self.assertTrue(
+            any("does not preserve the page-specific MechanicalSignals" in e for e in errors),
+            errors,
+        )
+        self.assertTrue(
+            any("page-specific visual audit" in e for e in errors), errors
+        )
+        self.assertTrue(
+            any("DominantContent merely repeats Region" in e for e in errors), errors
         )
 
     def test_bibliography_rendered_url_path_case_is_exact(self) -> None:

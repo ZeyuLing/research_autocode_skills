@@ -696,6 +696,12 @@ def validate_page_outputs(
                 errors.append(
                     f"page mapping mismatch for {page_id}: {field}"
                 )
+    module.validate_page_audit_specificity(
+        page_ledger,
+        inventory_by_id,
+        "02-page-layout-ledger.csv",
+        errors,
+    )
     module.validate_markdown_id_projection(
         root / "02-page-layout-ledger.md",
         set(inventory_by_id),
@@ -764,6 +770,12 @@ def validate_bibliography_outputs(
         errors,
     )
     module.validate_bibliography_source_identity(
+        bibliography_ledger,
+        inventory_by_reference,
+        "03-bibliography-audit-ledger.csv",
+        errors,
+    )
+    module.validate_bibliography_field_semantics(
         bibliography_ledger,
         inventory_by_reference,
         "03-bibliography-audit-ledger.csv",

@@ -150,6 +150,32 @@ class ValidateR5OutputTests(unittest.TestCase):
                 "EvidenceEndpoint is not bound to the complete rendered DOI",
             )
 
+    def test_scoped_gate_rejects_entry_string_reused_as_metadata_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            _, inventory = read_rows(root / "00-bibliography-inventory.csv")
+            complete_entry = (
+                "DOE J, ROE J. A complete fixture citation [C]//Fixture "
+                "Proceedings. 2024: 10-20. DOI: 10.1234/fixture.1."
+            )
+            inventory[0]["RenderedEntry"] = complete_entry
+            write_rows(
+                root / "00-bibliography-inventory.csv",
+                fixture_module.BIB_INVENTORY_COLUMNS,
+                inventory,
+            )
+            headers, rows = read_rows(root / "03-bibliography-audit-ledger.csv")
+            for row in rows:
+                if row["Field"] in {"type", "title", "ordered_authors", "venue"}:
+                    row["RenderedValue"] = complete_entry
+                    row["CanonicalValue"] = complete_entry
+                    row["Verdict"] = "exact"
+            write_rows(root / "03-bibliography-audit-ledger.csv", headers, rows)
+            self.assert_r5_fails(
+                root, "repeats the complete rendered bibliography entry"
+            )
+
     def test_r5_scope_does_not_enumerate_or_open_peer_root_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -145,6 +145,32 @@ class ValidateR4EndpointClosureTests(unittest.TestCase):
                 )
             self.assertEqual([], errors)
 
+    def test_scoped_gate_rejects_access_attempt_as_content_locator(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_doctoral_bundle(root)
+            _, rows = fixture_module.read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            rows[0]["Support"] = "unverifiable"
+            rows[0]["MetadataStatus"] = "unverifiable"
+            rows[0]["ExactSourceLocator"] = (
+                "official record: source-content access attempt"
+            )
+            rows[0]["DispositionEvidence"] = (
+                "reasoned non-finding: network error prevented source access"
+            )
+            fixture_module.write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                fixture_module.CITATION_LEDGER_COLUMNS,
+                rows,
+            )
+            result = self.run_r4(root)
+            self.assertNotEqual(0, result.returncode, result.stdout)
+            self.assertIn(
+                "access attempt is not an exact content locator", result.stdout
+            )
+
     def test_only_closed_access_fields_contribute_endpoints(self) -> None:
         rows = [{
             "ExactAttachedProposition": "see https://example.test/proposition",

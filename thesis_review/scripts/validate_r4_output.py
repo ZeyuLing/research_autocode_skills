@@ -163,6 +163,11 @@ def validate_citation_outputs(
         "04-citation-claim-audit-ledger.csv",
         errors,
     )
+    module.validate_citation_unverifiable_semantics(
+        citation_ledger,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
+    )
     module.compare_sets(
         "citation-claim ledger",
         set(inventory_by_pair),

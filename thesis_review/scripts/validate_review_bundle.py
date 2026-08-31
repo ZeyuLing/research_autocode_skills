@@ -13,6 +13,7 @@ import argparse
 import csv
 import hashlib
 import json
+import math
 import re
 import stat
 import struct
@@ -34,9 +35,16 @@ DOI_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])10\.\d{4,9}/[^\s\[\]`\"]+",
     re.IGNORECASE,
 )
+EXPLICIT_DOI_LABEL_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])doi(?:\s*[:：]\s*|\s+)"
+)
 ARXIV_ID_RE = re.compile(
     r"(?:arxiv\s*:?\s*|arxiv\.org/(?:abs|pdf)/)"
     r"([A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?",
+    re.IGNORECASE,
+)
+EXPLICIT_ARXIV_ID_RE = re.compile(
+    r"arxiv\s*:?\s*([A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?",
     re.IGNORECASE,
 )
 ACCESS_ENDPOINT_MARKER_RE = re.compile(
@@ -248,7 +256,7 @@ def normalized_doi_tokens(value: str) -> set[str]:
     punctuation is removed.
     """
 
-    raw_value = value or ""
+    raw_value = unicodedata.normalize("NFKC", value or "")
     url_spans = [match.span() for match in PUBLIC_URL_RE.finditer(raw_value)]
     tokens: set[str] = set()
     for match in DOI_TOKEN_RE.finditer(raw_value):
@@ -261,6 +269,23 @@ def normalized_doi_tokens(value: str) -> set[str]:
     return tokens
 
 
+def rendered_doi_tokens(value: str) -> set[str]:
+    """Prefer a complete explicit ``DOI:`` field over a broken DOI URL.
+
+    As with arXiv IDs, PDF extraction can split the last part of a rendered URL
+    while preserving the separately printed DOI field.  Only when no explicit
+    field is recoverable do URL-derived DOI tokens bind the work identity.
+    """
+
+    raw_value = unicodedata.normalize("NFKC", value or "")
+    explicit: set[str] = set()
+    for label in EXPLICIT_DOI_LABEL_RE.finditer(raw_value):
+        match = DOI_TOKEN_RE.match(raw_value, label.end())
+        if match is not None:
+            explicit.update(normalized_doi_tokens(match.group(0)))
+    return explicit or normalized_doi_tokens(raw_value)
+
+
 def normalized_arxiv_ids(value: str) -> set[str]:
     """Extract version-insensitive arXiv work identifiers."""
 
@@ -269,6 +294,24 @@ def normalized_arxiv_ids(value: str) -> set[str]:
         match.group(1).casefold()
         for match in ARXIV_ID_RE.finditer(decoded)
     }
+
+
+def rendered_arxiv_ids(value: str) -> set[str]:
+    """Extract the work ID asserted by a rendered bibliography entry.
+
+    PDF extraction can split the final digit of a URL at a line boundary while
+    leaving the explicit ``arXiv:`` field intact.  Treating both fragments as
+    equally authoritative lets a truncated route pass identity binding.  When
+    an explicit arXiv field exists, it is therefore the binding identity;
+    URL-derived IDs are used only when no explicit field is recoverable.
+    """
+
+    decoded = unquote(value or "")
+    explicit = {
+        match.group(1).casefold()
+        for match in EXPLICIT_ARXIV_ID_RE.finditer(decoded)
+    }
+    return explicit or normalized_arxiv_ids(decoded)
 
 
 def normalized_rendered_urls(value: str) -> set[str]:
@@ -300,6 +343,31 @@ def normalized_rendered_urls(value: str) -> set[str]:
     return identities
 
 
+def identity_compatible_rendered_urls(
+    value: str,
+    expected_dois: set[str],
+    expected_arxiv: set[str],
+) -> set[str]:
+    """Keep rendered routes that do not contradict an explicit identifier.
+
+    A PDF-line-broken DOI/arXiv URL can itself be extracted as a syntactically
+    complete shorter URL.  It must not override the complete explicit DOI or
+    ``arXiv:`` field.  Other exact official/project URLs remain eligible.
+    """
+
+    compatible: set[str] = set()
+    for match in PUBLIC_URL_RE.finditer(value or ""):
+        raw_url = match.group(0).rstrip(".,;:")
+        url_dois = normalized_doi_tokens(raw_url)
+        url_arxiv = normalized_arxiv_ids(raw_url)
+        if expected_dois and url_dois and not (expected_dois & url_dois):
+            continue
+        if expected_arxiv and url_arxiv and not (expected_arxiv & url_arxiv):
+            continue
+        compatible.update(normalized_rendered_urls(raw_url))
+    return compatible
+
+
 def validate_citation_source_identity(
     citation_ledger: Iterable[dict[str, Any]],
     bibliography_inventory_by_id: dict[str, dict[str, Any]],
@@ -325,9 +393,11 @@ def validate_citation_source_identity(
         if inventory_row is None:
             continue
         rendered = str(inventory_row.get("RenderedEntry", ""))
-        expected_dois = normalized_doi_tokens(rendered)
-        expected_arxiv = normalized_arxiv_ids(rendered)
-        expected_urls = normalized_rendered_urls(rendered)
+        expected_dois = rendered_doi_tokens(rendered)
+        expected_arxiv = rendered_arxiv_ids(rendered)
+        expected_urls = identity_compatible_rendered_urls(
+            rendered, expected_dois, expected_arxiv
+        )
         if not (expected_dois or expected_arxiv or expected_urls):
             continue
 
@@ -418,9 +488,11 @@ def validate_bibliography_source_identity(
         if inventory_row is None:
             continue
         rendered = str(inventory_row.get("RenderedEntry", ""))
-        expected_dois = normalized_doi_tokens(rendered)
-        expected_arxiv = normalized_arxiv_ids(rendered)
-        expected_urls = normalized_rendered_urls(rendered)
+        expected_dois = rendered_doi_tokens(rendered)
+        expected_arxiv = rendered_arxiv_ids(rendered)
+        expected_urls = identity_compatible_rendered_urls(
+            rendered, expected_dois, expected_arxiv
+        )
         endpoint_dois = normalized_doi_tokens(endpoint)
         endpoint_arxiv = normalized_arxiv_ids(endpoint)
         endpoint_urls = normalized_rendered_urls(endpoint)
@@ -451,6 +523,482 @@ def validate_bibliography_source_identity(
                 f"{location}: EvidenceEndpoint does not equal an official URL "
                 f"rendered for {reference_id}"
             )
+
+
+BIB_ABSENT_VALUES = {
+    "n/a",
+    "na",
+    "none",
+    "no value",
+    "not applicable",
+    "not assigned",
+    "not available",
+    "not provided",
+    "not rendered",
+    "not rendered in bibliography",
+    "not rendered in the bibliography",
+    "not required",
+    "not stated",
+    "不适用",
+    "无",
+    "未分配",
+    "未提供",
+    "未收录",
+    "未标注",
+    "未注明",
+    "未著录",
+    "未给出",
+    "未显示",
+}
+BIB_FIELD_SPECIFIC_ABSENT_PATTERNS: tuple[
+    tuple[re.Pattern[str], frozenset[str]], ...
+] = (
+    (
+        re.compile(
+            r"(?i)^no\s+volume"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"volume"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+issue"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"issue"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+(?:pages?|page\s+range|article\s+number)"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"pages_or_article_number"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+doi"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"doi"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+arxiv\s+id"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"arxiv_id"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+arxiv\s+version"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"arxiv_version"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+url"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"url"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+access\s+date"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"access_date"}),
+    ),
+    (
+        re.compile(
+            r"(?i)^no\s+isbn"
+            r"(?:\s+(?:assigned|available|provided|rendered|stated))?$"
+        ),
+        frozenset({"isbn_or_other_persistent_id"}),
+    ),
+    (re.compile(r"^无卷号$"), frozenset({"volume"})),
+    (re.compile(r"^无期号$"), frozenset({"issue"})),
+    (re.compile(r"^无(?:页码|文章号)$"), frozenset({"pages_or_article_number"})),
+    (re.compile(r"(?i)^无doi$"), frozenset({"doi"})),
+    (re.compile(r"(?i)^无arxiv编号$"), frozenset({"arxiv_id"})),
+    (re.compile(r"(?i)^无arxiv版本$"), frozenset({"arxiv_version"})),
+    (re.compile(r"(?i)^无url$"), frozenset({"url"})),
+    (re.compile(r"^无访问日期$"), frozenset({"access_date"})),
+    (re.compile(r"(?i)^无isbn$"), frozenset({"isbn_or_other_persistent_id"})),
+)
+BIB_COMPACT_FIELDS = {
+    "type": 100,
+    "publication_status": 180,
+    "volume": 80,
+    "issue": 80,
+    "pages_or_article_number": 120,
+    "arxiv_version": 24,
+    "access_date": 64,
+    "isbn_or_other_persistent_id": 180,
+    "existence": 180,
+    "retraction_withdrawal_correction_superseding": 240,
+}
+BIB_PROSE_FIELDS = {"title", "ordered_authors", "venue"}
+
+
+def normalized_metadata_cell(value: str) -> str:
+    """Normalize one field value without erasing bibliographic identity."""
+
+    return re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", value or "")
+    ).strip().casefold()
+
+
+def bibliography_value_is_absent(value: str, field: str | None = None) -> bool:
+    """Recognize an explicit absence marker, respecting named-field scope."""
+
+    normalized = normalized_metadata_cell(value).strip(".[]()")
+    if normalized in BIB_ABSENT_VALUES:
+        return True
+    for pattern, allowed_fields in BIB_FIELD_SPECIFIC_ABSENT_PATTERNS:
+        if pattern.fullmatch(normalized) is not None:
+            return field is None or field in allowed_fields
+    return False
+
+
+def validate_bibliography_field_semantics(
+    bibliography_ledger: Iterable[dict[str, Any]],
+    bibliography_inventory_by_id: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Reject field ledgers that merely duplicate an entry-level citation.
+
+    Seventeen rows per reference are useful only when each cell contains the
+    value of the named field.  Repeating the complete rendered entry under
+    ``title``, ``ordered_authors``, ``venue``, ``access_date``, and status
+    fields is schema-shaped filler, not a metadata audit.  The checks below are
+    deliberately conservative: they enforce field separation and basic scalar
+    shapes without trying to decide the correct scholarly metadata.
+    """
+
+    rows = list(bibliography_ledger)
+    canonical_signatures: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    rendered_signatures: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+
+    for line, row in enumerate(rows, start=2):
+        reference_id = str(row.get("ReferenceID", ""))
+        field = str(row.get("Field", ""))
+        verdict = str(row.get("Verdict", "")).strip().casefold()
+        rendered_value = str(row.get("RenderedValue", "")).strip()
+        canonical_value = str(row.get("CanonicalValue", "")).strip()
+        location = f"{filename}:{line}"
+
+        rendered_absent = bibliography_value_is_absent(rendered_value, field)
+        canonical_absent = bibliography_value_is_absent(canonical_value, field)
+        if verdict == "legitimate n/a":
+            if not (rendered_absent and canonical_absent):
+                errors.append(
+                    f"{location}: legitimate N/A requires field-specific absent "
+                    "values in both RenderedValue and CanonicalValue"
+                )
+            continue
+        if verdict == "exact" and (rendered_absent or canonical_absent):
+            errors.append(
+                f"{location}: an absent field value must use legitimate N/A or "
+                "an evidence-bound mismatch/unverifiable verdict, not exact"
+            )
+
+        for label, value, signature_map in (
+            ("RenderedValue", rendered_value, rendered_signatures),
+            ("CanonicalValue", canonical_value, canonical_signatures),
+        ):
+            normalized = normalized_metadata_cell(value)
+            if (
+                normalized
+                and not bibliography_value_is_absent(value, field)
+                and len(normalized) >= 12
+            ):
+                signature_map[reference_id][normalized].append(field)
+
+            inventory_row = bibliography_inventory_by_id.get(reference_id)
+            full_entry = normalized_metadata_cell(
+                str((inventory_row or {}).get("RenderedEntry", ""))
+            )
+            if (
+                full_entry
+                and normalized == full_entry
+                and field not in {"title"}
+                and len(full_entry) >= 40
+            ):
+                errors.append(
+                    f"{location}: {label} repeats the complete rendered "
+                    f"bibliography entry instead of the {field!r} field"
+                )
+
+        if verdict == "unverifiable":
+            continue
+
+        canonical_normalized = normalized_metadata_cell(canonical_value)
+        if field in BIB_COMPACT_FIELDS and len(canonical_value) > BIB_COMPACT_FIELDS[field]:
+            errors.append(
+                f"{location}: CanonicalValue is not a field-specific compact "
+                f"value for {field!r}"
+            )
+        if field in BIB_PROSE_FIELDS and re.search(
+            r"(?i)https?://|\bdoi\s*:|\barxiv\s*:|\[[JCMRZD](?:/OL)?\]|//",
+            canonical_value,
+        ):
+            errors.append(
+                f"{location}: CanonicalValue for {field!r} contains entry-level "
+                "identifier/type/venue delimiters"
+            )
+        if field == "year" and re.fullmatch(r"(?:18|19|20|21)\d{2}", canonical_value) is None:
+            errors.append(
+                f"{location}: CanonicalValue for 'year' must be one four-digit year"
+            )
+        elif field == "doi":
+            doi_tokens = normalized_doi_tokens(canonical_value)
+            if len(doi_tokens) != 1:
+                errors.append(
+                    f"{location}: CanonicalValue for 'doi' must contain exactly "
+                    "one complete DOI"
+                )
+        elif field == "arxiv_id" and re.fullmatch(
+            r"(?:[A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})",
+            canonical_value,
+            re.IGNORECASE,
+        ) is None:
+            errors.append(
+                f"{location}: CanonicalValue for 'arxiv_id' must be one complete "
+                "version-free arXiv work ID"
+            )
+        elif field == "arxiv_version" and re.fullmatch(
+            r"v\d+", canonical_value, re.IGNORECASE
+        ) is None:
+            errors.append(
+                f"{location}: CanonicalValue for 'arxiv_version' must be vN"
+            )
+        elif field == "url" and PUBLIC_URL_RE.fullmatch(canonical_value) is None:
+            errors.append(
+                f"{location}: CanonicalValue for 'url' must be one complete "
+                "http(s) URL"
+            )
+        elif field == "access_date" and (
+            len(canonical_value) > 64
+            or re.search(r"(?:18|19|20|21)\d{2}", canonical_value) is None
+        ):
+            errors.append(
+                f"{location}: CanonicalValue for 'access_date' must be one "
+                "field-specific date"
+            )
+
+    for reference_id, signature_map in canonical_signatures.items():
+        for fields in signature_map.values():
+            distinct_fields = sorted(set(fields))
+            if len(distinct_fields) >= 3:
+                errors.append(
+                    f"{filename}: {reference_id} reuses one CanonicalValue across "
+                    f"unrelated metadata fields {distinct_fields}; decompose the "
+                    "authoritative record field by field"
+                )
+    for reference_id, signature_map in rendered_signatures.items():
+        for fields in signature_map.values():
+            distinct_fields = sorted(set(fields))
+            if len(distinct_fields) >= 3:
+                errors.append(
+                    f"{filename}: {reference_id} reuses one RenderedValue across "
+                    f"unrelated metadata fields {distinct_fields}; extract the "
+                    "rendered entry field by field"
+                )
+
+
+ACCESS_FAILURE_DETAIL_RE = re.compile(
+    r"(?i)(?:http\s*[45]\d\d|timeout|timed out|connection reset|network error|"
+    r"tls|dns|robots|paywall|authentication|access denied|forbidden|not found|"
+    r"empty response|inaccessible|insufficient to verify|does not expose)"
+)
+
+UNVERIFIABLE_QUOTED_IDENTITY_RE = re.compile(
+    r'''(?:"[^"\n]{3,300}"|'[^'\n]{3,300}'|“[^”\n]{3,300}”|‘[^’\n]{3,300}’)'''
+)
+UNVERIFIABLE_LABELED_TITLE_RE = re.compile(
+    r"(?i)\b(?:title|paper|work|article)\s*(?:[:#=\-–]\s*)?"
+    r"[^\n;,.]{3,240}(?=$|[;,.])"
+    r"|\b(?:source|reference)\s*[:#=\-–]\s*[^\n;,.]{3,240}(?=$|[;,.])"
+)
+UNVERIFIABLE_REFERENCE_ID_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])REF\d+(?![A-Za-z0-9])"
+)
+UNVERIFIABLE_BRACKET_LABEL_RE = re.compile(
+    r"(?i)\[(?:REF\s*)?\d+(?:\s*[-–,]\s*\d+)*\]"
+)
+UNVERIFIABLE_LONG_ID_RE = re.compile(
+    r"(?i)(?<![A-Za-z0-9])(?:"
+    r"[0-9a-f]{8,}(?:-[0-9a-f]{4,})+"
+    r"|[A-Za-z][A-Za-z0-9._:/-]*\d{6,}[A-Za-z0-9._:/-]*"
+    r"|\d{6,}[A-Za-z0-9._:/-]*"
+    r")(?![A-Za-z0-9])"
+)
+
+
+def normalized_unverifiable_signature(value: str) -> str:
+    """Remove work identity while retaining the substantive failure reason.
+
+    A blanket access waiver must not become unique merely by interpolating a
+    different URL, DOI/arXiv identifier, ``REFnnnn`` token, bibliography label,
+    quoted title, or long database identifier into the same sentence.  HTTP
+    status codes are intentionally retained because they describe the failure,
+    not the work identity.
+    """
+
+    signature = unicodedata.normalize("NFKC", value or "").casefold()
+    signature = PUBLIC_URL_RE.sub(" <source> ", signature)
+    signature = DOI_TOKEN_RE.sub(" <work-id> ", signature)
+    signature = ARXIV_ID_RE.sub(" <work-id> ", signature)
+    signature = UNVERIFIABLE_QUOTED_IDENTITY_RE.sub(" <title> ", signature)
+    signature = UNVERIFIABLE_LABELED_TITLE_RE.sub(" <title> ", signature)
+    signature = UNVERIFIABLE_REFERENCE_ID_RE.sub(" <reference> ", signature)
+    signature = UNVERIFIABLE_BRACKET_LABEL_RE.sub(" <reference> ", signature)
+    signature = re.sub(
+        r"(?i)\b(?:pmid|isbn|issn|openreview(?:\s+id)?|anthology(?:\s+id)?)"
+        r"\s*[:#]?\s*\S+",
+        " <work-id> ",
+        signature,
+    )
+    signature = UNVERIFIABLE_LONG_ID_RE.sub(" <work-id> ", signature)
+    signature = re.sub(
+        r"(?:<source>|<work-id>|<title>|<reference>)"
+        r"(?:\s*[,;/|+&]\s*(?:<source>|<work-id>|<title>|<reference>))+",
+        " <identity> ",
+        signature,
+    )
+    signature = re.sub(r"\s+", " ", signature).strip(" .,:;-–")
+    return signature
+
+
+def validate_citation_unverifiable_semantics(
+    citation_ledger: Iterable[dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Require source-specific failure evidence for unverifiable citation rows."""
+
+    rows = list(citation_ledger)
+    signature_by_reference: dict[str, str] = {}
+    for line, row in enumerate(rows, start=2):
+        support = str(row.get("Support", "")).strip().casefold()
+        metadata_status = str(row.get("MetadataStatus", "")).strip().casefold()
+        if support != "unverifiable" and metadata_status != "unverifiable":
+            continue
+        if (
+            str(row.get("PublicIdentifier", "")) == DANGLING_REFERENCE_SENTINEL
+            and metadata_status == "mismatch"
+        ):
+            # The missing rendered bibliography identity is itself the complete
+            # PDF-visible defect; no source-specific access result can exist.
+            continue
+        location = f"{filename}:{line}"
+        locator = str(row.get("ExactSourceLocator", "")).strip()
+        disposition = str(row.get("DispositionEvidence", "")).strip()
+        if re.search(r"(?i)\b(?:access|source-content)\s+attempt\b", locator):
+            errors.append(
+                f"{location}: an access attempt is not an exact content locator"
+            )
+        if not ACCESS_FAILURE_DETAIL_RE.search(disposition):
+            errors.append(
+                f"{location}: unverifiable support/metadata requires a concrete "
+                "source-specific access or content-insufficiency result"
+            )
+        reference_id = str(row.get("ReferenceID", ""))
+        if reference_id not in signature_by_reference:
+            signature = normalized_unverifiable_signature(disposition)
+            signature_by_reference[reference_id] = signature
+
+    if len(signature_by_reference) >= 12:
+        signature_counts = Counter(signature_by_reference.values())
+        signature, count = signature_counts.most_common(1)[0]
+        if signature and count > max(
+            8, math.ceil(len(signature_by_reference) * 0.60)
+        ):
+            errors.append(
+                f"{filename}: blanket unverifiable disposition reused for "
+                f"{count}/{len(signature_by_reference)} distinct references; "
+                "record source-specific access/content evidence"
+            )
+
+
+def validate_page_audit_specificity(
+    page_ledger: Iterable[dict[str, Any]],
+    page_inventory_by_id: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Reject a whole-thesis layout ledger filled with one generic sentence."""
+
+    rows = list(page_ledger)
+    for line, row in enumerate(rows, start=2):
+        page_id = str(row.get("PageID", ""))
+        signals = normalized_metadata_cell(str(row.get("Signals", "")))
+        evidence = normalized_metadata_cell(str(row.get("Evidence", "")))
+        mechanical = normalized_metadata_cell(
+            str(page_inventory_by_id.get(page_id, {}).get("MechanicalSignals", ""))
+        )
+        if mechanical and mechanical not in NON_SIGNAL_VALUES:
+            if mechanical not in signals and mechanical not in evidence:
+                errors.append(
+                    f"{filename}:{line}: Signals/Evidence does not preserve the "
+                    f"page-specific MechanicalSignals for {page_id}"
+                )
+        if str(row.get("Disposition", "")).strip().casefold() == "intentional":
+            if re.search(
+                r"(?i)blank|separator|template|chapter|verso|recto|intentionally|"
+                r"空白|分隔|模板|章节|有意",
+                str(row.get("Evidence", "")),
+            ) is None:
+                errors.append(
+                    f"{filename}:{line}: intentional disposition requires a "
+                    "page-specific structural rationale in Evidence"
+                )
+
+    if len(rows) < 10:
+        return
+    evidence_values = {
+        normalized_metadata_cell(str(row.get("Evidence", ""))) for row in rows
+    }
+    signals_values = {
+        normalized_metadata_cell(str(row.get("Signals", ""))) for row in rows
+    }
+    mechanical_values = {
+        normalized_metadata_cell(
+            str(page_inventory_by_id.get(str(row.get("PageID", "")), {}).get(
+                "MechanicalSignals", ""
+            ))
+        )
+        for row in rows
+    }
+    minimum_evidence_variants = min(10, max(3, math.ceil(len(rows) / 20)))
+    if len(evidence_values) < minimum_evidence_variants:
+        errors.append(
+            f"{filename}: only {len(evidence_values)} distinct Evidence values "
+            f"for {len(rows)} pages; a page-specific visual audit requires at "
+            f"least {minimum_evidence_variants}"
+        )
+    if len(mechanical_values) >= 5 and len(signals_values) < 3:
+        errors.append(
+            f"{filename}: Signals is template-filled ({len(signals_values)} "
+            "distinct values) despite varied page-specific mechanical triage"
+        )
+    region_equals_content = sum(
+        normalized_metadata_cell(str(row.get("Region", "")))
+        == normalized_metadata_cell(str(row.get("DominantContent", "")))
+        for row in rows
+    )
+    if region_equals_content > math.floor(len(rows) * 0.50):
+        errors.append(
+            f"{filename}: DominantContent merely repeats Region on "
+            f"{region_equals_content}/{len(rows)} pages instead of recording "
+            "page-level content"
+        )
 
 
 PAGE_ID_RE = re.compile(r"^P(\d{4})$")
@@ -7539,6 +8087,12 @@ def main(argv: list[str] | None = None) -> int:
                     f"page mapping mismatch for {page_id}: {field} "
                     f"inventory={inv[field]!r}, ledger={led[field]!r}"
                 )
+    validate_page_audit_specificity(
+        page_ledger,
+        page_inv_by_id,
+        "02-page-layout-ledger.csv",
+        errors,
+    )
     validate_markdown_id_projection(
         root / "02-page-layout-ledger.md",
         set(page_inv_by_id),
@@ -7851,6 +8405,12 @@ def main(argv: list[str] | None = None) -> int:
         "03-bibliography-audit-ledger.csv",
         errors,
     )
+    validate_bibliography_field_semantics(
+        bib_ledger,
+        bib_inv_by_id,
+        "03-bibliography-audit-ledger.csv",
+        errors,
+    )
     bib_refs_in_ledger = {
         row["ReferenceID"] for row in bib_ledger if row["ReferenceID"]
     }
@@ -8029,6 +8589,11 @@ def main(argv: list[str] | None = None) -> int:
     validate_citation_source_identity(
         citation_ledger,
         bib_inv_by_id,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
+    )
+    validate_citation_unverifiable_semantics(
+        citation_ledger,
         "04-citation-claim-audit-ledger.csv",
         errors,
     )
