@@ -831,7 +831,7 @@ def build_summary_shell(
     table = module.render_markdown_pipe_table
     blocks = [
         "# Current-round user-facing review summary",
-        "## Clean-room identity\n"
+        "## Clean-room identity\n\n"
         "- Actor ID: S\n"
         f"- Review round ID: {process.get('round_id', '')}\n"
         f"- Review retry ID: {process.get('retry_id', '')}\n"

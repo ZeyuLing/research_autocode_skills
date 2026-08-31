@@ -1052,7 +1052,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
         )
         return (
             "# Current-round user-facing review summary\n\n"
-            + "## Clean-room identity\n"
+            + "## Clean-room identity\n\n"
             + "- Actor ID: S\n"
             + f"- Review round ID: {process['round_id']}\n"
             + f"- Review retry ID: {process['retry_id']}\n"
