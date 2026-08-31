@@ -1419,6 +1419,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n"
             + "## Thesis-stated questions and contributions — neutral navigation only\n\nThe fixture proposition appears on physical p.1; this line records its location without evaluating the claim.\n\n"
             + "## Objective inventories and locations\n\nThe closed inventories are 00-page-inventory.csv, 00-bibliography-inventory.csv, 00-citation-candidate-ledger.csv, 00-citation-inventory.csv, and 00-unmatched-bracket-ledger.csv.\n\n"
+            + "- Authored-prose navigation pages: physical p.1\n"
             + "- Numeric-bracket candidate rows: 3\n"
             + "- Citation-classified candidate rows: 1\n"
             + "- Non-citation-classified candidate rows: 2\n"

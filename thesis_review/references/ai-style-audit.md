@@ -34,13 +34,14 @@ Use only the neutral process envelope; `SKILL.md`; the clean-room, report-templa
 
 Read the complete rendered thesis at a legible scale and inspect the authored prose as rendered in the PDF. Always examine:
 
+- the preface (`序言`/`前言`, `Preface`/`Foreword`) when present;
 - Chinese and English abstracts;
 - the introduction, thesis questions, contributions, and roadmap;
 - every chapter introduction, transition, result-analysis passage, limitation paragraph, and conclusion;
 - the thesis-level synthesis and outlook;
-- figure/table captions and appendix prose when they contain substantive authorial explanation.
+- figure/table captions, appendix prose, and substantive explanatory or contribution prose anywhere in front/back matter, including prose that shares a page with CV metadata.
 
-Exclude institutional declarations, template-generated front matter, table-of-contents entries, raw equations, algorithms, tables dominated by values, bibliography entries, and CV metadata from the style judgment. Record these exclusions.
+Exclude institutional declarations, template-generated front matter, table-of-contents entries, raw equations, algorithms, tables dominated by values, bibliography entries, and CV metadata spans from the style judgment. Exclusions are span-level, not page-level: a CV/back-matter label does not exclude substantive authored prose elsewhere on that page. Record these exclusions.
 
 ## 4. Signal families
 
@@ -59,7 +60,7 @@ Also record counter-evidence: precise domain reasoning, concrete causal or diagn
 
 ## 5. Procedure
 
-1. Freeze the PDF checksum, page count, and PDF-derived authored-prose corpus.
+1. Freeze the PDF checksum, page count, and PDF-derived authored-prose corpus, beginning with any rendered preface and continuing through the abstracts, chapters, and substantive appendix prose.
 2. Inspect every physical page. Do not use a contact sheet or extracted text as a substitute for reading.
 3. Mechanically count recurrent transitions, sentence openings, paragraph endings, repeated n-grams, sentence-length distribution, punctuation patterns, and chapter-introduction/conclusion templates. Preserve the query or script and record corpus exclusions.
 4. Read every candidate in context. A lexical hit becomes evidence only when it participates in a recurrent pattern and degrades specificity, flow, or authorial voice.

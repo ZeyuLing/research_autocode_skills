@@ -322,6 +322,113 @@ class ValidateStagePOutputTests(unittest.TestCase):
                 "PDF extraction runtime must exactly equal current validator runtime",
             )
 
+    def test_preface_detector_requires_independent_substantive_heading(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "prefaces.pdf"
+            writer = fixture_module.PdfWriter()
+            texts = (
+                "Preface\nThis thesis studies motion generation in a unified setting. "
+                "It explains the research motivation, the connection among chapters, "
+                "and the scope of the conclusions. These paragraphs are authored prose.",
+                "Contents\nPreface 9\nChapter 1 Introduction 12\n1.1 Background 13",
+                "Preface",
+            )
+            for value in texts:
+                page = writer.add_blank_page(width=595.28, height=841.89)
+                fixture_module.add_ascii_text(writer, page, value)
+            with pdf_path.open("wb") as handle:
+                writer.write(handle)
+            self.assertEqual(
+                FULL_VALIDATOR_MODULE.detect_rendered_substantive_preface_pages(
+                    pdf_path
+                ),
+                {1},
+            )
+
+    def test_manifest_preface_page_cannot_be_omitted_from_authored_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "detect_rendered_substantive_preface_pages",
+                return_value={1},
+            ):
+                self.assertEqual(
+                    STAGE_P_MODULE.validate_stage_p(root, FULL_VALIDATOR_MODULE),
+                    [],
+                )
+                manifest = root / "00-manifest.md"
+                manifest.write_text(
+                    manifest.read_text(encoding="utf-8").replace(
+                        "Authored-prose navigation pages: physical p.1",
+                        "Authored-prose navigation pages: physical p.2",
+                    ),
+                    encoding="utf-8",
+                )
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertTrue(
+                any("omit independently rendered substantive preface" in error
+                    for error in errors),
+                errors,
+            )
+
+    def test_mixed_cv_page_keeps_substantive_authored_prose_in_corpus(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "back-matter.pdf"
+            writer = fixture_module.PdfWriter()
+            texts = (
+                "Curriculum Vitae\nEducation 2021-2026 Example University\n"
+                "This thesis reorganizes the related methods and experiments around "
+                "one research narrative. The author conducted the experiments, wrote "
+                "the manuscript, and integrated the material into this dissertation.",
+                "Curriculum Vitae\nEducation 2021-2026 Example University\n"
+                "Publications\n1. Example Author. Example Paper. 2025.",
+            )
+            for value in texts:
+                page = writer.add_blank_page(width=595.28, height=841.89)
+                fixture_module.add_ascii_text(writer, page, value)
+            with pdf_path.open("wb") as handle:
+                writer.write(handle)
+            self.assertEqual(
+                FULL_VALIDATOR_MODULE.detect_rendered_substantive_authored_back_pages(
+                    pdf_path
+                ),
+                {1},
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "detect_rendered_substantive_authored_back_pages",
+                return_value={2},
+            ):
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertTrue(
+                any("authored contribution/explanatory prose" in error
+                    for error in errors),
+                errors,
+            )
+
+    def test_authored_page_set_is_canonical_and_compact(self) -> None:
+        parse = FULL_VALIDATOR_MODULE.parse_canonical_physical_page_set
+        self.assertEqual(parse("physical p.1-3; physical p.7", 10), {1, 2, 3, 7})
+        for malformed in (
+            "physical p.1; physical p.2",
+            "physical p.2; physical p.1",
+            "physical p.0",
+            "physical p.1-11",
+            "p.1",
+        ):
+            with self.subTest(value=malformed):
+                self.assertIsNone(parse(malformed, 10))
+
     def test_structural_heading_detector_rejects_toc_dot_leaders(self) -> None:
         detect = FULL_VALIDATOR_MODULE._has_rendered_structural_heading
         self.assertFalse(detect("附录 ................................ 149", "appendix"))

@@ -3351,6 +3351,100 @@ def _rendered_top_lines(text: str, limit: int = 14) -> list[str]:
     ][:limit]
 
 
+def detect_rendered_substantive_preface_pages(pdf_path: Path) -> set[int]:
+    """Return physical pages headed by an independent substantive preface."""
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path), strict=False)
+    found: set[int] = set()
+    heading_pattern = re.compile(r"(?i)^(?:序\s*言|前\s*言|preface|foreword)$")
+    toc_pattern = re.compile(r"(?i)^(?:目\s*录|contents|table\s+of\s+contents)$")
+    for physical_page, page in enumerate(reader.pages, start=1):
+        lines = _rendered_top_lines(page.extract_text() or "", limit=40)
+        if any(toc_pattern.fullmatch(line) for line in lines[:3]):
+            continue
+        heading_index = next(
+            (index for index, line in enumerate(lines[:4])
+             if heading_pattern.fullmatch(line)),
+            None,
+        )
+        if heading_index is None:
+            continue
+        prose_lines = [
+            line for line in lines[heading_index + 1:]
+            if not re.fullmatch(r"(?i)(?:\d{1,4}|[ivxlcdm]{1,10})", line)
+            and re.search(r"\.{3,}|\u2026{2,}|\u00b7{3,}", line) is None
+        ]
+        prose = "".join(re.sub(r"\s+", "", line) for line in prose_lines)
+        if len(prose) >= 80 and len(re.findall(r"[，。！？；：,.!?;:]", prose)) >= 2:
+            found.add(physical_page)
+    return found
+
+
+def detect_rendered_substantive_authored_back_pages(pdf_path: Path) -> set[int]:
+    """Find authored explanatory prose within rendered CV/back matter.
+
+    Metadata and publication-list rows remain excludable.  A page in the
+    rendered back-matter run is included only when it also contains a
+    sustained sentence-like first-person or thesis-level contribution
+    statement, so a mixed CV page cannot be excluded wholesale.
+    """
+
+    from pypdf import PdfReader
+
+    reader = PdfReader(str(pdf_path), strict=False)
+    page_texts = [page.extract_text() or "" for page in reader.pages]
+    back_start = next(
+        (index for index, text in enumerate(page_texts)
+         if _has_rendered_structural_heading(text, "back")),
+        None,
+    )
+    if back_start is None:
+        return set()
+    stance = re.compile(
+        r"(?i)(?:本人|本论文|本学位论文|作者(?:承担|负责|完成|贡献)|"
+        r"this\s+(?:thesis|dissertation)|the\s+author\s+(?:contributed|"
+        r"conducted|performed|wrote|was\s+responsible)|\bI\s+(?:contributed|"
+        r"conducted|performed|wrote|was\s+responsible))"
+    )
+    found: set[int] = set()
+    for index, text in enumerate(page_texts[back_start:], start=back_start):
+        normalized = re.sub(r"\s+", " ", text).strip()
+        punctuation_count = len(re.findall(r"[，。！？；：,.!?;:]", normalized))
+        if len(normalized) >= 120 and punctuation_count >= 2 and stance.search(normalized):
+            found.add(index + 1)
+    return found
+
+
+def parse_canonical_physical_page_set(value: str, page_count: int) -> set[int] | None:
+    """Parse a compact canonical ``physical p.N[-M]`` page-set field."""
+
+    parts = value.split("; ") if value else []
+    pages: list[int] = []
+    for part in parts:
+        match = re.fullmatch(r"physical p\.(\d+)(?:-(\d+))?", part)
+        if match is None:
+            return None
+        start = int(match.group(1))
+        end = int(match.group(2) or start)
+        if start < 1 or end < start or end > page_count:
+            return None
+        pages.extend(range(start, end + 1))
+    if not pages or pages != sorted(set(pages)):
+        return None
+    canonical: list[str] = []
+    run_start = run_end = pages[0]
+    for page in pages[1:]:
+        if page == run_end + 1:
+            run_end = page
+            continue
+        canonical.append(f"physical p.{run_start}" + (f"-{run_end}" if run_end != run_start else ""))
+        run_start = run_end = page
+    canonical.append(f"physical p.{run_start}" + (f"-{run_end}" if run_end != run_start else ""))
+    return set(pages) if "; ".join(canonical) == value else None
+
+
 def _looks_like_independent_title(value: str) -> bool:
     """Reject sentence-like prose while accepting compact rendered titles."""
 
@@ -9018,6 +9112,40 @@ def validate_manifest(
     objective_section = markdown_section_body_raw(
         text, "Objective inventories and locations"
     ) or ""
+    authored_pages_value = labeled_value(
+        objective_section, "Authored-prose navigation pages"
+    ) or ""
+    physical_page_count = int(process.get("physical_page_count", 0) or 0)
+    authored_pages = parse_canonical_physical_page_set(
+        authored_pages_value, physical_page_count
+    )
+    if authored_pages is None:
+        errors.append(
+            f"{path.name}: Authored-prose navigation pages must be one canonical "
+            "ascending, compact, duplicate-free semicolon-separated physical-page set"
+        )
+    frozen_pdf = root / str(process.get("frozen_pdf_file", ""))
+    if frozen_pdf.is_file():
+        try:
+            preface_pages = detect_rendered_substantive_preface_pages(frozen_pdf)
+            back_pages = detect_rendered_substantive_authored_back_pages(frozen_pdf)
+        except Exception as exc:
+            errors.append(f"{path.name}: could not derive authored-prose pages: {exc}")
+        else:
+            declared_pages = authored_pages or set()
+            omitted = sorted(preface_pages - declared_pages)
+            if omitted:
+                errors.append(
+                    f"{path.name}: Authored-prose navigation pages omit independently "
+                    f"rendered substantive preface page(s): {omitted}"
+                )
+            omitted_back = sorted(back_pages - declared_pages)
+            if omitted_back:
+                errors.append(
+                    f"{path.name}: Authored-prose navigation pages omit substantive "
+                    f"authored contribution/explanatory prose in rendered back "
+                    f"matter page(s): {omitted_back}"
+                )
     for required_name in (
         "00-page-inventory.csv", "00-bibliography-inventory.csv",
         "00-citation-candidate-ledger.csv", "00-citation-inventory.csv",
