@@ -24,11 +24,21 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
+from urllib.parse import unquote, urlsplit, urlunsplit
 
 
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
 HEX64_FIND_RE = re.compile(r"(?<![0-9a-fA-F])([0-9a-fA-F]{64})(?![0-9a-fA-F])")
-PUBLIC_URL_RE = re.compile(r"https?://[^\s;,\[\]`\"]+", re.IGNORECASE)
+PUBLIC_URL_RE = re.compile(r"https?://[^\s;,\[\]`\"<>]+", re.IGNORECASE)
+DOI_TOKEN_RE = re.compile(
+    r"(?<![A-Za-z0-9])10\.\d{4,9}/[^\s\[\]`\"]+",
+    re.IGNORECASE,
+)
+ARXIV_ID_RE = re.compile(
+    r"(?:arxiv\s*:?\s*|arxiv\.org/(?:abs|pdf)/)"
+    r"([A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?",
+    re.IGNORECASE,
+)
 ACCESS_ENDPOINT_MARKER_RE = re.compile(
     r"(?i)(?:^|[;\n])\s*accessed endpoint\s*:\s*"
     r"(https?://[^\s;,\[\]`\"<>]+)"
@@ -223,6 +233,223 @@ def validate_citation_endpoint_records(
             errors.append(
                 f"{filename}:{line}: DispositionEvidence URL(s) must use the "
                 f"closed 'accessed endpoint: <URL>' marker; unmarked={unmarked}"
+            )
+
+
+def normalized_doi_tokens(value: str) -> set[str]:
+    """Extract complete DOI tokens for identity comparison.
+
+    DOI suffixes are not restricted to the common Crossref character subset;
+    historical DOI forms legitimately contain characters such as ``<``, ``>``,
+    ``&``, and ``=``. Percent decoding is applied to the DOI token only, after
+    its raw span is identified. For a token inside an HTTP(S) URL, an unescaped
+    ``?`` or ``#`` starts the URL query/fragment and is not part of the DOI;
+    outside a URL it remains a legal DOI suffix character. Only terminal prose
+    punctuation is removed.
+    """
+
+    raw_value = value or ""
+    url_spans = [match.span() for match in PUBLIC_URL_RE.finditer(raw_value)]
+    tokens: set[str] = set()
+    for match in DOI_TOKEN_RE.finditer(raw_value):
+        raw_token = match.group(0)
+        if any(start <= match.start() < end for start, end in url_spans):
+            raw_token = raw_token.split("?", 1)[0].split("#", 1)[0]
+        token = unquote(raw_token).rstrip(".,;:").casefold()
+        if token:
+            tokens.add(token)
+    return tokens
+
+
+def normalized_arxiv_ids(value: str) -> set[str]:
+    """Extract version-insensitive arXiv work identifiers."""
+
+    decoded = unquote(value or "")
+    return {
+        match.group(1).casefold()
+        for match in ARXIV_ID_RE.finditer(decoded)
+    }
+
+
+def normalized_rendered_urls(value: str) -> set[str]:
+    """Extract rendered URL identities without erasing path/query case.
+
+    URL schemes and host names are case-insensitive; paths and queries are not.
+    The latter therefore remain byte-for-byte case-sensitive, including
+    percent-encoded reserved characters. Decoding ``%2F`` into ``/`` would
+    conflate two resources that an HTTP server may route differently.
+    """
+
+    identities: set[str] = set()
+    for match in PUBLIC_URL_RE.finditer(value or ""):
+        raw = match.group(0).rstrip(".,;:")
+        if not raw:
+            continue
+        parts = urlsplit(raw)
+        identities.add(
+            urlunsplit(
+                (
+                    parts.scheme.casefold(),
+                    parts.netloc.casefold(),
+                    parts.path,
+                    parts.query,
+                    parts.fragment,
+                )
+            )
+        )
+    return identities
+
+
+def validate_citation_source_identity(
+    citation_ledger: Iterable[dict[str, Any]],
+    bibliography_inventory_by_id: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Bind every auditable citation endpoint to the complete rendered identity.
+
+    A syntactically valid URL is not enough. When the rendered bibliography
+    exposes a DOI, arXiv ID, or official URL, ``PublicIdentifier`` must preserve
+    that complete identity and ``ContentSourceOpened`` must resolve through the
+    same identity (or an exact official URL also rendered for the work). This
+    prevents a truncated DOI prefix from masquerading as an inaccessible source.
+
+    References with no mechanically recoverable persistent identifier remain a
+    semantic reviewer responsibility; dangling references are validated by their
+    separate closed contract.
+    """
+
+    for line, row in enumerate(citation_ledger, start=2):
+        reference_id = str(row.get("ReferenceID", ""))
+        inventory_row = bibliography_inventory_by_id.get(reference_id)
+        if inventory_row is None:
+            continue
+        rendered = str(inventory_row.get("RenderedEntry", ""))
+        expected_dois = normalized_doi_tokens(rendered)
+        expected_arxiv = normalized_arxiv_ids(rendered)
+        expected_urls = normalized_rendered_urls(rendered)
+        if not (expected_dois or expected_arxiv or expected_urls):
+            continue
+
+        public_identifier = str(row.get("PublicIdentifier", "")).strip()
+        content_source = str(row.get("ContentSourceOpened", "")).strip()
+        public_dois = normalized_doi_tokens(public_identifier)
+        public_arxiv = normalized_arxiv_ids(public_identifier)
+        public_urls = normalized_rendered_urls(public_identifier)
+        content_dois = normalized_doi_tokens(content_source)
+        content_arxiv = normalized_arxiv_ids(content_source)
+        content_urls = normalized_rendered_urls(content_source)
+        location = f"{filename}:{line}"
+
+        if expected_dois:
+            if not (expected_dois & public_dois):
+                errors.append(
+                    f"{location}: PublicIdentifier does not preserve the complete "
+                    f"rendered DOI for {reference_id}; expected one of "
+                    f"{sorted(expected_dois)}"
+                )
+            if content_source and not (
+                (expected_dois & content_dois) or (expected_urls & content_urls)
+            ):
+                errors.append(
+                    f"{location}: ContentSourceOpened is not bound to the complete "
+                    f"rendered DOI or exact rendered official URL for {reference_id}"
+                )
+        elif expected_arxiv:
+            if not (expected_arxiv & public_arxiv):
+                errors.append(
+                    f"{location}: PublicIdentifier does not preserve the complete "
+                    f"rendered arXiv ID for {reference_id}; expected one of "
+                    f"{sorted(expected_arxiv)}"
+                )
+            if content_source and not (
+                (expected_arxiv & content_arxiv) or (expected_urls & content_urls)
+            ):
+                errors.append(
+                    f"{location}: ContentSourceOpened is not bound to the complete "
+                    f"rendered arXiv ID or exact rendered official URL for "
+                    f"{reference_id}"
+                )
+        elif not (expected_urls & public_urls):
+            errors.append(
+                f"{location}: PublicIdentifier does not equal an official URL "
+                f"rendered for {reference_id}"
+            )
+        elif content_source and not (expected_urls & content_urls):
+            errors.append(
+                f"{location}: ContentSourceOpened does not equal an official URL "
+                f"rendered for {reference_id}"
+            )
+
+
+def validate_bibliography_source_identity(
+    bibliography_ledger: Iterable[dict[str, Any]],
+    bibliography_inventory_by_id: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Bind every bibliography evidence route to the complete rendered work.
+
+    ``unverifiable`` is a metadata verdict, not permission to skip an audit.
+    Every field row must therefore record the one complete authoritative route
+    that was actually attempted. When the rendered reference exposes a DOI,
+    arXiv identifier, or official URL, that route must preserve the complete
+    identity rather than a syntactically valid but truncated prefix.
+
+    Entries without a machine-recoverable persistent identifier still require
+    a non-empty authoritative route; deciding whether a title-query or
+    proceedings record is genuinely work-specific remains the reviewer's
+    semantic responsibility.
+    """
+
+    for line, row in enumerate(bibliography_ledger, start=2):
+        reference_id = str(row.get("ReferenceID", ""))
+        endpoint = str(row.get("EvidenceEndpoint", "")).strip()
+        location = f"{filename}:{line}"
+        if not endpoint:
+            errors.append(
+                f"{location}: every bibliography field, including an "
+                "unverifiable verdict, must record the complete authoritative "
+                "EvidenceEndpoint actually attempted"
+            )
+            continue
+
+        inventory_row = bibliography_inventory_by_id.get(reference_id)
+        if inventory_row is None:
+            continue
+        rendered = str(inventory_row.get("RenderedEntry", ""))
+        expected_dois = normalized_doi_tokens(rendered)
+        expected_arxiv = normalized_arxiv_ids(rendered)
+        expected_urls = normalized_rendered_urls(rendered)
+        endpoint_dois = normalized_doi_tokens(endpoint)
+        endpoint_arxiv = normalized_arxiv_ids(endpoint)
+        endpoint_urls = normalized_rendered_urls(endpoint)
+
+        if expected_dois and not (
+            (expected_dois & endpoint_dois) or (expected_urls & endpoint_urls)
+        ):
+            errors.append(
+                f"{location}: EvidenceEndpoint is not bound to the complete "
+                f"rendered DOI or exact rendered official URL for {reference_id}; "
+                f"expected one of {sorted(expected_dois)}"
+            )
+        elif expected_arxiv and not (
+            (expected_arxiv & endpoint_arxiv) or (expected_urls & endpoint_urls)
+        ):
+            errors.append(
+                f"{location}: EvidenceEndpoint is not bound to the complete "
+                f"rendered arXiv ID or exact rendered official URL for "
+                f"{reference_id}; expected one of {sorted(expected_arxiv)}"
+            )
+        elif (
+            not expected_dois
+            and not expected_arxiv
+            and expected_urls
+            and not (expected_urls & endpoint_urls)
+        ):
+            errors.append(
+                f"{location}: EvidenceEndpoint does not equal an official URL "
+                f"rendered for {reference_id}"
             )
 
 
@@ -7486,7 +7713,6 @@ def main(argv: list[str] | None = None) -> int:
     validate_rows_mandatory(
         bib_ledger, "03-bibliography-audit-ledger.csv",
         BIB_LEDGER_COLUMNS, errors,
-        blank_allowed={"EvidenceEndpoint"},
     )
     validate_bibliography_endpoint_records(
         bib_ledger, "03-bibliography-audit-ledger.csv", errors
@@ -7499,6 +7725,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     bib_inv_by_id = index_unique(
         bib_inventory, "ReferenceID", "00-bibliography-inventory.csv", errors
+    )
+    validate_bibliography_source_identity(
+        bib_ledger,
+        bib_inv_by_id,
+        "03-bibliography-audit-ledger.csv",
+        errors,
     )
     bib_refs_in_ledger = {
         row["ReferenceID"] for row in bib_ledger if row["ReferenceID"]
@@ -7540,11 +7772,6 @@ def main(argv: list[str] | None = None) -> int:
             errors.append(
                 f"03-bibliography-audit-ledger.csv:{line}: invalid verdict "
                 f"{row['Verdict']!r}"
-            )
-        if verdict != "unverifiable" and not row["EvidenceEndpoint"]:
-            errors.append(
-                f"03-bibliography-audit-ledger.csv:{line}: "
-                "verified verdict lacks authoritative evidence endpoint"
             )
         if (
             row["EvidenceEndpoint"]
@@ -7679,6 +7906,12 @@ def main(argv: list[str] | None = None) -> int:
     citation_led_by_pair = index_unique(
         citation_ledger, "PairID",
         "04-citation-claim-audit-ledger.csv", errors,
+    )
+    validate_citation_source_identity(
+        citation_ledger,
+        bib_inv_by_id,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
     )
     compare_sets(
         "citation-claim ledger", set(citation_inv_by_pair),

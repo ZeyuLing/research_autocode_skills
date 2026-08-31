@@ -2331,6 +2331,251 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "ExactSourceLocator lacks a page/section")
 
+    def test_truncated_rendered_doi_identity_fails_full_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            _, bibliography = read_csv(root / "00-bibliography-inventory.csv")
+            bibliography[0]["RenderedEntry"] = (
+                "Fixture reference. DOI: 10.1145/3442188.3445922."
+            )
+            write_csv(
+                root / "00-bibliography-inventory.csv",
+                BIB_INVENTORY_COLUMNS,
+                bibliography,
+            )
+            _, citation_rows = read_csv(
+                root / "04-citation-claim-audit-ledger.csv"
+            )
+            citation_rows[0]["PublicIdentifier"] = (
+                "https://doi.org/10.1145/3442188"
+            )
+            write_csv(
+                root / "04-citation-claim-audit-ledger.csv",
+                CITATION_LEDGER_COLUMNS,
+                citation_rows,
+            )
+            (root / "04-citation-claim-audit-ledger.md").write_text(
+                "# Citation ledger\n\n"
+                + self.declaration(
+                    digest, process, "R3", [BIB_ENDPOINT, CITATION_ENDPOINT]
+                )
+                + markdown_table(
+                    CITATION_MARKDOWN_HEADERS,
+                    citation_markdown_rows(citation_rows, bibliography),
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "PublicIdentifier does not preserve the complete rendered DOI",
+            )
+
+    def test_content_source_identity_uses_complete_rendered_doi(self) -> None:
+        bibliography = {
+            "REF0001": {
+                "RenderedEntry": (
+                    "Fixture reference. DOI: 10.1109/CVPR52729.2023.01726."
+                )
+            }
+        }
+        base_row = {
+            "ReferenceID": "REF0001",
+            "PublicIdentifier": (
+                "https://doi.org/10.1109/CVPR52729.2023.01726"
+            ),
+            "ContentSourceOpened": (
+                "https://doi.org/10.1109/CVPR52729.2023.01726"
+            ),
+        }
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_citation_source_identity(
+            [base_row], bibliography, "04.csv", errors
+        )
+        self.assertEqual([], errors)
+
+        errors = []
+        truncated = {
+            **base_row,
+            "ContentSourceOpened": "https://doi.org/10.1109/CVPR52729",
+        }
+        VALIDATOR_MODULE.validate_citation_source_identity(
+            [truncated], bibliography, "04.csv", errors
+        )
+        self.assertTrue(
+            any(
+                "ContentSourceOpened is not bound to the complete rendered DOI"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_bibliography_unverifiable_still_requires_attempted_endpoint(
+        self,
+    ) -> None:
+        bibliography = {"REF0001": {"RenderedEntry": "Fixture reference."}}
+        row = {
+            "ReferenceID": "REF0001",
+            "Verdict": "unverifiable",
+            "EvidenceEndpoint": "",
+        }
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [row], bibliography, "03.csv", errors
+        )
+        self.assertTrue(
+            any(
+                "including an unverifiable verdict" in error
+                and "EvidenceEndpoint actually attempted" in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_bibliography_source_identity_uses_complete_rendered_doi(
+        self,
+    ) -> None:
+        bibliography = {
+            "REF0001": {
+                "RenderedEntry": (
+                    "Fixture reference. DOI: 10.1109/CVPR52729.2023.01726."
+                )
+            }
+        }
+        base_row = {
+            "ReferenceID": "REF0001",
+            "Verdict": "exact",
+            "EvidenceEndpoint": (
+                "https://doi.org/10.1109/CVPR52729.2023.01726"
+            ),
+        }
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [base_row], bibliography, "03.csv", errors
+        )
+        self.assertEqual([], errors)
+
+        errors = []
+        truncated = {
+            **base_row,
+            "EvidenceEndpoint": "https://doi.org/10.1109/CVPR52729",
+        }
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [truncated], bibliography, "03.csv", errors
+        )
+        self.assertTrue(
+            any(
+                "EvidenceEndpoint is not bound to the complete rendered DOI"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
+    def test_bibliography_rendered_url_path_case_is_exact(self) -> None:
+        bibliography = {
+            "REF0001": {
+                "RenderedEntry": "https://publisher.example/Record/WorkA"
+            }
+        }
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://PUBLISHER.EXAMPLE/Record/WorkA",
+            }],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertEqual([], errors)
+
+        errors = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://publisher.example/record/worka",
+            }],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any("does not equal an official URL rendered" in error for error in errors),
+            errors,
+        )
+
+        encoded_bibliography = {
+            "REF0001": {
+                "RenderedEntry": "https://publisher.example/a%2Fb"
+            }
+        }
+        errors = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": "https://publisher.example/a/b",
+            }],
+            encoded_bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any("does not equal an official URL rendered" in error for error in errors),
+            errors,
+        )
+
+    def test_historical_doi_suffix_is_not_silently_truncated(self) -> None:
+        doi = (
+            "10.1002/(SICI)1099-0844(199912)17:4"
+            "<290::AID-CBF849>3.0.CO;2-P"
+        )
+        self.assertEqual(
+            {doi.casefold()},
+            VALIDATOR_MODULE.normalized_doi_tokens(f"DOI: {doi}."),
+        )
+        bibliography = {
+            "REF0001": {"RenderedEntry": f"Fixture reference. DOI: {doi}."}
+        }
+        full_endpoint = (
+            "https://doi.org/10.1002/%28SICI%291099-0844%28199912%29"
+            "17%3A4%3C290%3A%3AAID-CBF849%3E3.0.CO%3B2-P"
+        )
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{"ReferenceID": "REF0001", "EvidenceEndpoint": full_endpoint}],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertEqual([], errors)
+
+        errors = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            [{
+                "ReferenceID": "REF0001",
+                "EvidenceEndpoint": (
+                    "https://doi.org/10.1002/%28SICI%291099-0844"
+                    "%28199912%2917%3A4"
+                ),
+            }],
+            bibliography,
+            "03.csv",
+            errors,
+        )
+        self.assertTrue(
+            any(
+                "EvidenceEndpoint is not bound to the complete rendered DOI"
+                in error
+                for error in errors
+            ),
+            errors,
+        )
+
     def test_fake_endpoint_date_locator_and_render_record_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2840,7 +3085,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
         })
         self.assertEqual(reason, "duplicate-number vector/array")
 
-    def test_documented_unverifiable_rows_allow_missing_endpoints(self) -> None:
+    def test_documented_unverifiable_citation_allows_missing_content_source(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             digest = self.build_bundle(root)
@@ -2851,11 +3098,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             bib_row = next(row for row in bib_rows if row["Field"] == "type")
             bib_row["Verdict"] = "unverifiable"
             bib_row["CanonicalValue"] = "not established"
-            bib_row["EvidenceEndpoint"] = ""
+            bib_row["EvidenceEndpoint"] = BIB_ENDPOINT
             bib_row["EndpointType"] = "official route inaccessible"
             bib_row["EvidenceNote"] = (
-                "Attempted the official publisher route on 2026-08-29; "
-                "the record was inaccessible."
+                "Attempted the complete official publisher route on "
+                "2026-08-29; the record was inaccessible."
             )
             write_csv(
                 root / "03-bibliography-audit-ledger.csv",
@@ -2952,7 +3199,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             result = self.run_validator(root)
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("verified verdict lacks authoritative evidence endpoint", result.stdout)
+            self.assertIn(
+                "must record the complete authoritative EvidenceEndpoint actually attempted",
+                result.stdout,
+            )
             self.assertIn("substantive verdict lacks content source", result.stdout)
             self.assertIn("substantive verdict lacks exact locator", result.stdout)
 

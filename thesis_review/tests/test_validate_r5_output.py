@@ -115,6 +115,41 @@ class ValidateR5OutputTests(unittest.TestCase):
             for filename in PEER_AND_DOWNSTREAM_FILES:
                 self.assertFalse((root / filename).exists())
 
+    def test_unverifiable_bibliography_row_still_requires_attempted_endpoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            headers, rows = read_rows(root / "03-bibliography-audit-ledger.csv")
+            rows[0]["Verdict"] = "unverifiable"
+            rows[0]["CanonicalValue"] = "not established"
+            rows[0]["EvidenceEndpoint"] = ""
+            rows[0]["EvidenceNote"] = "Official route was inaccessible."
+            write_rows(root / "03-bibliography-audit-ledger.csv", headers, rows)
+            self.assert_r5_fails(
+                root,
+                "including an unverifiable verdict",
+            )
+
+    def test_bibliography_endpoint_must_bind_complete_rendered_doi(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            headers, inventory = read_rows(root / "00-bibliography-inventory.csv")
+            inventory[0]["RenderedEntry"] = (
+                "Fixture reference. DOI: 10.1109/CVPR52729.2023.01726."
+            )
+            write_rows(root / "00-bibliography-inventory.csv", headers, inventory)
+            headers, rows = read_rows(root / "03-bibliography-audit-ledger.csv")
+            for row in rows:
+                row["EvidenceEndpoint"] = "https://doi.org/10.1109/CVPR52729"
+            write_rows(root / "03-bibliography-audit-ledger.csv", headers, rows)
+            self.assert_r5_fails(
+                root,
+                "EvidenceEndpoint is not bound to the complete rendered DOI",
+            )
+
     def test_r5_scope_does_not_enumerate_or_open_peer_root_entries(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

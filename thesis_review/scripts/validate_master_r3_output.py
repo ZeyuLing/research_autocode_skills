@@ -433,7 +433,6 @@ def validate_bibliography_outputs(
         "03-bibliography-audit-ledger.csv",
         module.BIB_LEDGER_COLUMNS,
         errors,
-        blank_allowed={"EvidenceEndpoint"},
     )
     module.validate_bibliography_endpoint_records(
         bibliography_ledger, "03-bibliography-audit-ledger.csv", errors
@@ -457,6 +456,12 @@ def validate_bibliography_outputs(
         bibliography_inventory,
         "ReferenceID",
         "00-bibliography-inventory.csv",
+        errors,
+    )
+    module.validate_bibliography_source_identity(
+        bibliography_ledger,
+        inventory_by_reference,
+        "03-bibliography-audit-ledger.csv",
         errors,
     )
     ledger_reference_ids = {
@@ -517,11 +522,6 @@ def validate_bibliography_outputs(
                 f"03-bibliography-audit-ledger.csv:{line}: invalid Verdict"
             )
         endpoint = row.get("EvidenceEndpoint", "")
-        if verdict != "unverifiable" and not endpoint:
-            errors.append(
-                f"03-bibliography-audit-ledger.csv:{line}: verified verdict "
-                "lacks an authoritative EvidenceEndpoint"
-            )
         if endpoint and module.PUBLIC_URL_RE.fullmatch(endpoint) is None:
             errors.append(
                 f"03-bibliography-audit-ledger.csv:{line}: EvidenceEndpoint "
@@ -631,6 +631,12 @@ def validate_citation_outputs(
         bibliography_inventory,
         "ReferenceID",
         "00-bibliography-inventory.csv",
+        errors,
+    )
+    module.validate_citation_source_identity(
+        citation_ledger,
+        bibliography_by_id,
+        "04-citation-claim-audit-ledger.csv",
         errors,
     )
     module.compare_sets(

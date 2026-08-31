@@ -157,6 +157,12 @@ def validate_citation_outputs(
         "00-bibliography-inventory.csv",
         errors,
     )
+    module.validate_citation_source_identity(
+        citation_ledger,
+        bibliography_by_id,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
+    )
     module.compare_sets(
         "citation-claim ledger",
         set(inventory_by_pair),

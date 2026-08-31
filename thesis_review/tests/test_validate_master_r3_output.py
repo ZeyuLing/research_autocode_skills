@@ -154,6 +154,49 @@ class ValidateMasterR3OutputTests(unittest.TestCase):
             for filename in PEER_AND_DOWNSTREAM_FILES:
                 self.assertFalse((root / filename).exists())
 
+    def test_scoped_bibliography_requires_attempted_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            headers, rows = read_rows(root / "03-bibliography-audit-ledger.csv")
+            rows[0]["Verdict"] = "unverifiable"
+            rows[0]["CanonicalValue"] = "not established"
+            rows[0]["EvidenceEndpoint"] = ""
+            rows[0]["EvidenceNote"] = "Official route was inaccessible."
+            write_rows(root / "03-bibliography-audit-ledger.csv", headers, rows)
+            errors = self.validate(root)
+            self.assertTrue(
+                any("including an unverifiable verdict" in error for error in errors),
+                errors,
+            )
+
+    def test_scoped_citation_endpoint_binds_complete_rendered_doi(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            headers, inventory = read_rows(root / "00-bibliography-inventory.csv")
+            inventory[0]["RenderedEntry"] = (
+                "Fixture reference. DOI: 10.1109/CVPR52729.2023.01726."
+            )
+            write_rows(root / "00-bibliography-inventory.csv", headers, inventory)
+            headers, rows = read_rows(root / "04-citation-claim-audit-ledger.csv")
+            rows[0]["PublicIdentifier"] = (
+                "https://doi.org/10.1109/CVPR52729.2023.01726"
+            )
+            rows[0]["ContentSourceOpened"] = (
+                "https://doi.org/10.1109/CVPR52729"
+            )
+            write_rows(root / "04-citation-claim-audit-ledger.csv", headers, rows)
+            errors = self.validate(root)
+            self.assertTrue(
+                any(
+                    "ContentSourceOpened is not bound to the complete rendered DOI"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
     def test_scope_does_not_enumerate_root_or_probe_peer_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
