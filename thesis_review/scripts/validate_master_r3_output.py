@@ -476,6 +476,11 @@ def validate_bibliography_outputs(
         "03-bibliography-audit-ledger.csv",
         errors,
     )
+    module.validate_bibliography_evidence_specificity(
+        bibliography_ledger,
+        "03-bibliography-audit-ledger.csv",
+        errors,
+    )
     ledger_reference_ids = {
         row.get("ReferenceID", "")
         for row in bibliography_ledger
@@ -645,6 +650,12 @@ def validate_citation_outputs(
         "00-bibliography-inventory.csv",
         errors,
     )
+    module.validate_citation_claim_semantic_specificity(
+        citation_ledger,
+        inventory_by_pair,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
+    )
     module.validate_citation_source_identity(
         citation_ledger,
         bibliography_by_id,
@@ -760,6 +771,7 @@ def validate_citation_outputs(
         "citation-claim ledger",
         errors,
         required_headers=set(module.CITATION_MARKDOWN_HEADERS),
+        same_row_id_headers={"Disposition/evidence"},
     )
     module.validate_markdown_csv_projection(
         root / "04-citation-claim-audit-ledger.md",

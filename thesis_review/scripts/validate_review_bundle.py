@@ -25,7 +25,7 @@ from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
-from urllib.parse import unquote, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 
 HEX64_RE = re.compile(r"^[0-9a-fA-F]{64}$")
@@ -74,6 +74,18 @@ SOURCE_LOCATOR_RE = re.compile(
     r")",
     re.IGNORECASE,
 )
+CONTENT_ENDPOINT_COLLECTION_TAIL_RE = re.compile(
+    r"(?i)(?:^|/)(?:abs|article|articles|conte|content|file|files|forum|hash|"
+    r"html|paper|paper_files|papers|pdf|proceedings|publication|publications)/?$"
+)
+CONTENT_ENDPOINT_REQUIRED_QUERY_KEYS = {
+    "openreview.net": {
+        "/forum": "id",
+        "/pdf": "id",
+        "/attachment": "id",
+    },
+}
+KNOWN_TRUNCATED_CONTENT_HOSTS = {"proceedings.mlr"}
 
 
 def ordered_unique(values: Iterable[str]) -> list[str]:
@@ -179,10 +191,8 @@ def validate_bibliography_endpoint_records(
         note = row.get("EvidenceNote", "")
         if not isinstance(note, str):
             continue
-        marked = [
-            match.group(1)
-            for match in ACCESS_ENDPOINT_MARKER_RE.finditer(note)
-        ]
+        marked_matches = list(ACCESS_ENDPOINT_MARKER_RE.finditer(note))
+        marked = [match.group(1) for match in marked_matches]
         marker_count = len(re.findall(r"(?i)accessed\s+endpoint\s*:", note))
         if marker_count != len(marked):
             errors.append(
@@ -190,13 +200,132 @@ def validate_bibliography_endpoint_records(
                 "EvidenceNote must contain one complete http(s) URL and be "
                 "delimited by the start of the field, a semicolon, or a newline"
             )
-        note_urls = {match.group(0) for match in PUBLIC_URL_RE.finditer(note)}
-        unmarked = sorted(note_urls - set(marked))
+        marked_spans = [match.span(1) for match in marked_matches]
+        unmarked = [
+            match.group(0) for match in PUBLIC_URL_RE.finditer(note)
+            if match.span() not in marked_spans
+        ]
         if unmarked:
             errors.append(
                 f"{filename}:{line}: EvidenceNote URL(s) must use the closed "
                 f"'accessed endpoint: <URL>' marker; unmarked={unmarked}"
             )
+        for endpoint in marked:
+            endpoint_error = complete_content_endpoint_error(endpoint)
+            if endpoint_error is not None:
+                errors.append(
+                    f"{filename}:{line}: auxiliary accessed endpoint {endpoint!r} "
+                    f"{endpoint_error}"
+                )
+
+
+def complete_content_endpoint_error(value: str) -> str | None:
+    """Return why an asserted source-content endpoint is mechanically incomplete.
+
+    This is intentionally narrower than network reachability.  It rejects URL
+    shapes that can be produced by PDF line breaks or half-copied collection
+    routes while retaining complete DOI/arXiv/CVF/PMLR/OpenReview, proceedings,
+    virtual-poster, and book-series routes.  Whether the page actually exposes
+    the proposition remains a reviewer judgment.
+    """
+
+    endpoint = (value or "").strip()
+    if PUBLIC_URL_RE.fullmatch(endpoint) is None:
+        return "must be exactly one complete http(s) endpoint"
+    try:
+        parts = urlsplit(endpoint)
+        # Accessing ``port`` forces urllib to reject malformed ports/IPv6.
+        _ = parts.port
+    except ValueError:
+        return "is not a parseable http(s) endpoint"
+    hostname = (parts.hostname or "").casefold().rstrip(".")
+    if parts.scheme.casefold() not in {"http", "https"} or not hostname:
+        return "is not a parseable http(s) endpoint"
+    if "." not in hostname and ":" not in hostname:
+        return "uses a non-public host without a dot or IP-literal form"
+    if hostname in KNOWN_TRUNCATED_CONTENT_HOSTS:
+        return "uses a known truncated source host"
+
+    decoded_path = unquote(parts.path or "")
+    if decoded_path in {"", "/"} and not parts.query:
+        return "does not contain a source-specific path or query identity"
+    if decoded_path.endswith("_"):
+        return "ends with '_' and appears truncated"
+
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    valid_required_query_route = False
+    for host, path_requirements in CONTENT_ENDPOINT_REQUIRED_QUERY_KEYS.items():
+        if hostname == host or hostname.endswith("." + host):
+            required_key = path_requirements.get(decoded_path.rstrip("/").casefold())
+            if required_key is not None and not query.get(required_key, "").strip():
+                return (
+                    f"requires a non-empty {required_key}= source identity for "
+                    f"{decoded_path.rstrip('/')}"
+                )
+            if required_key is not None:
+                valid_required_query_route = True
+    for key in ("id", "forum", "paperid", "paper_id"):
+        if key in query and not query[key].strip():
+            return f"contains an empty {key}= source identity"
+    if (
+        (hostname == "openreview.net" or hostname.endswith(".openreview.net"))
+        and decoded_path.rstrip("/").casefold() in {"/forum", "/pdf"}
+        and 0 < len(query.get("id", "").strip()) < 6
+    ):
+        return "contains an implausibly short OpenReview id= source identity"
+    has_query_identity = any(
+        value.strip() for key, value in query.items()
+        if key.casefold() in {"id", "forum", "paperid", "paper_id", "article", "article_id"}
+    )
+    if (
+        CONTENT_ENDPOINT_COLLECTION_TAIL_RE.search(decoded_path)
+        and not valid_required_query_route
+        and not has_query_identity
+    ):
+        return "ends at a collection/truncated route instead of a source identity"
+    return None
+
+
+def endpoint_is_strict_completion(primary: str, auxiliary: str) -> bool:
+    """Whether an auxiliary URL completes a visibly truncated primary route."""
+
+    try:
+        left = urlsplit(primary.strip())
+        right = urlsplit(auxiliary.strip())
+    except ValueError:
+        return False
+    left_host = (left.hostname or "").casefold().rstrip(".")
+    right_host = (right.hostname or "").casefold().rstrip(".")
+    if not left_host or left_host != right_host:
+        return False
+    # A complete DOI or arXiv identity is not a truncated primary merely because
+    # an auxiliary adds a version, fragment, or presentation route.
+    if normalized_doi_tokens(primary) or normalized_arxiv_ids(primary):
+        return False
+    left_path = unquote(left.path or "").rstrip("/")
+    right_path = unquote(right.path or "").rstrip("/")
+    path_suffix = right_path[len(left_path):] if right_path.casefold().startswith(left_path.casefold()) else ""
+    path_completion = (
+        bool(left_path)
+        and right_path.casefold().startswith(left_path.casefold())
+        and len(right_path) > len(left_path)
+        and not path_suffix.startswith("/")
+        and left_path.endswith("_")
+    )
+    left_query = dict(parse_qsl(left.query, keep_blank_values=True))
+    right_query = dict(parse_qsl(right.query, keep_blank_values=True))
+    query_completion = False
+    if left_path.casefold() == right_path.casefold() and left_query:
+        for key, value in left_query.items():
+            completed = right_query.get(key, "")
+            if (
+                value and completed.casefold().startswith(value.casefold())
+                and len(completed) > len(value)
+                and (len(value) < 6 or value.endswith("_"))
+            ):
+                query_completion = True
+                break
+    return path_completion or query_completion
 
 
 def validate_citation_endpoint_records(
@@ -212,18 +341,16 @@ def validate_citation_endpoint_records(
             content = content.strip()
         else:
             content = ""
-        if content and PUBLIC_URL_RE.fullmatch(content) is None:
+        endpoint_error = complete_content_endpoint_error(content) if content else None
+        if endpoint_error is not None:
             errors.append(
-                f"{filename}:{line}: ContentSourceOpened must be exactly one "
-                "complete http(s) endpoint"
+                f"{filename}:{line}: ContentSourceOpened {endpoint_error}"
             )
         disposition = row.get("DispositionEvidence", "")
         if not isinstance(disposition, str):
             continue
-        marked = [
-            match.group(1)
-            for match in ACCESS_ENDPOINT_MARKER_RE.finditer(disposition)
-        ]
+        marked_matches = list(ACCESS_ENDPOINT_MARKER_RE.finditer(disposition))
+        marked = [match.group(1) for match in marked_matches]
         marker_count = len(
             re.findall(r"(?i)accessed\s+endpoint\s*:", disposition)
         )
@@ -233,15 +360,44 @@ def validate_citation_endpoint_records(
                 "contain one complete http(s) URL and be delimited by the "
                 "start of the field, a semicolon, or a newline"
             )
-        disposition_urls = {
+        marked_spans = [match.span(1) for match in marked_matches]
+        unmarked = [
             match.group(0) for match in PUBLIC_URL_RE.finditer(disposition)
-        }
-        unmarked = sorted(disposition_urls - set(marked))
+            if match.span() not in marked_spans
+        ]
         if unmarked:
             errors.append(
                 f"{filename}:{line}: DispositionEvidence URL(s) must use the "
                 f"closed 'accessed endpoint: <URL>' marker; unmarked={unmarked}"
             )
+        for endpoint in marked:
+            auxiliary_error = complete_content_endpoint_error(endpoint)
+            if auxiliary_error is not None:
+                errors.append(
+                    f"{filename}:{line}: auxiliary accessed endpoint {endpoint!r} "
+                    f"{auxiliary_error}"
+                )
+        if content and any(endpoint_is_strict_completion(content, item) for item in marked):
+            errors.append(
+                f"{filename}:{line}: truncated primary laundered by auxiliary "
+                "accessed endpoint completion"
+            )
+
+
+def text_without_url_fragments(value: str) -> str:
+    """Remove URL fragments before extracting persistent work identities."""
+
+    text = value or ""
+    matches = list(PUBLIC_URL_RE.finditer(text))
+    for match in reversed(matches):
+        raw = match.group(0)
+        try:
+            parts = urlsplit(raw)
+        except ValueError:
+            continue
+        replacement = urlunsplit((parts.scheme, parts.netloc, parts.path, parts.query, ""))
+        text = text[:match.start()] + replacement + text[match.end():]
+    return text
 
 
 def normalized_doi_tokens(value: str) -> set[str]:
@@ -256,7 +412,7 @@ def normalized_doi_tokens(value: str) -> set[str]:
     punctuation is removed.
     """
 
-    raw_value = unicodedata.normalize("NFKC", value or "")
+    raw_value = unicodedata.normalize("NFKC", text_without_url_fragments(value))
     url_spans = [match.span() for match in PUBLIC_URL_RE.finditer(raw_value)]
     tokens: set[str] = set()
     for match in DOI_TOKEN_RE.finditer(raw_value):
@@ -289,7 +445,7 @@ def rendered_doi_tokens(value: str) -> set[str]:
 def normalized_arxiv_ids(value: str) -> set[str]:
     """Extract version-insensitive arXiv work identifiers."""
 
-    decoded = unquote(value or "")
+    decoded = unquote(text_without_url_fragments(value))
     return {
         match.group(1).casefold()
         for match in ARXIV_ID_RE.finditer(decoded)
@@ -328,7 +484,13 @@ def normalized_rendered_urls(value: str) -> set[str]:
         raw = match.group(0).rstrip(".,;:")
         if not raw:
             continue
-        parts = urlsplit(raw)
+        try:
+            parts = urlsplit(raw)
+            _ = parts.port
+        except ValueError:
+            continue
+        if not parts.hostname:
+            continue
         identities.add(
             urlunsplit(
                 (
@@ -336,11 +498,40 @@ def normalized_rendered_urls(value: str) -> set[str]:
                     parts.netloc.casefold(),
                     parts.path,
                     parts.query,
-                    parts.fragment,
+                    "",
                 )
             )
         )
     return identities
+
+
+def endpoint_resource_identity(
+    value: str,
+) -> tuple[set[str], set[str], set[str], set[str], set[str]]:
+    """Return endpoint identities without treating the URL fragment as a route.
+
+    URL fragments are client-side anchors and are not sent to the server.  They
+    therefore cannot bind an opened bibliography record to a DOI or arXiv work.
+    The final two sets expose fragment-only identities so callers can reject a
+    route that merely appends the expected work ID after ``#``.
+    """
+
+    endpoint = (value or "").strip()
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError:
+        return set(), set(), set(), set(), set()
+    resource = urlunsplit(
+        (parts.scheme, parts.netloc, parts.path, parts.query, "")
+    )
+    fragment = unquote(parts.fragment or "")
+    return (
+        normalized_doi_tokens(resource),
+        normalized_arxiv_ids(resource),
+        normalized_rendered_urls(resource),
+        normalized_doi_tokens(fragment),
+        normalized_arxiv_ids(fragment),
+    )
 
 
 def identity_compatible_rendered_urls(
@@ -376,11 +567,12 @@ def validate_citation_source_identity(
 ) -> None:
     """Bind every auditable citation endpoint to the complete rendered identity.
 
-    A syntactically valid URL is not enough. When the rendered bibliography
-    exposes a DOI, arXiv ID, or official URL, ``PublicIdentifier`` must preserve
-    that complete identity and ``ContentSourceOpened`` must resolve through the
-    same identity (or an exact official URL also rendered for the work). This
-    prevents a truncated DOI prefix from masquerading as an inaccessible source.
+    A syntactically valid URL is not enough. ``ContentSourceOpened`` is checked
+    directly against the complete machine-readable identity in
+    ``PublicIdentifier`` and, when exposed by the frozen rendered entry, against
+    that rendered DOI, arXiv ID, or official URL too. Auxiliary routes in
+    ``DispositionEvidence`` never participate in this binding. This prevents a
+    complete fallback URL from laundering a truncated primary content endpoint.
 
     References with no mechanically recoverable persistent identifier remain a
     semantic reviewer responsibility; dangling references are validated by their
@@ -398,18 +590,55 @@ def validate_citation_source_identity(
         expected_urls = identity_compatible_rendered_urls(
             rendered, expected_dois, expected_arxiv
         )
-        if not (expected_dois or expected_arxiv or expected_urls):
-            continue
-
         public_identifier = str(row.get("PublicIdentifier", "")).strip()
         content_source = str(row.get("ContentSourceOpened", "")).strip()
         public_dois = normalized_doi_tokens(public_identifier)
         public_arxiv = normalized_arxiv_ids(public_identifier)
         public_urls = normalized_rendered_urls(public_identifier)
+        if not (
+            expected_dois or expected_arxiv or expected_urls
+            or public_dois or public_arxiv or public_urls
+        ):
+            continue
         content_dois = normalized_doi_tokens(content_source)
         content_arxiv = normalized_arxiv_ids(content_source)
         content_urls = normalized_rendered_urls(content_source)
         location = f"{filename}:{line}"
+
+        if content_source:
+            if not (public_dois or public_arxiv or public_urls):
+                errors.append(
+                    f"{location}: PublicIdentifier lacks a complete parseable "
+                    f"DOI, arXiv ID, or official URL for binding "
+                    "ContentSourceOpened"
+                )
+            elif public_dois and not (
+                (public_dois & content_dois)
+                or ((public_urls | expected_urls) & content_urls)
+            ):
+                errors.append(
+                    f"{location}: ContentSourceOpened is not bound to the "
+                    "complete DOI or an exact official URL in "
+                    "PublicIdentifier/RenderedEntry"
+                )
+            elif public_arxiv and not (
+                (public_arxiv & content_arxiv)
+                or ((public_urls | expected_urls) & content_urls)
+            ):
+                errors.append(
+                    f"{location}: ContentSourceOpened is not bound to the "
+                    "complete arXiv ID or an exact official URL in "
+                    "PublicIdentifier/RenderedEntry"
+                )
+            elif (
+                not public_dois
+                and not public_arxiv
+                and not (public_urls & content_urls)
+            ):
+                errors.append(
+                    f"{location}: ContentSourceOpened does not equal the complete "
+                    "official URL in PublicIdentifier"
+                )
 
         if expected_dois:
             if not (expected_dois & public_dois):
@@ -440,16 +669,17 @@ def validate_citation_source_identity(
                     f"rendered arXiv ID or exact rendered official URL for "
                     f"{reference_id}"
                 )
-        elif not (expected_urls & public_urls):
-            errors.append(
-                f"{location}: PublicIdentifier does not equal an official URL "
-                f"rendered for {reference_id}"
-            )
-        elif content_source and not (expected_urls & content_urls):
-            errors.append(
-                f"{location}: ContentSourceOpened does not equal an official URL "
-                f"rendered for {reference_id}"
-            )
+        elif expected_urls:
+            if not (expected_urls & public_urls):
+                errors.append(
+                    f"{location}: PublicIdentifier does not equal an official URL "
+                    f"rendered for {reference_id}"
+                )
+            if content_source and not (expected_urls & content_urls):
+                errors.append(
+                    f"{location}: ContentSourceOpened does not equal an official URL "
+                    f"rendered for {reference_id}"
+                )
 
 
 def validate_bibliography_source_identity(
@@ -472,7 +702,45 @@ def validate_bibliography_source_identity(
     semantic responsibility.
     """
 
-    for line, row in enumerate(bibliography_ledger, start=2):
+    rows = list(bibliography_ledger)
+    rows_by_reference: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
+    for row in rows:
+        rows_by_reference[str(row.get("ReferenceID", ""))][
+            str(row.get("Field", ""))
+        ] = row
+
+    governing_by_reference: dict[
+        str, tuple[set[str], set[str], set[str]]
+    ] = {}
+    for reference_id, inventory_row in bibliography_inventory_by_id.items():
+        rendered = str(inventory_row.get("RenderedEntry", ""))
+        rendered_dois = rendered_doi_tokens(rendered)
+        rendered_arxiv = rendered_arxiv_ids(rendered)
+        rendered_urls = identity_compatible_rendered_urls(
+            rendered, rendered_dois, rendered_arxiv
+        )
+        field_rows = rows_by_reference.get(reference_id, {})
+
+        def usable_canonical(field: str) -> str:
+            field_row = field_rows.get(field, {})
+            verdict = str(field_row.get("Verdict", "")).strip().casefold()
+            value = str(field_row.get("CanonicalValue", "")).strip()
+            if verdict not in {"exact", "mismatch"}:
+                return ""
+            if bibliography_value_is_absent(value, field):
+                return ""
+            return value
+
+        canonical_dois = normalized_doi_tokens(usable_canonical("doi"))
+        canonical_arxiv = normalized_arxiv_ids(usable_canonical("arxiv_id"))
+        canonical_urls = normalized_rendered_urls(usable_canonical("url"))
+        governing_by_reference[reference_id] = (
+            canonical_dois or rendered_dois,
+            canonical_arxiv or rendered_arxiv,
+            canonical_urls or rendered_urls,
+        )
+
+    for line, row in enumerate(rows, start=2):
         reference_id = str(row.get("ReferenceID", ""))
         endpoint = str(row.get("EvidenceEndpoint", "")).strip()
         location = f"{filename}:{line}"
@@ -484,33 +752,51 @@ def validate_bibliography_source_identity(
             )
             continue
 
+        endpoint_error = complete_content_endpoint_error(endpoint)
+        if endpoint_error is not None:
+            errors.append(
+                f"{location}: EvidenceEndpoint {endpoint_error}"
+            )
+
         inventory_row = bibliography_inventory_by_id.get(reference_id)
         if inventory_row is None:
             continue
-        rendered = str(inventory_row.get("RenderedEntry", ""))
-        expected_dois = rendered_doi_tokens(rendered)
-        expected_arxiv = rendered_arxiv_ids(rendered)
-        expected_urls = identity_compatible_rendered_urls(
-            rendered, expected_dois, expected_arxiv
+        expected_dois, expected_arxiv, expected_urls = governing_by_reference.get(
+            reference_id, (set(), set(), set())
         )
-        endpoint_dois = normalized_doi_tokens(endpoint)
-        endpoint_arxiv = normalized_arxiv_ids(endpoint)
-        endpoint_urls = normalized_rendered_urls(endpoint)
+        (
+            endpoint_dois,
+            endpoint_arxiv,
+            endpoint_urls,
+            fragment_dois,
+            fragment_arxiv,
+        ) = endpoint_resource_identity(endpoint)
+
+        if fragment_dois - endpoint_dois or fragment_arxiv - endpoint_arxiv:
+            errors.append(
+                f"{location}: EvidenceEndpoint uses a fragment-only DOI/arXiv "
+                "identity; URL fragments do not identify the opened resource"
+            )
+        if len(endpoint_dois) > 1 or len(endpoint_arxiv) > 1:
+            errors.append(
+                f"{location}: EvidenceEndpoint carries multiple distinct work "
+                "identities instead of one authoritative record"
+            )
 
         if expected_dois and not (
             (expected_dois & endpoint_dois) or (expected_urls & endpoint_urls)
         ):
             errors.append(
-                f"{location}: EvidenceEndpoint is not bound to the complete "
-                f"rendered DOI or exact rendered official URL for {reference_id}; "
+                f"{location}: EvidenceEndpoint is not bound to the complete rendered DOI; "
+                f"canonical DOI or exact governing official URL for {reference_id} required; "
                 f"expected one of {sorted(expected_dois)}"
             )
         elif expected_arxiv and not (
             (expected_arxiv & endpoint_arxiv) or (expected_urls & endpoint_urls)
         ):
             errors.append(
-                f"{location}: EvidenceEndpoint is not bound to the complete "
-                f"rendered arXiv ID or exact rendered official URL for "
+                f"{location}: EvidenceEndpoint is not bound to the complete rendered arXiv ID; "
+                f"canonical arXiv ID or exact governing official URL for "
                 f"{reference_id}; expected one of {sorted(expected_arxiv)}"
             )
         elif (
@@ -521,7 +807,7 @@ def validate_bibliography_source_identity(
         ):
             errors.append(
                 f"{location}: EvidenceEndpoint does not equal an official URL "
-                f"rendered for {reference_id}"
+                f"rendered for and governing {reference_id}"
             )
 
 
@@ -639,6 +925,49 @@ BIB_COMPACT_FIELDS = {
     "retraction_withdrawal_correction_superseding": 240,
 }
 BIB_PROSE_FIELDS = {"title", "ordered_authors", "venue"}
+BIB_RENDERED_SOURCE_FIELDS = {
+    "title", "ordered_authors", "year", "venue", "volume", "issue",
+    "pages_or_article_number", "doi", "arxiv_id", "arxiv_version", "url",
+    "access_date", "isbn_or_other_persistent_id",
+}
+BIB_EXACT_EQUIVALENCE_FIELDS = {
+    "title", "ordered_authors", "year", "venue", "publication_status",
+    "volume", "issue", "pages_or_article_number", "doi",
+    "arxiv_id", "arxiv_version", "url", "access_date",
+    "isbn_or_other_persistent_id",
+}
+BIB_LEGITIMATE_NA_FIELDS = {
+    "volume", "issue", "pages_or_article_number", "doi", "arxiv_id",
+    "arxiv_version", "url", "access_date", "isbn_or_other_persistent_id",
+}
+BIB_AUTHOR_TRUNCATION_RE = re.compile(
+    r"(?i)(?:\bet\s+al\.?\b|\band\s+others\b|\u7b49(?:\u4eba)?|\.\.\.|\u2026)"
+)
+BIB_PAGE_ARTICLE_RE = re.compile(
+    r"(?ix)^\s*(?:(?:pp?|pages?|article(?:\s+(?:no\.?|number))?|"
+    r"art\.?\s*no\.?)\s*[:.]?\s*)?"
+    r"(?:[A-Za-z]?\d+(?:[.:/]\d+)?"
+    r"(?:\s*[-\u2013\u2014]\s*[A-Za-z]?\d+(?:[.:/]\d+)?)?"
+    r"|[A-Za-z]{1,12}\d{2,})\s*$"
+)
+BIB_PUBLICATION_STATUS_RE = re.compile(
+    r"(?i)(?:published|publication|final|formally[ -]published|accepted|in[ -]press|forthcoming|preprint|"
+    r"submitted|under[ -]review|withdrawn|retracted|corrected|correction|"
+    r"superseded|released|available|archived|unpublished|"
+    r"\u5df2\u53d1\u8868|\u5df2\u51fa\u7248|\u5df2\u5f55\u7528|\u5f85\u520a|\u9884\u5370\u672c|\u6295\u7a3f\u4e2d|\u5ba1\u7a3f\u4e2d|\u64a4\u56de|\u64a4\u7a3f|\u64a4\u9500|\u66f4\u6b63|\u5df2\u53d1\u5e03)"
+)
+BIB_VENUE_CUE_RE = re.compile(
+    r"(?i)(?:conference|congress|symposium|workshop|proceedings|journal|"
+    r"transactions?|letters?|review|association|society|press|publisher|"
+    r"arxiv|university|institute|cvpr|iccv|eccv|neurips|icml|iclr|aaai|"
+    r"acl|emnlp|naacl|acm|ieee|springer|elsevier|wiley|nature|science|"
+    r"\u4f1a\u8bae|\u671f\u520a|\u5b66\u62a5|\u51fa\u7248\u793e|\u5927\u5b66|\u5b66\u4f1a)"
+)
+BIB_ENDPOINT_TYPE_RE = re.compile(
+    r"(?i)(?:official|publisher|doi|proceedings|accepted[ -]paper|program|"
+    r"arxiv|crossref|dblp|repository|journal|conference|standard|dataset|"
+    r"software|institutional|primary|\u5b98\u65b9|\u51fa\u7248|\u4f1a\u8bae|\u671f\u520a|\u9884\u5370\u672c|\u6570\u636e\u96c6|\u8f6f\u4ef6)"
+)
 
 
 def normalized_metadata_cell(value: str) -> str:
@@ -659,6 +988,534 @@ def bibliography_value_is_absent(value: str, field: str | None = None) -> bool:
         if pattern.fullmatch(normalized) is not None:
             return field is None or field in allowed_fields
     return False
+
+
+def normalized_bibliography_membership_text(value: str) -> str:
+    """Normalize a rendered scalar for conservative entry-substring checks."""
+
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    return re.sub(r"[^\w\u3400-\u9fff]+", "", normalized, flags=re.UNICODE)
+
+
+BIB_NAME_TOKEN_RE = re.compile(
+    r"[^\W\d_]+(?:['’\-\u2010-\u2015][^\W\d_]+)*", re.UNICODE
+)
+BIB_SURNAME_PARTICLES = {
+    "al", "ap", "ben", "bin", "da", "de", "del", "della", "der", "di",
+    "du", "la", "le", "st", "ter", "van", "von",
+}
+BIB_NAME_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v"}
+BIB_AUTHOR_STRONG_SEPARATOR_RE = re.compile(
+    r"\s*(?:[;；、]|,?\s*(?:&|\band\b|和|与)\s*,?)\s*", re.IGNORECASE
+)
+
+
+def bibliography_name_tokens(value: str) -> tuple[str, ...]:
+    """Return identity-preserving name tokens, including apostrophes/hyphens."""
+
+    tokens: list[str] = []
+    for match in BIB_NAME_TOKEN_RE.finditer(value or ""):
+        token = unicodedata.normalize("NFKC", match.group(0)).casefold()
+        token = token.replace("’", "'")
+        token = re.sub(r"[\u2010-\u2015]", "-", token)
+        tokens.append(token)
+    return tuple(tokens)
+
+
+def bibliography_author_chunks(value: str) -> list[str]:
+    """Split authors before interpreting APA/internal comma punctuation."""
+
+    text = unicodedata.normalize("NFKC", value or "").strip()
+    if not text:
+        return []
+    strong_parts = [
+        part.strip(" \t\r\n,，")
+        for part in BIB_AUTHOR_STRONG_SEPARATOR_RE.split(text)
+        if part.strip(" \t\r\n,，")
+    ]
+    if len(strong_parts) > 1:
+        chunks: list[str] = []
+        for part in strong_parts:
+            # APA routinely mixes comma-paired inverted names with a final
+            # ampersand: ``Doe, J., Roe, R., & Poe, A.``. Recursing into each
+            # strong-delimiter segment preserves all three ordered authors.
+            nested = bibliography_author_chunks(part)
+            if not nested:
+                return []
+            chunks.extend(nested)
+        return chunks
+
+    comma_parts = [part.strip() for part in re.split(r"[,，]", text) if part.strip()]
+    if len(comma_parts) <= 1:
+        return comma_parts
+    # Chinese bibliography commas delimit ordered authors; treating this as
+    # one Western inverted name would collapse two people into one.
+    if any(
+        re.fullmatch(r"[\u3400-\u9fff·\s]+", part) is not None
+        for part in comma_parts
+    ):
+        return comma_parts
+
+    tokenized = [bibliography_name_tokens(part) for part in comma_parts]
+    if all(len(tokens) >= 2 for tokens in tokenized):
+        return comma_parts
+    if len(comma_parts) >= 4 and len(comma_parts) % 2 == 0:
+        if all(
+            tokenized[index] and tokenized[index + 1]
+            and len(tokenized[index + 1]) <= 3
+            for index in range(0, len(comma_parts), 2)
+        ):
+            return [
+                f"{comma_parts[index]}, {comma_parts[index + 1]}"
+                for index in range(0, len(comma_parts), 2)
+            ]
+    # A lone Western comma remains a single inverted author. This preserves
+    # O'Connor, hyphenated surnames, particles, and suffixes without globally
+    # making arbitrary two-token names reversible.
+    if len(comma_parts) == 2:
+        return [text]
+    return comma_parts
+
+
+def bibliography_author_identity(
+    chunk: str,
+) -> tuple[str, tuple[str, ...]] | None:
+    """Parse one author using only explicit style/case orientation signals."""
+
+    inverted = re.fullmatch(r"\s*([^,，]+)[,，]\s*([^,，]+)\s*", chunk)
+    if inverted is not None:
+        surname_tokens = bibliography_name_tokens(inverted.group(1))
+        given_tokens = bibliography_name_tokens(inverted.group(2))
+        if not surname_tokens or not given_tokens:
+            return None
+        return " ".join(surname_tokens), given_tokens
+
+    raw_tokens = tuple(match.group(0) for match in BIB_NAME_TOKEN_RE.finditer(chunk or ""))
+    tokens = bibliography_name_tokens(chunk)
+    if not tokens:
+        return None
+    if len(tokens) == 1:
+        return tokens[0], ()
+
+    suffix: tuple[str, ...] = ()
+    core_tokens = tokens
+    if tokens[-1] in BIB_NAME_SUFFIXES and len(tokens) >= 3:
+        suffix = (tokens[-1],)
+        core_tokens = tokens[:-1]
+
+    # Both ``DOE J`` and ``DOE JOHN`` are conventional surname-first forms.
+    # The upper-case first-token signal is required, so ordinary mixed-case
+    # names are never freely reversed.
+    first_raw = raw_tokens[0]
+    surname_first = (
+        len(core_tokens) >= 2
+        and len(bibliography_name_tokens(first_raw)[0]) > 1
+        and first_raw.isupper()
+    )
+    if surname_first:
+        return " ".join((*core_tokens[:1], *suffix)), core_tokens[1:]
+
+    particle_index = next(
+        (index for index, token in enumerate(core_tokens[1:], start=1)
+         if token in BIB_SURNAME_PARTICLES),
+        None,
+    )
+    if particle_index is not None:
+        return (
+            " ".join((*core_tokens[particle_index:], *suffix)),
+            core_tokens[:particle_index],
+        )
+    return " ".join((*core_tokens[-1:], *suffix)), core_tokens[:-1]
+
+
+def bibliography_author_sequence(value: str) -> list[tuple[str, tuple[str, ...]]]:
+    """Parse a conservative ordered surname/given-token representation."""
+
+    authors: list[tuple[str, tuple[str, ...]]] = []
+    for chunk in bibliography_author_chunks(value):
+        identity = bibliography_author_identity(chunk)
+        if identity is None:
+            return []
+        authors.append(identity)
+    return authors
+
+
+def bibliography_author_tokens_compatible(
+    left: tuple[str, ...], right: tuple[str, ...]
+) -> bool:
+    if not left or not right:
+        return left == right
+    def compatible_token(ltoken: str, rtoken: str) -> bool:
+        if len(ltoken) == 1 or len(rtoken) == 1:
+            return ltoken[0] == rtoken[0]
+        return ltoken == rtoken
+
+    if not compatible_token(left[0], right[0]):
+        return False
+    shared = min(len(left), len(right))
+    if not all(compatible_token(left[index], right[index]) for index in range(shared)):
+        return False
+    # Only trailing middle-name tokens may be omitted; never skip the first
+    # given name or a token in the middle of the surviving sequence.
+    return True
+
+
+def bibliography_authors_equivalent(left: str, right: str) -> bool:
+    left_authors = bibliography_author_sequence(left)
+    right_authors = bibliography_author_sequence(right)
+    if not left_authors or len(left_authors) != len(right_authors):
+        return False
+    return all(
+        lsurname == rsurname
+        and bibliography_author_tokens_compatible(lgiven, rgiven)
+        for (lsurname, lgiven), (rsurname, rgiven) in zip(left_authors, right_authors)
+    )
+
+
+BIB_VENUE_STOPWORDS = {"the", "of", "on", "and", "for", "in", "annual"}
+BIB_VENUE_TOKEN_ALIASES = {
+    "trans": "transactions", "anal": "analysis", "mach": "machine",
+    "intell": "intelligence", "comput": "computer", "vis": "vision",
+    "patt": "pattern", "recogn": "recognition",
+}
+BIB_VENUE_ORGANIZATIONS = {"ieee", "cvf", "acm", "springer", "elsevier"}
+BIB_VENUE_ALIAS_FAMILIES = {
+    "cvpr": (
+        "conference computer vision pattern recognition",
+        "computer vision pattern recognition",
+    ),
+    "iccv": ("international conference computer vision",),
+    "eccv": ("european conference computer vision",),
+    "neurips": (
+        "advances neural information processing systems",
+        "neural information processing systems",
+    ),
+    "nips": (
+        "advances neural information processing systems",
+        "neural information processing systems",
+    ),
+    "iclr": ("international conference learning representations",),
+    "icml": ("international conference machine learning",),
+    "aaai": (
+        "aaai conference artificial intelligence",
+        "conference artificial intelligence",
+    ),
+    "ijcai": ("international joint conference artificial intelligence",),
+    "acl": ("meeting association computational linguistics",),
+    "emnlp": (
+        "conference empirical methods natural language processing",
+        "empirical methods natural language processing",
+    ),
+    "naacl": (
+        "north american chapter association computational linguistics",
+        "conference north american chapter association computational linguistics",
+    ),
+    "jmlr": ("journal machine learning research",),
+    "acmmm": ("international conference multimedia", "multimedia"),
+    "tpami": ("transactions pattern analysis machine intelligence",),
+    "pami": ("transactions pattern analysis machine intelligence",),
+    "tmlr": ("transactions machine learning research",),
+}
+BIB_VENUE_ACRONYM_CANONICAL = {
+    acronym: (
+        "neurips" if acronym == "nips"
+        else "tpami" if acronym == "pami"
+        else acronym
+    )
+    for acronym in BIB_VENUE_ALIAS_FAMILIES
+}
+BIB_VENUE_ALLOWED_ORGANIZATIONS = {
+    "cvpr": frozenset({"ieee", "cvf"}),
+    "iccv": frozenset({"ieee", "cvf"}),
+    "tpami": frozenset({"ieee"}),
+    "acmmm": frozenset({"acm"}),
+}
+
+
+def bibliography_venue_tokens(value: str) -> tuple[str, ...]:
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    # Container wording, a leading edition ordinal, and a duplicate acronym are
+    # wrappers rather than venue identity. These rules apply only at explicit
+    # boundaries; organization/publisher tokens are deliberately retained.
+    normalized = re.sub(
+        r"^\s*(?:proceedings\s+of|proc\.?(?:\s+of)?)(?:\s+the)?\s+",
+        "", normalized,
+    )
+    normalized = re.sub(
+        r"^\s*(?:the\s+)?\d{1,3}(?:st|nd|rd|th)\s+", "", normalized
+    )
+    tokens = [
+        token for token in re.findall(
+            r"[a-z0-9]+", normalized
+        ) if token
+    ]
+    return tuple(
+        BIB_VENUE_TOKEN_ALIASES.get(token, token)
+        for token in tokens
+        if token not in BIB_VENUE_STOPWORDS
+    )
+
+
+def bibliography_venue_family(
+    value: str,
+) -> tuple[str, frozenset[str]] | None:
+    """Resolve only explicit venue aliases and their compatible wrappers."""
+
+    tokens = bibliography_venue_tokens(value)
+    if not tokens:
+        return None
+    organizations = frozenset(
+        token for token in tokens if token in BIB_VENUE_ORGANIZATIONS
+    )
+    identity = tuple(
+        token for token in tokens if token not in BIB_VENUE_ORGANIZATIONS
+    )
+    if not identity:
+        return None
+
+    candidates: set[str] = set()
+    raw_compact = "".join(tokens)
+    identity_compact = "".join(identity)
+    for compact in (raw_compact, identity_compact):
+        if compact in BIB_VENUE_ALIAS_FAMILIES:
+            candidates.add(BIB_VENUE_ACRONYM_CANONICAL[compact])
+
+    normalized_identity = " ".join(identity)
+    for acronym, aliases in BIB_VENUE_ALIAS_FAMILIES.items():
+        family = BIB_VENUE_ACRONYM_CANONICAL[acronym]
+        if normalized_identity in aliases:
+            candidates.add(family)
+
+    # Accept a known acronym repeated as a parenthetical label, or placed at
+    # one boundary of its own exact full-name alias. Never reorder full-name
+    # tokens and never synthesize an unknown acronym.
+    acronym_tokens = [
+        token for token in identity if token in BIB_VENUE_ALIAS_FAMILIES
+    ]
+    if acronym_tokens:
+        families = {
+            BIB_VENUE_ACRONYM_CANONICAL[token] for token in acronym_tokens
+        }
+        if len(families) == 1:
+            family = next(iter(families))
+            non_acronym = tuple(
+                token for token in identity
+                if token not in BIB_VENUE_ALIAS_FAMILIES
+            )
+            aliases = {
+                alias
+                for acronym, values in BIB_VENUE_ALIAS_FAMILIES.items()
+                if BIB_VENUE_ACRONYM_CANONICAL[acronym] == family
+                for alias in values
+            }
+            boundary_only = all(
+                index in {0, len(identity) - 1}
+                for index, token in enumerate(identity)
+                if token in BIB_VENUE_ALIAS_FAMILIES
+            )
+            if boundary_only and (
+                not non_acronym or " ".join(non_acronym) in aliases
+            ):
+                candidates.add(family)
+
+    if len(candidates) != 1:
+        return None
+    family = next(iter(candidates))
+    allowed = BIB_VENUE_ALLOWED_ORGANIZATIONS.get(family, frozenset())
+    if not organizations.issubset(allowed):
+        return None
+    return family, organizations
+
+
+def bibliography_venues_equivalent(left: str, right: str) -> bool:
+    left_normal = normalized_bibliography_membership_text(left)
+    right_normal = normalized_bibliography_membership_text(right)
+    if left_normal == right_normal:
+        return True
+    left_family = bibliography_venue_family(left)
+    right_family = bibliography_venue_family(right)
+    if left_family is not None or right_family is not None:
+        return bool(
+            left_family is not None and right_family is not None
+            and left_family[0] == right_family[0]
+        )
+    # Unknown venues compare literally after benign stopword/typographic
+    # normalization; their organization/publisher prefixes remain identity.
+    left_tokens = bibliography_venue_tokens(left)
+    right_tokens = bibliography_venue_tokens(right)
+    return bool(left_tokens and left_tokens == right_tokens)
+
+
+def bibliography_publication_status_class(value: str) -> str:
+    normalized = normalized_metadata_cell(value)
+    patterns = (
+        ("unpublished", r"\bunpublished\b|未发表"),
+        ("withdrawn", r"\bwithdrawn\b|撤回|撤稿|撤销"),
+        ("retracted", r"\bretracted\b|\bretraction\b|撤销发表"),
+        ("corrected", r"\bcorrected\b|\bcorrection\b|更正"),
+        ("preprint", r"\bpreprint\b|\barxiv\b|预印本"),
+        ("accepted", r"\baccepted\b|\bin[ -]?press\b|\bforthcoming\b|录用|待刊"),
+        ("published", r"\bpublished\b|\bfinal\b|\bformally[ -]published\b|正式发表|已发表|已出版"),
+        ("submitted", r"\bsubmitted\b|\bunder[ -]?review\b|投稿中|审稿中"),
+    )
+    for status, pattern in patterns:
+        if re.search(pattern, normalized, re.IGNORECASE):
+            return status
+    return normalized
+
+
+def bibliography_rendered_entry_exposes_field(field: str, entry: str) -> bool:
+    """Detect an optional field that is visibly present despite an N/A row."""
+
+    text = unicodedata.normalize("NFKC", entry or "")
+    if field == "doi":
+        return bool(rendered_doi_tokens(text))
+    if field == "arxiv_id":
+        return bool(rendered_arxiv_ids(text))
+    if field == "arxiv_version":
+        return re.search(
+            r"(?i)(?:arxiv\s*:?\s*|arxiv\.org/(?:abs|pdf)/)"
+            r"(?:[A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})v\d+\b",
+            text,
+        ) is not None
+    if field == "url":
+        return bool(normalized_rendered_urls(text))
+    publication_cluster = re.search(
+        r"(?i)(?:[,;]\s*|\.\s+)"
+        r"(?P<volume>\d+[A-Za-z]?)"
+        r"(?:\s*\(\s*(?P<issue>\d+[A-Za-z]?)\s*\))?"
+        r"\s*(?::|,\s*)\s*"
+        r"(?P<pages>[A-Za-z]{1,12}\d{2,}|[A-Za-z]?\d+"
+        r"(?:\s*[\-‐‑‒–—―]\s*[A-Za-z]?\d+)?)"
+        # A metadata-looking number in title prose is not a publication tail.
+        # Permit only end-of-entry or an immediately following DOI/URL field.
+        r"(?=\s*(?:$|[.;]\s*$|(?:[.;]\s*)?(?:doi\b|https?://)))",
+        text,
+    )
+    publication_cluster_starts_with_year = bool(
+        publication_cluster is not None
+        and re.fullmatch(
+            r"(?:18|19|20|21)\d{2}", publication_cluster.group("volume")
+        )
+    )
+    if field == "volume":
+        return re.search(r"(?i)\b(?:vol(?:ume)?\.?\s*)\d+[A-Za-z]?\b", text) is not None or bool(
+            publication_cluster is not None
+            and not publication_cluster_starts_with_year
+        )
+    if field == "issue":
+        return re.search(r"(?i)\b(?:issue|no\.?|number)\s*\d+[A-Za-z]?\b", text) is not None or bool(
+            publication_cluster is not None
+            and publication_cluster.group("issue")
+        )
+    if field == "pages_or_article_number":
+        return re.search(
+            r"(?i)\b(?:pp?\.?|pages?|article(?:\s+(?:no\.?|number))?|art\.?\s*no\.?)"
+            r"\s*[:.]?\s*[A-Za-z]*\d+",
+            text,
+        ) is not None or publication_cluster is not None
+    if field == "isbn_or_other_persistent_id":
+        return re.search(r"(?i)\b(?:isbn|issn|pmid|handle|urn)\s*[:#]?\s*\S+", text) is not None
+    if field == "access_date":
+        return re.search(r"(?i)(?:accessed|访问日期|引用日期)\s*[:：]?\s*(?:18|19|20|21)\d{2}", text) is not None
+    return False
+
+
+def normalized_bibliography_exact_value(field: str, value: str) -> str:
+    """Return a field-aware comparison value for ``Verdict=exact`` rows."""
+
+    raw = (value or "").strip()
+    if field == "doi":
+        return "|".join(sorted(normalized_doi_tokens(raw)))
+    if field == "arxiv_id":
+        ids = normalized_arxiv_ids(raw)
+        return "|".join(sorted(ids)) or raw.casefold()
+    if field == "url":
+        return "|".join(sorted(normalized_rendered_urls(raw)))
+    if field == "isbn_or_other_persistent_id":
+        without_label = re.sub(
+            r"(?i)^\s*(?:isbn|issn|pmid|handle|urn)\s*[:#]?\s*", "", raw
+        )
+        return re.sub(r"[^0-9a-z]", "", without_label.casefold())
+    if field == "access_date":
+        return re.sub(r"\D", "", raw)
+    if field in {"volume", "issue"}:
+        return re.sub(
+            r"(?i)\b(?:vol(?:ume)?|no|number|issue)\b|[^0-9a-z]",
+            "", raw.casefold(),
+        )
+    if field == "pages_or_article_number":
+        normalized = unicodedata.normalize("NFKC", raw).casefold()
+        normalized = re.sub(
+            r"(?i)\b(?:pp?|pages?|article|art|no|number)\b", "", normalized
+        )
+        normalized = normalized.strip(" .:")
+        normalized = re.sub(r"[\u2010-\u2015\u2212]", "-", normalized)
+        normalized = re.sub(r"\s*([-.:/])\s*", r"\1", normalized)
+        return re.sub(r"[^0-9a-z.\-:/]+", "", normalized)
+    if field in {"title", "ordered_authors", "venue"}:
+        return normalized_bibliography_membership_text(raw)
+    return normalized_metadata_cell(raw)
+
+
+def bibliography_scalar_shape_error(field: str, value: str) -> str | None:
+    """Return a conservative scalar-shape diagnostic for rendered/canonical data."""
+
+    scalar = (value or "").strip()
+    if field == "year" and re.fullmatch(r"(?:18|19|20|21)\d{2}", scalar) is None:
+        return "must be one four-digit year"
+    if field == "doi":
+        candidate = unicodedata.normalize("NFKC", scalar).strip().rstrip(".,;")
+        candidate = re.sub(r"(?i)^doi\s*[:：]?\s*", "", candidate)
+        if re.match(r"(?i)^https?://", candidate):
+            try:
+                parts = urlsplit(candidate)
+            except ValueError:
+                parts = None
+            if (
+                parts is None
+                or (parts.hostname or "").casefold().rstrip(".") not in {
+                    "doi.org", "dx.doi.org"
+                }
+                or parts.query
+                or parts.fragment
+                or DOI_TOKEN_RE.fullmatch(unquote((parts.path or "").lstrip("/")))
+                is None
+            ):
+                return "must be exactly one DOI token, optional DOI label, or complete doi.org URL"
+        elif DOI_TOKEN_RE.fullmatch(candidate) is None:
+            return "must be exactly one DOI token, optional DOI label, or complete doi.org URL"
+    if field == "arxiv_id" and re.fullmatch(
+        r"(?:[A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})", scalar, re.IGNORECASE
+    ) is None:
+        return "must be one complete version-free arXiv work ID"
+    if field == "arxiv_version" and re.fullmatch(
+        r"v\d+", scalar, re.IGNORECASE
+    ) is None:
+        return "must be vN"
+    if field == "url" and PUBLIC_URL_RE.fullmatch(scalar) is None:
+        return "must be one complete http(s) URL"
+    if field == "access_date" and (
+        len(scalar) > 64 or re.search(r"(?:18|19|20|21)\d{2}", scalar) is None
+    ):
+        return "must be one field-specific date"
+    if field == "pages_or_article_number" and BIB_PAGE_ARTICLE_RE.fullmatch(
+        scalar
+    ) is None:
+        return "must be a page range, page, e-locator, or article number"
+    if field in {"volume", "issue"} and re.fullmatch(
+        r"(?i)(?:\d+[A-Za-z]?|[IVXLCDM]+|[A-Za-z]\d+)"
+        r"(?:[-./]\d+[A-Za-z]?)?",
+        scalar,
+    ) is None:
+        return "must be one compact volume/issue designator"
+    if field == "isbn_or_other_persistent_id" and re.fullmatch(
+        r"(?i)(?:(?:isbn|issn|pmid|handle|urn)\s*[:#]?\s*)?"
+        r"[A-Za-z0-9][A-Za-z0-9._:/-]{3,}",
+        scalar,
+    ) is None:
+        return "must be one compact ISBN/ISSN/other persistent identifier"
+    return None
 
 
 def validate_bibliography_field_semantics(
@@ -695,11 +1552,23 @@ def validate_bibliography_field_semantics(
 
         rendered_absent = bibliography_value_is_absent(rendered_value, field)
         canonical_absent = bibliography_value_is_absent(canonical_value, field)
+        inventory_row = bibliography_inventory_by_id.get(reference_id)
+        rendered_entry = str((inventory_row or {}).get("RenderedEntry", ""))
         if verdict == "legitimate n/a":
-            if not (rendered_absent and canonical_absent):
+            if field not in BIB_LEGITIMATE_NA_FIELDS:
+                errors.append(
+                    f"{location}: legitimate N/A is not allowed for required "
+                    f"bibliographic identity field {field!r}"
+                )
+            elif not (rendered_absent and canonical_absent):
                 errors.append(
                     f"{location}: legitimate N/A requires field-specific absent "
                     "values in both RenderedValue and CanonicalValue"
+                )
+            if bibliography_rendered_entry_exposes_field(field, rendered_entry):
+                errors.append(
+                    f"{location}: legitimate N/A contradicts the frozen "
+                    f"RenderedEntry, which visibly exposes {field!r}"
                 )
             continue
         if verdict == "exact" and (rendered_absent or canonical_absent):
@@ -707,6 +1576,29 @@ def validate_bibliography_field_semantics(
                 f"{location}: an absent field value must use legitimate N/A or "
                 "an evidence-bound mismatch/unverifiable verdict, not exact"
             )
+
+        full_entry = normalized_metadata_cell(
+            rendered_entry
+        )
+        if (
+            field in BIB_RENDERED_SOURCE_FIELDS
+            and not rendered_absent
+            and len(full_entry) >= 40
+        ):
+            rendered_membership = normalized_bibliography_membership_text(
+                rendered_value
+            )
+            entry_membership = normalized_bibliography_membership_text(
+                str((inventory_row or {}).get("RenderedEntry", ""))
+            )
+            if (
+                len(rendered_membership) >= 2
+                and rendered_membership not in entry_membership
+            ):
+                errors.append(
+                    f"{location}: RenderedValue for {field!r} is not recoverable "
+                    "from this ReferenceID's RenderedEntry"
+                )
 
         for label, value, signature_map in (
             ("RenderedValue", rendered_value, rendered_signatures),
@@ -720,10 +1612,6 @@ def validate_bibliography_field_semantics(
             ):
                 signature_map[reference_id][normalized].append(field)
 
-            inventory_row = bibliography_inventory_by_id.get(reference_id)
-            full_entry = normalized_metadata_cell(
-                str((inventory_row or {}).get("RenderedEntry", ""))
-            )
             if (
                 full_entry
                 and normalized == full_entry
@@ -738,7 +1626,6 @@ def validate_bibliography_field_semantics(
         if verdict == "unverifiable":
             continue
 
-        canonical_normalized = normalized_metadata_cell(canonical_value)
         if field in BIB_COMPACT_FIELDS and len(canonical_value) > BIB_COMPACT_FIELDS[field]:
             errors.append(
                 f"{location}: CanonicalValue is not a field-specific compact "
@@ -752,45 +1639,65 @@ def validate_bibliography_field_semantics(
                 f"{location}: CanonicalValue for {field!r} contains entry-level "
                 "identifier/type/venue delimiters"
             )
-        if field == "year" and re.fullmatch(r"(?:18|19|20|21)\d{2}", canonical_value) is None:
-            errors.append(
-                f"{location}: CanonicalValue for 'year' must be one four-digit year"
-            )
-        elif field == "doi":
-            doi_tokens = normalized_doi_tokens(canonical_value)
-            if len(doi_tokens) != 1:
-                errors.append(
-                    f"{location}: CanonicalValue for 'doi' must contain exactly "
-                    "one complete DOI"
-                )
-        elif field == "arxiv_id" and re.fullmatch(
-            r"(?:[A-Za-z.-]+/\d{7}|\d{4}\.\d{4,5})",
-            canonical_value,
-            re.IGNORECASE,
-        ) is None:
-            errors.append(
-                f"{location}: CanonicalValue for 'arxiv_id' must be one complete "
-                "version-free arXiv work ID"
-            )
-        elif field == "arxiv_version" and re.fullmatch(
-            r"v\d+", canonical_value, re.IGNORECASE
-        ) is None:
-            errors.append(
-                f"{location}: CanonicalValue for 'arxiv_version' must be vN"
-            )
-        elif field == "url" and PUBLIC_URL_RE.fullmatch(canonical_value) is None:
-            errors.append(
-                f"{location}: CanonicalValue for 'url' must be one complete "
-                "http(s) URL"
-            )
-        elif field == "access_date" and (
-            len(canonical_value) > 64
-            or re.search(r"(?:18|19|20|21)\d{2}", canonical_value) is None
+        if field == "ordered_authors" and BIB_AUTHOR_TRUNCATION_RE.search(
+            canonical_value
         ):
             errors.append(
-                f"{location}: CanonicalValue for 'access_date' must be one "
-                "field-specific date"
+                f"{location}: CanonicalValue for 'ordered_authors' must contain "
+                "the complete ordered author list, not et al./\u7b49/ellipsis"
             )
+        for label, value in (
+            ("RenderedValue", rendered_value),
+            ("CanonicalValue", canonical_value),
+        ):
+            if bibliography_value_is_absent(value, field):
+                continue
+            shape_error = bibliography_scalar_shape_error(field, value)
+            if shape_error is not None:
+                errors.append(
+                    f"{location}: {label} for {field!r} {shape_error}"
+                )
+
+        if field == "publication_status" and not BIB_PUBLICATION_STATUS_RE.search(
+            canonical_value
+        ):
+            errors.append(
+                f"{location}: CanonicalValue for 'publication_status' must name "
+                "a publication/acceptance/preprint/submission/correction status, "
+                "not a venue"
+            )
+        if field == "venue" and BIB_PUBLICATION_STATUS_RE.search(
+            canonical_value
+        ) and not BIB_VENUE_CUE_RE.search(canonical_value):
+            errors.append(
+                f"{location}: CanonicalValue for 'venue' contains only status "
+                "wording instead of a venue identity"
+            )
+
+        if verdict == "exact" and field in BIB_EXACT_EQUIVALENCE_FIELDS:
+            if field == "ordered_authors":
+                equivalent = bibliography_authors_equivalent(
+                    rendered_value, canonical_value
+                )
+            elif field == "venue":
+                equivalent = bibliography_venues_equivalent(
+                    rendered_value, canonical_value
+                )
+            elif field == "publication_status":
+                equivalent = (
+                    bibliography_publication_status_class(rendered_value)
+                    == bibliography_publication_status_class(canonical_value)
+                )
+            else:
+                equivalent = (
+                    normalized_bibliography_exact_value(field, rendered_value)
+                    == normalized_bibliography_exact_value(field, canonical_value)
+                )
+            if not equivalent:
+                errors.append(
+                    f"{location}: Verdict=exact requires field-specific "
+                    f"RenderedValue/CanonicalValue equivalence for {field!r}"
+                )
 
     for reference_id, signature_map in canonical_signatures.items():
         for fields in signature_map.values():
@@ -876,6 +1783,118 @@ def normalized_unverifiable_signature(value: str) -> str:
     return signature
 
 
+def normalized_bibliography_evidence_signature(
+    value: str, field: str = "", canonical_value: str = ""
+) -> str:
+    """Remove row interpolation from one bibliography evidence note."""
+
+    signature = normalized_unverifiable_signature(value)
+    field_forms = {
+        field.casefold(),
+        field.replace("_", " ").casefold(),
+        field.replace("_", "-").casefold(),
+    }
+    for field_form in sorted(field_forms, key=len, reverse=True):
+        if field_form:
+            signature = signature.replace(field_form, " <field> ")
+    canonical = normalized_metadata_cell(canonical_value)
+    if canonical and len(canonical) >= 4:
+        signature = signature.replace(canonical, " <value> ")
+    return re.sub(r"\s+", " ", signature).strip(" .,:;-–")
+
+
+def validate_bibliography_evidence_specificity(
+    bibliography_ledger: Iterable[dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Reject generic endpoint labels and field/reference-wide audit waivers."""
+
+    rows = list(bibliography_ledger)
+    notes_by_reference: dict[str, dict[str, list[str]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    unverifiable_by_reference: dict[str, list[str]] = defaultdict(list)
+    for line, row in enumerate(rows, start=2):
+        reference_id = str(row.get("ReferenceID", ""))
+        field = str(row.get("Field", ""))
+        verdict = str(row.get("Verdict", "")).strip().casefold()
+        endpoint_type = str(row.get("EndpointType", "")).strip()
+        note = str(row.get("EvidenceNote", "")).strip()
+        canonical = str(row.get("CanonicalValue", "")).strip()
+        location = f"{filename}:{line}"
+
+        if BIB_ENDPOINT_TYPE_RE.search(endpoint_type) is None:
+            errors.append(
+                f"{location}: EndpointType must identify an authoritative "
+                "publisher/DOI/proceedings/official/arXiv/structured-record "
+                "category"
+            )
+        if verdict == "legitimate n/a":
+            continue
+
+        note_normalized = normalized_metadata_cell(note)
+        field_forms = {
+            field.casefold(),
+            field.replace("_", " ").casefold(),
+            field.replace("_", "-").casefold(),
+        }
+        canonical_normalized = normalized_metadata_cell(canonical)
+        has_field_locator = any(
+            form and form in note_normalized for form in field_forms
+        )
+        has_value_locator = (
+            len(canonical_normalized) >= 4
+            and canonical_normalized in note_normalized
+        )
+        if not has_field_locator and not has_value_locator:
+            errors.append(
+                f"{location}: EvidenceNote must identify this field or its "
+                "canonical value/source-record locator; a generic record-checked "
+                "sentence is not field-specific evidence"
+            )
+        notes_by_reference[reference_id][note_normalized].append(field)
+
+        if verdict == "unverifiable":
+            if ACCESS_FAILURE_DETAIL_RE.search(note) is None:
+                errors.append(
+                    f"{location}: unverifiable bibliography field requires a "
+                    "concrete HTTP/access/content-insufficiency result"
+                )
+            signature = normalized_bibliography_evidence_signature(
+                note, field, canonical
+            )
+            if signature:
+                unverifiable_by_reference[reference_id].append(signature)
+
+    for reference_id, note_map in notes_by_reference.items():
+        for note, fields in note_map.items():
+            distinct_fields = sorted(set(fields))
+            if note and len(distinct_fields) >= 3:
+                errors.append(
+                    f"{filename}: {reference_id} reuses one EvidenceNote across "
+                    f"unrelated fields {distinct_fields}; record field-specific "
+                    "source evidence"
+                )
+
+    representative_signatures: dict[str, str] = {}
+    for reference_id, signatures in unverifiable_by_reference.items():
+        if signatures:
+            representative_signatures[reference_id] = Counter(
+                signatures
+            ).most_common(1)[0][0]
+    if len(representative_signatures) >= 12:
+        signature, count = Counter(representative_signatures.values()).most_common(1)[0]
+        if signature and count > max(
+            8, math.ceil(len(representative_signatures) * 0.60)
+        ):
+            errors.append(
+                f"{filename}: blanket unverifiable bibliography evidence reused "
+                f"for {count}/{len(representative_signatures)} distinct "
+                "references after identity/field normalization"
+            )
+
+
 def validate_citation_unverifiable_semantics(
     citation_ledger: Iterable[dict[str, Any]],
     filename: str,
@@ -925,6 +1944,40 @@ def validate_citation_unverifiable_semantics(
                 f"{count}/{len(signature_by_reference)} distinct references; "
                 "record source-specific access/content evidence"
             )
+
+
+def normalized_page_evidence_template(row: dict[str, Any]) -> str:
+    """Mask row interpolation while retaining the visual-evidence skeleton."""
+
+    signature = unicodedata.normalize(
+        "NFKC", str(row.get("Evidence", ""))
+    ).casefold()
+    row_values = (
+        str(row.get("DominantContent", "")),
+        str(row.get("NeighborPagesChecked", "")),
+        str(row.get("Region", "")),
+        str(row.get("InspectionModeScale", "")),
+        str(row.get("PageID", "")),
+        str(row.get("PrintedPage", "")),
+    )
+    normalized_values = sorted(
+        {
+            re.sub(r"\s+", " ", unicodedata.normalize("NFKC", value).casefold()).strip()
+            for value in row_values
+            if value and len(value.strip()) >= 2
+        },
+        key=len,
+        reverse=True,
+    )
+    for value in normalized_values:
+        signature = signature.replace(value, " <row-value> ")
+    signature = re.sub(r"(?i)\bphysical\s+p\.\s*\d+\b", " <page> ", signature)
+    signature = re.sub(r"(?i)(?<![A-Za-z0-9])P\d{4}(?![A-Za-z0-9])", " <page> ", signature)
+    signature = HEX64_FIND_RE.sub(" <hash> ", signature)
+    signature = re.sub(r"\b\d+(?:\.\d+)?\s*(?:%|dpi)\b", " <measure> ", signature)
+    signature = re.sub(r"(?<![A-Za-z])\d+(?:\.\d+)*(?![A-Za-z])", " <n> ", signature)
+    signature = re.sub(r"\s+", " ", signature).strip(" .,:;-–")
+    return signature
 
 
 def validate_page_audit_specificity(
@@ -988,6 +2041,41 @@ def validate_page_audit_specificity(
             f"{filename}: Signals is template-filled ({len(signals_values)} "
             "distinct values) despite varied page-specific mechanical triage"
         )
+    non_intentional = [
+        row for row in rows
+        if str(row.get("Disposition", "")).strip().casefold() != "intentional"
+    ]
+    if len(non_intentional) >= 20:
+        templates = [
+            normalized_page_evidence_template(row) for row in non_intentional
+        ]
+        template_counts = Counter(template for template in templates if template)
+        if template_counts:
+            population = len(non_intentional)
+            most_common_count = template_counts.most_common(1)[0][1]
+            single_template_limit = max(8, math.ceil(population * 0.07))
+            if most_common_count > single_template_limit:
+                errors.append(
+                    f"{filename}: one normalized visual-evidence template covers "
+                    f"{most_common_count}/{population} non-intentional pages; "
+                    f"limit={single_template_limit}; inserting page titles or "
+                    "numbers does not establish individual inspection"
+                )
+            template_budget = max(1, math.ceil(math.sqrt(population)))
+            dominant_coverage = sum(
+                count for _, count in template_counts.most_common(template_budget)
+            )
+            unique_ratio = len(template_counts) / population
+            if unique_ratio < 0.25 and dominant_coverage >= math.ceil(
+                population * 0.80
+            ):
+                errors.append(
+                    f"{filename}: rotating normalized visual-evidence templates "
+                    f"cover {dominant_coverage}/{population} pages with only "
+                    f"{len(template_counts)} distinct skeletons "
+                    f"(unique_ratio={unique_ratio:.3f}); page-specific visual "
+                    "observations are required beyond a shared checklist"
+                )
     region_equals_content = sum(
         normalized_metadata_cell(str(row.get("Region", "")))
         == normalized_metadata_cell(str(row.get("DominantContent", "")))
@@ -1007,6 +2095,15 @@ OCCURRENCE_ID_RE = re.compile(r"^C(\d{4})$")
 PAIR_ID_RE = re.compile(r"^C(\d{4})-S(\d{2,4})$")
 PAIR_ID_TOKEN_RE = re.compile(
     r"(?<![A-Za-z0-9])C\d{4}-S\d{2,4}(?![A-Za-z0-9])"
+)
+OCCURRENCE_BINDING_MARKER_RE = re.compile(
+    r"(?i)(?:^|[;\n])\s*occurrence binding\s*:\s*"
+    r"(C\d{4}-S\d{2,4})@sha256=([0-9a-f]{64})"
+    r"(?=[ \t]*(?:;|\n|$))"
+)
+OCCURRENCE_SUBJECT_LABEL_RE = re.compile(
+    r"(?i)(?:occurrence-specific subject|attached proposition)\s*:\s*"
+    r"([^;\n]+)"
 )
 BRACKET_CANDIDATE_ID_RE = re.compile(r"^BC(\d{4})$")
 NUMERIC_BRACKET_RE = re.compile(
@@ -1160,6 +2257,290 @@ SUPPORT_VALUES = {
     "not-needed",
 }
 METADATA_STATUS_VALUES = {"verified", "mismatch", "unverifiable"}
+SUBSTANTIVE_CITATION_SUPPORT_VALUES = {
+    "direct", "partial", "context-only", "mismatch",
+}
+CITATION_TEMPLATE_MIN_UNITS = 12
+
+
+def normalized_citation_projection_text(value: str) -> str:
+    """Normalize PDF/CSV spacing without rewriting proposition semantics."""
+
+    normalized = unicodedata.normalize("NFKC", value or "").replace("\u00ad", "")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def citation_marker_by_occurrence(
+    citation_inventory_by_pair: dict[str, dict[str, Any]],
+) -> dict[str, str]:
+    """Recover the exact Stage-P marker for each occurrence, if unambiguous."""
+
+    grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in citation_inventory_by_pair.values():
+        grouped[str(row.get("OccurrenceID", ""))].append(row)
+    recovered: dict[str, str] = {}
+    for occurrence_id, rows in grouped.items():
+        expected: list[int] = []
+        def source_ordinal(item: dict[str, Any]) -> int:
+            match = PAIR_ID_RE.fullmatch(str(item.get("PairID", "")))
+            return int(match.group(2)) if match is not None else 10**9
+
+        for row in sorted(rows, key=source_ordinal):
+            match = REFERENCE_ID_RE.fullmatch(str(row.get("DisplayedReferenceID", "")))
+            if match is None:
+                expected = []
+                break
+            expected.append(int(match.group(1)))
+        if not expected:
+            continue
+        adjacent = normalized_citation_projection_text(
+            str(rows[0].get("AdjacentPDFText", ""))
+        )
+        candidates = [
+            match.group(0) for match in NUMERIC_BRACKET_RE.finditer(adjacent)
+            if expand_numeric_marker(match.group(0)) == expected
+        ]
+        normalized = {normalize_numeric_marker(item) for item in candidates}
+        if len(normalized) == 1:
+            recovered[occurrence_id] = normalized.pop()
+    return recovered
+
+
+def normalized_citation_occurrence_comparison_text(
+    value: str, exact_marker: str
+) -> str:
+    """Normalize substring evidence and remove only this pair's numeric marker.
+
+    The stable proposition hash deliberately uses
+    :func:`normalized_citation_projection_text` unchanged.  Marker stripping is
+    confined to the occurrence-window substring comparison so a reasonable
+    proposition may omit its trailing ``[n]``/``[n-m]`` citation marker without
+    permitting paraphrase, prefixes, or unrelated numeric arrays to disappear.
+    """
+
+    normalized = normalized_citation_projection_text(value)
+    if not exact_marker:
+        return normalized
+    matches = [
+        match for match in NUMERIC_BRACKET_RE.finditer(normalized)
+        if normalize_numeric_marker(match.group(0)) == exact_marker
+    ]
+    if not matches:
+        return normalized
+    # Remove one occurrence only: the citation marker nearest the end of the
+    # attached proposition/window. Identical numeric data earlier remains.
+    chosen = matches[-1]
+    return re.sub(
+        r"\s+", " ", normalized[:chosen.start()] + " " + normalized[chosen.end():]
+    ).strip()
+
+
+def citation_proposition_sha256(value: str) -> str:
+    """Hash the one stable normalized projection used by the 04 contract."""
+
+    return hashlib.sha256(
+        normalized_citation_projection_text(value).encode("utf-8")
+    ).hexdigest().upper()
+
+
+def citation_occurrence_binding_marker(pair_id: str, proposition: str) -> str:
+    """Return the closed, verifier-readable occurrence/evidence binding marker."""
+
+    return (
+        f"occurrence binding: {pair_id}@sha256="
+        f"{citation_proposition_sha256(proposition)}"
+    )
+
+
+def normalized_citation_template_signature(
+    value: str, proposition: str = ""
+) -> str:
+    """Erase row identity while retaining a locator/evidence prose template."""
+
+    signature = re.sub(
+        r"\s+", " ", unicodedata.normalize("NFKC", value or "").casefold()
+    )
+    proposition_signature = normalized_citation_projection_text(
+        proposition
+    ).casefold()
+    if proposition_signature:
+        signature = signature.replace(proposition_signature, " <subject> ")
+    signature = OCCURRENCE_BINDING_MARKER_RE.sub(" <binding> ", signature)
+    signature = OCCURRENCE_SUBJECT_LABEL_RE.sub(" <subject> ", signature)
+    signature = ACCESS_ENDPOINT_MARKER_RE.sub(" <accessed-endpoint> ", signature)
+    signature = PUBLIC_URL_RE.sub(" <source> ", signature)
+    signature = DOI_TOKEN_RE.sub(" <work-id> ", signature)
+    signature = ARXIV_ID_RE.sub(" <work-id> ", signature)
+    signature = UNVERIFIABLE_QUOTED_IDENTITY_RE.sub(" <title> ", signature)
+    signature = re.sub(
+        r"(?i)(?<![A-Za-z0-9])(?:REF\d+|C\d{4}-S\d{2,4}|"
+        r"R\d+-(?:F|Q)\d{2,4})(?![A-Za-z0-9])",
+        " <row-id> ",
+        signature,
+    )
+    signature = HEX64_FIND_RE.sub(" <digest> ", signature)
+    signature = re.sub(r"(?<![A-Za-z])\d+(?:\.\d+)*(?![A-Za-z])", " <n> ", signature)
+    signature = re.sub(r"\s+", " ", signature).strip(" .,:;-–")
+    return signature
+
+
+def atomic_structured_locator(signature: str) -> bool:
+    """Whether a signature is one concise, valid source anchor, not a template."""
+
+    value = (signature or "").strip().casefold()
+    if value in {
+        "abstract", "introduction", "conclusion", "method", "methods",
+        "result", "results",
+    }:
+        return True
+    if re.fullmatch(
+        r"(?:publisher|official|metadata) record\s*:\s*"
+        r"(?:(?:doi|arxiv)\s+)?<work-id>",
+        value,
+    ):
+        return True
+    return re.fullmatch(
+        r"(?:section|sec\.?|p\.?|pp\.?|page|pages|table|figure|fig\.?|"
+        r"equation|eq\.?|appendix|supplement|theorem|lemma)\s+"
+        r"(?:<n>|[a-z])(?:\s*[-–]\s*(?:<n>|[a-z]))?",
+        value,
+    ) is not None
+
+
+def validate_citation_claim_semantic_specificity(
+    citation_ledger: Iterable[dict[str, Any]],
+    citation_inventory_by_pair: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Bind each substantive verdict to its occurrence and reject bulk filler.
+
+    The exact proposition must be recoverable from the same Stage-P context.
+    Its closed PairID+digest marker then binds the evidence cell to that
+    proposition.  Deterministic identity-stripped signatures catch dominant
+    locator/evidence templates without pretending to decide semantic support.
+    """
+
+    rows = list(citation_ledger)
+    locator_groups: dict[str, list[tuple[int, str, str, str]]] = defaultdict(list)
+    disposition_groups: dict[str, list[tuple[int, str, str, str]]] = defaultdict(list)
+    occurrence_markers = citation_marker_by_occurrence(citation_inventory_by_pair)
+
+    for line, row in enumerate(rows, start=2):
+        pair_id = str(row.get("PairID", ""))
+        reference_id = str(row.get("ReferenceID", ""))
+        proposition = normalized_citation_projection_text(
+            str(row.get("ExactAttachedProposition", ""))
+        )
+        inventory_row = citation_inventory_by_pair.get(pair_id)
+        occurrence_id = str(inventory_row.get("OccurrenceID", "")) if inventory_row else ""
+        exact_marker = occurrence_markers.get(occurrence_id, "")
+        proposition_comparison = normalized_citation_occurrence_comparison_text(
+            proposition, exact_marker
+        )
+        proposition_compact = re.sub(r"\s+", "", proposition_comparison)
+        if inventory_row is not None and proposition:
+            adjacent = normalized_citation_occurrence_comparison_text(
+                str(inventory_row.get("AdjacentPDFText", "")), exact_marker
+            )
+            adjacent_compact = re.sub(r"\s+", "", adjacent)
+            if (
+                proposition_comparison not in adjacent
+                and proposition_compact not in adjacent_compact
+            ):
+                errors.append(
+                    f"{filename}:{line}: ExactAttachedProposition is not an exact "
+                    f"NFKC/whitespace-normalized substring of {pair_id}'s "
+                    "AdjacentPDFText; possible occurrence/window misalignment"
+                )
+
+        support = str(row.get("Support", "")).strip().casefold()
+        if support not in SUBSTANTIVE_CITATION_SUPPORT_VALUES:
+            continue
+        disposition = str(row.get("DispositionEvidence", ""))
+        marker_label_count = len(
+            re.findall(r"(?i)occurrence\s+binding\s*:", disposition)
+        )
+        markers = list(OCCURRENCE_BINDING_MARKER_RE.finditer(disposition))
+        if marker_label_count != 1 or len(markers) != 1:
+            errors.append(
+                f"{filename}:{line}: support={support} requires exactly one closed "
+                "'occurrence binding: <PairID>@sha256=<64-hex>' marker in "
+                "DispositionEvidence"
+            )
+        else:
+            marker_pair, marker_digest = markers[0].groups()
+            expected_digest = citation_proposition_sha256(proposition)
+            if marker_pair != pair_id or marker_digest.upper() != expected_digest:
+                errors.append(
+                    f"{filename}:{line}: occurrence binding does not match "
+                    f"PairID={pair_id} and this row's ExactAttachedProposition"
+                )
+
+        for subject_match in OCCURRENCE_SUBJECT_LABEL_RE.finditer(disposition):
+            subject = normalized_citation_projection_text(subject_match.group(1))
+            if subject != proposition:
+                errors.append(
+                    f"{filename}:{line}: labeled occurrence-specific subject/"
+                    "attached proposition does not exactly match "
+                    "ExactAttachedProposition after NFKC/whitespace normalization"
+                )
+
+        evidence_body = OCCURRENCE_BINDING_MARKER_RE.sub(" ", disposition)
+        evidence_body = OCCURRENCE_SUBJECT_LABEL_RE.sub(" ", evidence_body)
+        if len(normalized_citation_projection_text(evidence_body)) < 12:
+            errors.append(
+                f"{filename}:{line}: support={support} DispositionEvidence has no "
+                "substantive evidence beyond the occurrence binding"
+            )
+
+        proposition_digest = citation_proposition_sha256(proposition)
+        locator_signature = normalized_citation_template_signature(
+            str(row.get("ExactSourceLocator", "")), proposition
+        )
+        disposition_signature = normalized_citation_template_signature(
+            disposition, proposition
+        )
+        concise_locator = atomic_structured_locator(locator_signature)
+        if locator_signature and not concise_locator:
+            locator_groups[locator_signature].append(
+                (line, reference_id, proposition_digest, support)
+            )
+        if disposition_signature:
+            disposition_groups[disposition_signature].append(
+                (line, reference_id, proposition_digest, support)
+            )
+
+    def report_repeated_templates(
+        label: str,
+        groups: dict[str, list[tuple[int, str, str, str]]],
+    ) -> None:
+        for signature, members in groups.items():
+            units = {(reference_id, digest) for _, reference_id, digest, _ in members}
+            references = {reference_id for _, reference_id, _, _ in members}
+            propositions = {digest for _, _, digest, _ in members}
+            supports = sorted({support for _, _, _, support in members})
+            if (
+                len(units) < CITATION_TEMPLATE_MIN_UNITS
+                or (
+                    len(references) < 6
+                    and len(propositions) < 8
+                )
+            ):
+                continue
+            lines = [line for line, _, _, _ in members[:12]]
+            errors.append(
+                f"{filename}: repeated generic {label} template for "
+                f"support classes={supports}: distinct ReferenceID={len(references)}, "
+                f"distinct source/proposition units={len(units)}, "
+                f"threshold={CITATION_TEMPLATE_MIN_UNITS}, sample lines={lines}; "
+                f"identity-stripped signature={signature!r}"
+            )
+
+    report_repeated_templates("ExactSourceLocator", locator_groups)
+    report_repeated_templates("DispositionEvidence", disposition_groups)
+
+
 CLOSED_STATUSES = {
     "closed", "resolved", "not required", "not applicable", "n/a",
 }
@@ -8411,6 +9792,11 @@ def main(argv: list[str] | None = None) -> int:
         "03-bibliography-audit-ledger.csv",
         errors,
     )
+    validate_bibliography_evidence_specificity(
+        bib_ledger,
+        "03-bibliography-audit-ledger.csv",
+        errors,
+    )
     bib_refs_in_ledger = {
         row["ReferenceID"] for row in bib_ledger if row["ReferenceID"]
     }
@@ -8585,6 +9971,12 @@ def main(argv: list[str] | None = None) -> int:
     citation_led_by_pair = index_unique(
         citation_ledger, "PairID",
         "04-citation-claim-audit-ledger.csv", errors,
+    )
+    validate_citation_claim_semantic_specificity(
+        citation_ledger,
+        citation_inv_by_pair,
+        "04-citation-claim-audit-ledger.csv",
+        errors,
     )
     validate_citation_source_identity(
         citation_ledger,
@@ -8807,6 +10199,7 @@ def main(argv: list[str] | None = None) -> int:
         {"Pair ID", "PairID"},
         "citation-claim ledger",
         errors,
+        same_row_id_headers={"Disposition/evidence"},
         required_headers={
             "Pair ID", "Occurrence ID", "PDF location",
             "Exact attached proposition", "Reference ID", "Displayed label",

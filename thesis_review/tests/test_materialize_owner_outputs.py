@@ -263,7 +263,7 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
             bib_csv = root / "03-bibliography-audit-ledger.csv"
             bib_headers, bib_rows = read_rows(bib_csv)
             bib_rows[0]["EvidenceNote"] = (
-                "official route A | route B checked; "
+                "field=type; official route A | route B checked; "
                 f"accessed endpoint: {fallback}"
             )
             write_rows(bib_csv, bib_headers, bib_rows)

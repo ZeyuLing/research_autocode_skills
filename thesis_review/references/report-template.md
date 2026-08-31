@@ -303,6 +303,19 @@ The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionall
 - Machine-readable master: 04-citation-claim-audit-ledger.csv; duplicate/missing/extra Pair IDs:
 ```
 
+In `04`, copy `ExactAttachedProposition` from the same Pair ID's frozen
+`AdjacentPDFText`. For every `direct`, `partial`, `context-only`, or `mismatch`
+row, `DispositionEvidence` contains exactly one
+`occurrence binding: <PairID>@sha256=<64-hex>` marker computed under the
+`ledger-validation.md` normalization and then a substantive evidence statement.
+Do not add a different free-text subject: an explicit `occurrence-specific
+subject:` or `attached proposition:` must normalize exactly to the proposition
+column. `ContentSourceOpened` is the complete identity-bound source-content
+endpoint itself; a complete URL recorded only as an auxiliary `accessed
+endpoint:` does not cure a truncated main endpoint. Locators and evidence are
+occurrence-specific rather than a bulk template with only URLs, identifiers,
+numbers, Pair IDs, or proposition quotations changed.
+
 Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals and suspect/resolved/unresolved counts reconcile to `02`, while `Actionable layout findings` equals the distinct current-owner finding IDs referenced by exact final `02` dispositions; unrelated Gate-I findings do not inflate it. Bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
 
 Questions are not counted as defects until evidence supports them. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.

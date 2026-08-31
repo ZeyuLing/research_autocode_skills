@@ -40,6 +40,16 @@ blank/separator page additionally states the structural reason it is expected.
 Whole-thesis template filling with one identical signal/evidence sentence is an
 invalid audit even when every PNG and hash is genuine.
 
+The validator also normalizes away Page IDs/numbers, copied dominant-content
+titles, neighbor-page values, scale/DPI, hashes, and numeric interpolation
+before measuring evidence diversity. Rotating a small bank of checklist
+sentences and inserting different headings or physical page numbers therefore
+does not establish independent inspection. Shared inspection vocabulary is
+allowed, but the retained observation must remain page-specific after that
+normalization. This gate cannot prove that a unique sentence is truthful, so
+R5 and the chair still perform independent semantic spot checks against the
+rendered pages.
+
 `Neighbor pages checked` records the adjacent or continuation pages actually
 examined. It may name current-round PageIDs such as `P0070; P0072` or use
 physical-page locators; `Evidence` may likewise use an existing PageID when a

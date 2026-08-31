@@ -13,7 +13,7 @@ Use these contracts for every complete review round. Markdown reports contain re
   Each sequence is continuous with no gaps.
 - Never reuse an ID for a different rendered object or citation pair.
 - `pending`, `unchecked`, placeholder ellipses, and silently blank mandatory verdicts fail completion.
-- In final `02-page-layout-ledger.csv`, every cell is nonempty and nonplaceholder except `PrintedPage`, which may be blank only when no printed label is rendered. In `03-bibliography-audit-ledger.csv`, every cell is nonempty and nonplaceholder except `EvidenceEndpoint`, which may be blank only for a documented `unverifiable` row whose `EvidenceNote` records the attempted official route/query/date and negative result. Whitespace-only cells are blank; use an explicit contract value such as `N/A` only where that field's closed vocabulary permits it.
+- In final `02-page-layout-ledger.csv`, every cell is nonempty and nonplaceholder except `PrintedPage`, which may be blank only when no printed label is rendered. In `03-bibliography-audit-ledger.csv`, every cell is nonempty and nonplaceholder: even an `unverifiable` bibliography row retains the complete authoritative `EvidenceEndpoint` actually attempted and explains the access failure in `EvidenceNote`. Whitespace-only cells are blank; use an explicit contract value such as `N/A` only where that field's closed vocabulary permits it.
 - Process large ledgers in deterministic ID ranges and checkpoint batches; concatenate only after duplicate/missing/extra validation.
 - Every sidecar records the frozen PDF SHA-256 in its companion Markdown report and, when practical, in a `PDFSHA256` column.
 
@@ -91,20 +91,38 @@ For each `ReferenceID`, the `(ReferenceID,Field)` key is unique and the mandator
 
 `type,title,ordered_authors,year,venue,publication_status,volume,issue,pages_or_article_number,doi,arxiv_id,arxiv_version,url,access_date,isbn_or_other_persistent_id,existence,retraction_withdrawal_correction_superseding`.
 
-`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. A non-`unverifiable` row records one complete `http(s)` authoritative endpoint. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the attempted official route/query/date and negative/access result when no authoritative endpoint exists, in which case `EvidenceEndpoint` may be blank. Any redirect, failed official route, or fallback actually opened in addition to `EvidenceEndpoint` is retained inside `EvidenceNote` with the closed marker `accessed endpoint: <URL>`; the marker begins the field or follows a semicolon/newline, and the URL ends at a semicolon, newline, or field end. Every HTTP(S) URL in `EvidenceNote` must use that marker. The authoritative bibliography access set is the duplicate-free union of all nonblank `EvidenceEndpoint` values and all valid marked endpoints, in first-observed CSV order. For `mismatch`, the entire `FindingDisposition` cell is exactly one current owning-reviewer `Rn-Fxx` or `Rn-Qxx` ID—no prefix, suffix, free prose, second ID, `none`, `N/A`, or mixture with any exemption phrase. Canonical `REFnnnn` tokens occur only in the `ReferenceID` column/cell; they never recur in another CSV field, prose, code fence, or unrelated Markdown column.
+`Verdict` is one of `exact`, `mismatch`, `legitimate N/A`, or `unverifiable`. Every row, including `unverifiable`, records one complete `http(s)` authoritative endpoint actually attempted. `CheckedAt` is an ISO-8601 date or datetime. For `unverifiable`, `EvidenceNote` records the access failure or authoritative-record insufficiency at that endpoint; a blank endpoint is not a completed bibliography audit. Any redirect, failed secondary route, or fallback actually opened in addition to `EvidenceEndpoint` is retained inside `EvidenceNote` with the closed marker `accessed endpoint: <URL>`; the marker begins the field or follows a semicolon/newline, and the URL ends at a semicolon, newline, or field end. Every HTTP(S) URL in `EvidenceNote` must use that marker. The authoritative bibliography access set is the duplicate-free union of all nonblank `EvidenceEndpoint` values and all valid marked endpoints, in first-observed CSV order. For `mismatch`, the entire `FindingDisposition` cell is exactly one current owning-reviewer `Rn-Fxx` or `Rn-Qxx` ID—no prefix, suffix, free prose, second ID, `none`, `N/A`, or mixture with any exemption phrase. Canonical `REFnnnn` tokens occur only in the `ReferenceID` column/cell; they never recur in another CSV field, prose, code fence, or unrelated Markdown column.
 
 `RenderedValue` and `CanonicalValue` are field-specific scalars. Repeating a
 complete rendered entry across three or more unrelated fields, or placing an
 entry-level DOI/URL/type/venue delimiter inside a title, ordered-author, or
 venue scalar, is invalid. `year`, DOI, arXiv ID/version, URL, and access date
-must satisfy their field shapes. `legitimate N/A` requires explicit absent
-values in both value cells, using the documented English/Chinese absent-value
+must satisfy their field shapes. `legitimate N/A` is restricted to fields that
+can genuinely be absent (`volume`, `issue`, pages/article number, persistent
+identifiers, rendered URL, and access date); it cannot replace required title,
+complete ordered authorship, year, venue, publication status, type, existence,
+or retraction/correction-status checks. It requires explicit absent values in
+both value cells, using the documented English/Chinese absent-value
 grammar; a field-specific marker must match its named row, a citation-shaped
 value is never an absence marker, and an absent
 field marked `exact` is invalid. When an explicit `DOI:`/`DOI ` or `arXiv:`
 field and a PDF-line-broken URL disagree only because the URL lost a trailing
 character, the complete explicit field binds the work identity and the
 truncated route does not pass.
+
+For exact comparisons, full given names may match their initials, or omit only
+trailing middle-name tokens after a compatible first given name, under an unchanged ordered author count with
+matching surnames and surviving given tokens/initials. Common
+venue acronyms may match their full expansion only through the maintained
+explicit alias family; organization prefixes, established journal acronyms,
+and conservative ordered dotted token abbreviations are supported. Unordered
+token sets and fabricated acronyms are not equivalence evidence. Publication-status
+synonyms are restricted to one semantic class; accepted, preprint, submitted,
+published, withdrawn, and retracted are not interchangeable, and unpublished
+is not published. An
+optional-field `legitimate N/A` also fails when the frozen `RenderedEntry`
+visibly exposes that DOI/arXiv/URL/volume/issue/pages or other named field.
+An arXiv-version field is exposed only by an explicit `vN` suffix.
 
 The `03` Markdown projection sorts by `ReferenceID` and uses the exact fifteen
 headers in `citation-audit.md`. Its first three cells project `ReferenceID`,
@@ -130,7 +148,28 @@ deterministic signed Markdown projection.
 
 - `04-citation-claim-audit-ledger.csv`: `PairID,OccurrenceID,PDFLocation,ExactAttachedProposition,ReferenceID,PublicIdentifier,ContentSourceOpened,ExactSourceLocator,Support,MetadataStatus,SeverityFinding,DispositionEvidence,PDFSHA256`
 
-The Pair-ID set and row order must exactly equal `00-citation-inventory.csv`; ordering is numeric by occurrence/source ordinal, so `S99` precedes `S100`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`, and `MetadataStatus` is one of `verified`, `mismatch`, or `unverifiable`. A substantive support verdict other than `unverifiable` requires an `http(s)` content endpoint in `ContentSourceOpened` and a structured locator such as `page 14`, `section 3.2`, `Table 2`, `Figure 4`, `Equation 7`, `Abstract`, or `publisher record: DOI ...`; a bare word such as `section` is invalid. Publication metadata alone is acceptable only when the attached proposition is publication metadata. A `ReferenceID` absent from the rendered bibliography uses exactly `Support=unverifiable`, `MetadataStatus=mismatch`, `PublicIdentifier=no rendered bibliography entry`, blank `ContentSourceOpened`/`ExactSourceLocator`, and a current owning-reviewer finding/question link. The Markdown projection uses the exact twelve headers in `citation-audit.md`, sorts by numeric Pair-ID ordinals, and compares every projected field. `Displayed label` is the exact `00-bibliography-inventory.csv` label for an existing row; for a dangling `REFnnnn`, it is `[n]` derived from the frozen PDF marker. `Content source opened and exact locator` is compact JSON with exact key order `{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`; all other non-hash CSV fields map one-to-one to their named Markdown column. Every CSV PairID must occur exactly once as a complete table cell.
+The Pair-ID set and row order must exactly equal `00-citation-inventory.csv`; ordering is numeric by occurrence/source ordinal, so `S99` precedes `S100`. `Support` is one of `direct`, `partial`, `context-only`, `mismatch`, `unverifiable`, or `not-needed`, and `MetadataStatus` is one of `verified`, `mismatch`, or `unverifiable`. A substantive support verdict other than `unverifiable` requires one complete, parseable, source-specific `http(s)` endpoint in `ContentSourceOpened` and a structured locator such as `page 14`, `section 3.2`, `Table 2`, `Figure 4`, `Equation 7`, `Abstract`, or `publisher record: DOI ...`; a bare word such as `section` is invalid. The content endpoint must carry the complete DOI/arXiv identity in `PublicIdentifier`/`RenderedEntry` or exactly equal a complete official URL exposed by either field. Host fragments, empty-ID routes, collection pages, and paths ending in `_` or a known line-break fragment fail; a complete auxiliary `accessed endpoint:` URL never repairs the primary field. Publication metadata alone is acceptable only when the attached proposition is publication metadata. A `ReferenceID` absent from the rendered bibliography uses exactly `Support=unverifiable`, `MetadataStatus=mismatch`, `PublicIdentifier=no rendered bibliography entry`, blank `ContentSourceOpened`/`ExactSourceLocator`, and a current owning-reviewer finding/question link. The Markdown projection uses the exact twelve headers in `citation-audit.md`, sorts by numeric Pair-ID ordinals, and compares every projected field. `Displayed label` is the exact `00-bibliography-inventory.csv` label for an existing row; for a dangling `REFnnnn`, it is `[n]` derived from the frozen PDF marker. `Content source opened and exact locator` is compact JSON with exact key order `{"content_source_opened":"<ContentSourceOpened>","exact_source_locator":"<ExactSourceLocator>"}`; all other non-hash CSV fields map one-to-one to their named Markdown column. Every CSV PairID must occur exactly once as a complete table cell, except that the same row's PairID occurs once more inside its required occurrence-binding marker in `Disposition/evidence`.
+
+For `direct`, `partial`, `context-only`, and `mismatch`,
+`DispositionEvidence` contains exactly one closed marker
+`occurrence binding: <PairID>@sha256=<64-hex>`, where the digest is SHA-256 of
+`ExactAttachedProposition` after NFKC normalization, soft-hyphen removal,
+whitespace collapse, and trimming. `ExactAttachedProposition` must itself be a
+normalized exact substring of the same Pair ID's `AdjacentPDFText`; the
+validator also permits the whitespace-free form to accommodate extraction
+spaces/line breaks. Any explicit `occurrence-specific subject:` or `attached
+proposition:` label in the disposition must normalize to that exact proposition.
+The marker cannot stand alone: substantive evidence remains mandatory.
+
+For those four support classes, identity-stripped `ExactSourceLocator` and
+`DispositionEvidence` signatures are checked separately. The signature removes
+URLs, DOI/arXiv/work/row IDs, numeric coordinates, binding markers, labeled
+subjects, and the row's complete attached proposition. A signature repeated
+across at least 12 distinct `(ReferenceID, proposition)` units fails when it
+spans at least six distinct references or eight distinct propositions. The
+diagnostic reports the support class, distinct-reference count, unit count, and
+threshold. Repeated occurrences of one work below that cross-source/
+cross-proposition boundary remain available for reviewer judgment.
 
 An `unverifiable` row records a concrete source-specific failure or
 content-insufficiency result. “Source-content access attempt” is not a locator,
@@ -139,7 +178,7 @@ not a completed semantic audit. The validator permits repetition for multiple
 occurrences of the same work but rejects a dominant identical waiver reused
 across many distinct references.
 
-The owning audit artifact and owning review report must list in their `public_endpoints=[...]` receipt every authoritative endpoint that their bibliography or citation master says was opened, including every valid marked auxiliary route. Each exact endpoint occurs once in the receipt. Declaring `[none]` while `EvidenceEndpoint`, `ContentSourceOpened`, or a valid `accessed endpoint:` marker contains a source is an invalid access record. A receipt-only endpoint is equally invalid. A documented `unverifiable` row may leave the endpoint blank only under the explicit inaccessible-route contract; it creates no fictional receipt entry.
+The owning audit artifact and owning review report must list in their `public_endpoints=[...]` receipt every authoritative endpoint that their bibliography or citation master says was opened, including every valid marked auxiliary route. Each exact endpoint occurs once in the receipt. Declaring `[none]` while `EvidenceEndpoint`, `ContentSourceOpened`, or a valid `accessed endpoint:` marker contains a source is an invalid access record. A receipt-only endpoint is equally invalid. An `unverifiable` bibliography row still retains its complete attempted authoritative endpoint and contributes it to the receipt; it never invents a route or leaves `EvidenceEndpoint` blank.
 
 ### Chair and summary reconciliation
 
@@ -222,7 +261,7 @@ For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P
 
 The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Chair materialization and its gate use the closed C allowlist; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; neither opens the PDF, packet, `02`--`04`, helpers, prior artifacts, or `95`. All validators are read-only and create no `95-bundle-validation.md`.
 
-The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
+The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL except for the closed dangling-citation contract, where it and `ExactSourceLocator` remain blank. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Each URL occurrence is checked independently and every marked auxiliary must itself pass the complete source-endpoint gate. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
 
 The R5/master's-R3 bibliography access receipt uses the same closure rule.
 `EvidenceEndpoint` is the primary authoritative record for one field verdict;

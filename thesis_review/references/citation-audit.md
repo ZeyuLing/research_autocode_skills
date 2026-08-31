@@ -77,7 +77,11 @@ publication/acceptance status are separate; pages or article number is not a
 copy of the proceedings record; DOI and arXiv values are complete single work
 identifiers; and `url`/`access_date` describe what the thesis bibliography
 renders, not the auditor's endpoint/date. A `legitimate N/A` row uses an
-explicit absent value in both value cells. The accepted grammar includes
+explicit absent value in both value cells and is permitted only for metadata
+that can genuinely be absent: volume, issue, pages/article number, persistent
+identifiers, rendered URL, and access date. It cannot replace verification of
+the required title, complete ordered authors, year, venue, publication status,
+type, existence, or retraction/correction status. The accepted grammar includes
 `N/A`, `none`, `not applicable`, `not rendered [in the bibliography]`,
 `not available/provided/stated/assigned`, field-specific forms such as
 `no issue assigned`, and their unambiguous Chinese equivalents such as
@@ -86,6 +90,41 @@ explicit absent value in both value cells. The accepted grammar includes
 `无页码` only for `pages_or_article_number`; it never includes a complete citation string.
 Reusing one entry-level string across unrelated fields is an invalid audit even
 when every row has an endpoint and the row count is correct.
+
+For `Verdict=exact`, rendered and canonical values must be field-equivalent.
+This includes the complete ordered author sequence and separate venue and
+publication-status fields, not only compact numeric/identifier scalars. Full
+given names and their matching initials are compatible only when the ordered
+author count, surnames, and surviving given-name tokens/initials agree; only
+trailing middle-name tokens after a compatible first given name may be omitted,
+but a leading given name cannot be skipped and changed or reordered authors are not
+exact. This includes unambiguous uppercase surname-first forms such as
+`DOE J, ROE R` and semicolon-delimited `Doe, J.; Roe, R.`. A common venue abbreviation may match its full name
+only through a conservative explicit alias family (for example `CVPR` and the
+IEEE/CVF Conference on Computer Vision and Pattern Recognition), including
+organization-prefixed forms such as `IEEE CVPR`.
+Established journal acronyms (`IEEE TPAMI`) and conservative dotted forms such
+as `IEEE Trans. Pattern Anal. Mach. Intell.` may match the same full venue, but
+unrelated or fabricated acronyms do not, and full-name token order is preserved.
+Publication-status synonyms
+are mapped only within a safe class (`published`, `final`, and `正式发表`);
+`accepted`, `preprint`, `submitted`, `published`, `withdrawn`, and `retracted`
+remain distinct; token boundaries prevent `unpublished` from matching
+`published`. Page
+ranges preserve their range delimiter during normalization (`12–34` may equal
+`12-34`, but neither equals `1234`). A DOI scalar is exactly one DOI token,
+optionally preceded by a DOI label, or one complete `doi.org` URL; prose that
+merely contains a DOI is not a DOI field value.
+
+Before accepting `legitimate N/A`, compare it with the frozen rendered entry.
+If that entry visibly contains a DOI, arXiv identity, URL, labeled volume or
+issue, labeled pages/article number, access date, or other persistent ID, the
+N/A verdict is contradictory and invalid even though both value cells contain
+an accepted absence marker. For `arxiv_version`, only an explicit `vN` suffix
+means that a version is rendered; a versionless arXiv ID does not.
+Unlabeled numeric volume/issue/pages clusters count only in bibliographic
+context after an entry delimiter and at a terminal field boundary; title text
+such as `12(3):45-67 ways ...` is not treated as publication metadata.
 
 `EvidenceEndpoint` and `CheckedAt` document what the auditor used; they are not automatically fields that must be printed in the thesis bibliography. Whether the rendered reference itself must contain a URL or access date is controlled by the verified institutional template/citation style and the source type. When no binding rule requires a rendered URL or access date, an absent value is `legitimate N/A`, creates no finding, and does not affect the grade. A wrong printed URL that identifies a different object remains a factual identity mismatch. A repository's current archived/read-only state is a finding only when it contradicts a material availability/status claim made by the PDF; it is otherwise audit context.
 
@@ -148,15 +187,55 @@ When a mismatch links a finding rather than a question, that finding is at least
 `S3`; an `S4` label cannot waive a documented contradiction.
 
 `ContentSourceOpened` is either blank under the documented unverifiable
-contract or exactly one complete HTTP(S) endpoint whose content was used for
-the support verdict. Any redirect, fallback, or failed route actually opened
-must be retained in `DispositionEvidence` with the closed marker `accessed
-endpoint: <URL>`; the URL is followed only by a semicolon, newline, or field
-end. Record its outcome in the same disposition. URLs appearing only in
-`PublicIdentifier`, the attached proposition, an exact locator, or unmarked
-prose are identities/text, not proof of access. Every source and marked
-auxiliary endpoint appears once in both the owning ledger and reviewer
-receipts; a receipt-only or omitted recorded endpoint fails closure.
+contract or exactly one complete, parseable, source-specific HTTP(S) endpoint
+whose content was used for the support verdict. It must carry the same complete
+DOI/arXiv identity as `PublicIdentifier`/`RenderedEntry`, or exactly equal a
+complete official URL exposed by either field. A host fragment, collection
+route, empty `id=`, or path ending in a line-break fragment such as `conte` or
+`_` is not a content endpoint. Any redirect, fallback, or failed route actually
+opened must be retained in `DispositionEvidence` with the closed marker
+`accessed endpoint: <URL>`; every URL occurrence must be independently marked,
+even if the same URL also occurs elsewhere in that cell. Every marked auxiliary
+must itself be a complete source-specific endpoint; it cannot repair a truncated
+primary endpoint, while a legitimate child resource below a complete paper page
+is not such a repair. URL fragments are ignored for canonical-page comparison
+and cannot supply DOI/arXiv identity. A collection-shaped route with a nonempty
+source query identity such as `article?id=...` is complete. The URL is followed
+only by a semicolon, newline, or
+field end. A complete auxiliary URL never repairs a truncated or identity-
+unbound `ContentSourceOpened`. URLs appearing only in `PublicIdentifier`, the
+attached proposition, an exact locator, or unmarked prose are identities/text,
+not proof of access. Every source and marked auxiliary endpoint appears once in
+both the owning ledger and reviewer receipts; a receipt-only or omitted recorded
+endpoint fails closure.
+
+For `direct`, `partial`, `context-only`, and `mismatch`, begin or delimit
+`DispositionEvidence` with exactly one closed occurrence marker:
+
+`occurrence binding: <PairID>@sha256=<SHA-256 of the NFKC/whitespace-normalized ExactAttachedProposition>`
+
+The proposition itself must be the smallest exact text span recoverable from
+that same Pair ID's Stage-P `AdjacentPDFText`; NFKC normalization, removal of a
+soft hyphen, whitespace collapse, and a whitespace-free comparison accommodate
+PDF extraction line breaks without allowing an adjacent row/window to be
+substituted. If the disposition also labels an `occurrence-specific subject:`
+or `attached proposition:`, that labeled text must equal
+`ExactAttachedProposition` under the same normalization. The marker is a
+binding, not evidence: retain a substantive source-content explanation after
+it.
+
+Locators and evidence remain source/occurrence-specific. Do not copy one
+generic locator such as `Abstract; Section 3; Figure 2` or one generic support
+sentence across many different sources or propositions. The gate removes URLs,
+identifiers, numeric coordinates, the occurrence marker, and the exact attached
+proposition before comparing templates, so changing only those interpolations
+does not create distinct evidence. Repeated uses of the same work may share a
+genuinely common locator; a large cross-source/cross-proposition template block
+is aggregated across support classes. A concise locator such as `Abstract` alone
+may legitimately recur and is not generic explanatory filler. For proposition
+projection, remove only the exact numeric citation marker recovered for that
+Stage-P occurrence; bracketed numeric data such as `[1,2]` remains substantive.
+does not pass.
 
 ## 3. Static closure checks
 
@@ -207,7 +286,9 @@ Do not label a paywalled, obscure, future, private, or temporarily inaccessible 
 
 For every citation--source pair:
 
-1. identify the smallest exact proposition attached to the citation;
+1. copy the smallest exact proposition attached to the citation from that
+   Pair ID's frozen `AdjacentPDFText`, rather than paraphrasing it or borrowing
+   a neighboring table/paragraph window;
 2. open the cited primary source content in the version that matches the bibliography and frozen review date, and record the exact public `http(s)` content endpoint; a publisher metadata page, DOI record, accepted-paper list, or proceedings index verifies identity/status only, not substantive content;
 3. verify the proposition against the source's actual task, assumptions, method, data, protocol, result, and conclusion, and record a source page, section, theorem, table, figure, equation, record field, or equivalent exact locator;
 4. distinguish what the source directly states from the thesis author's inference;
@@ -276,7 +357,7 @@ A **substantive** conflict changes source identity, existence, publication statu
 The bibliography-integrity gate passes only when:
 
 - the bibliography Markdown master table has exactly one summary row per rendered entry and the CSV has exactly the mandatory long-form field rows per entry;
-- every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict plus an authoritative endpoint or a documented attempted official route/query/date and negative result;
+- every mandatory bibliography field has an `exact`, `mismatch`, `legitimate N/A`, or `unverifiable` verdict plus the complete authoritative endpoint actually attempted; an `unverifiable` row additionally records the route/query/date and negative result;
 - every unique cited rendered entry has field-level metadata, existence, and publication-status dispositions;
 - every factual bibliography mismatch is linked to a finding or unresolved question; none is silently corrected or waived as formatting;
 - every suspected fabricated/nonexistent entry has a documented integrity adjudication;

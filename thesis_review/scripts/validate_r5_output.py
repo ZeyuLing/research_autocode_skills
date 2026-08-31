@@ -781,6 +781,11 @@ def validate_bibliography_outputs(
         "03-bibliography-audit-ledger.csv",
         errors,
     )
+    module.validate_bibliography_evidence_specificity(
+        bibliography_ledger,
+        "03-bibliography-audit-ledger.csv",
+        errors,
+    )
     ledger_reference_ids = {
         row.get("ReferenceID", "") for row in bibliography_ledger
         if row.get("ReferenceID", "")

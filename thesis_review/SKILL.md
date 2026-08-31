@@ -170,11 +170,42 @@ must distinguish opened source content from an attempted endpoint and may not
 turn many unrelated sources into `unverifiable` with one generic
 environment-level waiver. A failed route records its concrete source-specific
 failure, while an opened source records a real content locator. The scoped and
-full validators reject entry-string replication, truncated explicit DOI/arXiv
-identities, vague access-attempt locators, and dominant blanket unverifiable
-dispositions even when only REF IDs, URLs, DOI/arXiv identifiers, or quoted
-work titles change; a schema-shaped ledger that triggers any of these checks is
-discarded and retried in a fresh actor context.
+full validators reject entry-string replication, truncated or non-source-
+specific content endpoints, truncated explicit DOI/arXiv identities, vague
+access-attempt locators, adjacent-window proposition drift, and dominant
+locator/disposition templates even when only REF/Pair IDs, URLs, DOI/arXiv
+identifiers, numeric coordinates, exact proposition quotations, or quoted work
+titles change. Every substantive R4 verdict carries the closed PairID plus
+normalized-proposition-digest binding defined in `references/citation-audit.md`;
+a complete auxiliary route cannot repair an invalid primary content endpoint.
+A schema-shaped ledger that triggers any of these checks is discarded and
+retried in a fresh actor context.
+
+R5 may use `legitimate N/A` only for bibliography metadata that can genuinely
+be absent, never for required title, complete ordered authors, year, venue,
+publication status, type, existence, or correction/retraction status. An
+`exact` verdict requires field-specific rendered/canonical equivalence for
+authors and venue/status as well as identifiers and numeric fields. Page-range
+normalization preserves range structure, and a DOI scalar cannot be prose that
+merely contains a DOI. Every bibliography row, including `unverifiable`, keeps
+the complete authoritative endpoint actually attempted.
+
+Exact equivalence remains citation-style aware but identity preserving: full
+given names may match their initials only with the same ordered authors and
+matching surnames/initials; a common venue acronym may match its token-derived
+full expansion; and only status synonyms within the same publication state are
+equivalent. Before accepting optional-field `legitimate N/A`, R5 verifies that
+the frozen rendered entry does not visibly contain the claimed-absent field.
+Surname-first and given-first author forms must be parsed without ambiguous
+comma guessing; only trailing middle-name omission after a compatible first
+given name is allowed. Hyphenated and multipart surnames retain their identity.
+Venue normalization uses an explicit alias family and ordered tokens; it may
+recognize organization-prefixed and established journal acronyms plus
+conservative dotted initialisms, but never unordered token sets or fabricated
+acronyms.
+Withdrawn and retracted remain different statuses, `unpublished` never matches
+`published`, and a versionless arXiv identity does not imply an arXiv-version
+field.
 
 The R4/R5 ledger split is an exhaustive-work assignment, not a division of academic judgment. R4 must still assess contribution, methods, experiments, narrative, writing, and presentation; R5 must still assess significance, method intelligibility, evidential sufficiency, experimental interpretation, and thesis coherence. The same principle applies to every other persona. Mechanical helpers may create checksum-bound extraction/render/count sidecars under Stage H, but they never decide citation support, bibliography fields, page dispositions, findings, or grades; the owning reviewer independently signs every semantic and visual verdict.
 
@@ -250,6 +281,12 @@ R5 owns only the doctoral exhaustive page-ledger deliverable and its 100-percent
 Every reviewer has a mandatory read-only scoped gate before freeze and exit. Ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware owner gates; master's R3 uses the combined page/bibliography/citation owner gate. The exact commands, actor-specific script insertions, and owned-output boundaries are closed in `references/ledger-validation.md` and `references/report-template.md`. The three ledger owners write all semantic judgments to their authoritative owned CSVs first, then, in that same fresh actor turn, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> <actor-id>` at least once after the final CSV write and again after every subsequent owned-CSV change. Its first nonempty stdout line must be `MATERIALIZED`. This deterministic pre-freeze step rebuilds only the actor-owned `02`/`03`/`04` Markdown tables and derives duplicate-free public-endpoint receipt lists; it never changes a semantic CSV value, disposition, finding, grade, packet artifact, or peer output. Do not hand-copy deterministic table rows or endpoint lists after materialization. The reviewer then repeats its read-only scoped gate in the same fresh turn until exit `0` and first nonempty stdout `PASS`, correcting only its own current outputs and rematerializing after any CSV edit. It must never edit the Stage-P packet, process envelope, frozen PDF, governing inputs, staged rules, or another actor's artifact. An upstream/frozen-input defect stops the actor and returns control to Stage O for a new global retry. Materializer and validator code/output are mechanical rule infrastructure, never thesis or citation evidence, and MATERIALIZED/PASS never replace semantic or visual sign-off.
 
 For the doctoral bibliography/layout owner specifically, R5 may correct only its current `R5-comprehensive-review.md`, `02`, `03`, authorized page renders, and declarations inside those R5-owned Markdown artifacts before freeze. `NeighborPagesChecked` and `Evidence` may use only existing current-round `Pnnnn` values as explicit page cross-references; the primary-key column remains unique, and `Pnnnn` is still forbidden in other columns and prose. R5 records every additional redirect, failed official route, or fallback actually opened in `EvidenceNote` with the closed marker `accessed endpoint: <URL>` so the materializer can derive the complete receipt without guessing. R5 must never edit the Stage-P packet, process envelope, frozen PDF, staged rules, or any other actor's output. If its gate identifies such an upstream defect, R5 must stop and report failure; Stage O treats it as a global-retry condition.
+
+R5 page evidence is normalized before diversity checks: page IDs/numbers,
+copied dominant-content titles, neighbor values, scale/DPI, hashes, and numeric
+interpolation are masked. A small rotating family of otherwise generic
+checklists cannot pass merely by inserting those row values. This mechanical
+gate is supplemented by independent semantic spot checks of rendered pages.
 
 R5's page ledger likewise contains page-specific inspection evidence. It
 preserves the Stage-P mechanical signal for each page, names the actual

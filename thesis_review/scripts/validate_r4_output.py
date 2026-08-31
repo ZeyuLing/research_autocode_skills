@@ -129,6 +129,7 @@ def validate_citation_outputs(
         "04-citation-claim-audit-ledger.csv",
         module.CITATION_LEDGER_COLUMNS,
         errors,
+        blank_allowed={"ContentSourceOpened", "ExactSourceLocator"},
     )
     module.validate_citation_endpoint_records(
         citation_ledger, "04-citation-claim-audit-ledger.csv", errors
@@ -155,6 +156,12 @@ def validate_citation_outputs(
         bibliography_inventory,
         "ReferenceID",
         "00-bibliography-inventory.csv",
+        errors,
+    )
+    module.validate_citation_claim_semantic_specificity(
+        citation_ledger,
+        inventory_by_pair,
+        "04-citation-claim-audit-ledger.csv",
         errors,
     )
     module.validate_citation_source_identity(
@@ -274,6 +281,7 @@ def validate_citation_outputs(
         {"Pair ID", "PairID"},
         "citation-claim ledger",
         errors,
+        same_row_id_headers={"Disposition/evidence"},
         required_headers={
             "Pair ID",
             "Occurrence ID",

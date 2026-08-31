@@ -389,7 +389,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "PDFLocation": "physical p.1",
             "ExactAttachedProposition": "fixture proposition",
             "ReferenceID": "REF0001",
-            "PublicIdentifier": "doi:fixture",
+            "PublicIdentifier": "https://doi.org/10.1145/3442188.3445922",
             "ContentSourceOpened": CITATION_ENDPOINT,
             "ExactSourceLocator": "p.1",
             "Support": "direct",
@@ -1322,9 +1322,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "legitimate N/A" if field in absent_fields else "exact"
             ),
             "EvidenceEndpoint": "https://doi.org/10.1145/3442188.3445922",
-            "EndpointType": "official fixture",
+            "EndpointType": "official publisher record",
             "CheckedAt": "2026-08-29",
-            "EvidenceNote": "fixture official record checked",
+            "EvidenceNote": f"field={field}; fixture official record checked",
             "FindingDisposition": "no finding",
             "PDFSHA256": digest,
         } for field in BIB_FIELDS]
@@ -1342,7 +1342,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "Support": "direct",
             "MetadataStatus": "verified",
             "SeverityFinding": "none",
-            "DispositionEvidence": "supported",
+            "DispositionEvidence": (
+                VALIDATOR_MODULE.citation_occurrence_binding_marker(
+                    "C0001-S01", "fixture proposition"
+                )
+                + "; source content states the fixture proposition in the "
+                "cited scope"
+            ),
             "PDFSHA256": digest,
         }]
         process = {
@@ -2518,6 +2524,431 @@ class ValidateReviewBundleTests(unittest.TestCase):
             errors,
         )
 
+    def test_bibliography_scalar_shapes_and_full_authors_are_enforced(self) -> None:
+        entry = "DOE J, ROE J. Fixture title. Science Robotics, 2024, 9: eaed4592."
+        rows = [
+            {"ReferenceID": "REF0001", "Field": "ordered_authors", "RenderedValue": "DOE J, et al.", "CanonicalValue": "DOE J, et al.", "Verdict": "exact"},
+            {"ReferenceID": "REF0001", "Field": "pages_or_article_number", "RenderedValue": "eaed4592", "CanonicalValue": "eaed4592", "Verdict": "exact"},
+            {"ReferenceID": "REF0001", "Field": "year", "RenderedValue": "2024", "CanonicalValue": "2023", "Verdict": "exact"},
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows, {"REF0001": {"RenderedEntry": entry}}, "03.csv", errors
+        )
+        self.assertTrue(any("complete ordered author list" in error for error in errors), errors)
+        self.assertTrue(any("requires field-specific" in error and "equivalence" in error for error in errors), errors)
+        self.assertFalse(any("eaed4592" in error and "scalar" in error for error in errors), errors)
+
+    def test_bibliography_pages_rejects_prose_but_accepts_multiletter_elocator(self) -> None:
+        self.assertIsNone(
+            VALIDATOR_MODULE.bibliography_scalar_shape_error(
+                "pages_or_article_number", "eaed4592"
+            )
+        )
+        self.assertIsNotNone(
+            VALIDATOR_MODULE.bibliography_scalar_shape_error(
+                "pages_or_article_number", "the article contains twelve pages"
+            )
+        )
+
+    def test_bibliography_required_identity_fields_reject_legitimate_na(self) -> None:
+        rows = [{
+            "ReferenceID": "REF0001", "Field": field,
+            "RenderedValue": "N/A", "CanonicalValue": "N/A",
+            "Verdict": "legitimate N/A",
+        } for field in ("title", "ordered_authors", "year", "venue", "publication_status")]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows, {"REF0001": {"RenderedEntry": "Fixture reference."}}, "03.csv", errors
+        )
+        self.assertEqual(5, sum("legitimate N/A is not allowed" in error for error in errors), errors)
+
+    def test_bibliography_exact_authors_venue_and_status_require_equivalence(self) -> None:
+        rows = [
+            {"ReferenceID": "REF0001", "Field": "ordered_authors", "RenderedValue": "Jane Doe, John Roe", "CanonicalValue": "Jane Doe, Alice Poe", "Verdict": "exact"},
+            {"ReferenceID": "REF0001", "Field": "venue", "RenderedValue": "IEEE CVPR", "CanonicalValue": "ACM MM", "Verdict": "exact"},
+            {"ReferenceID": "REF0001", "Field": "publication_status", "RenderedValue": "published", "CanonicalValue": "accepted", "Verdict": "exact"},
+        ]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            rows, {"REF0001": {"RenderedEntry": "Jane Doe, John Roe. Fixture. IEEE CVPR. published."}}, "03.csv", errors
+        )
+        self.assertEqual(3, sum("requires field-specific" in error for error in errors), errors)
+
+    def test_bibliography_exact_authors_accepts_full_names_and_initials(self) -> None:
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Doe, John Roe", "J. Doe, J. Roe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Doe; John Roe", "Doe, J.; Roe, J."
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Doe, John Roe", "John Roe, Jane Doe"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Doe, John Roe", "Jane Doe, Alice Poe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "DOE J, ROE R", "Jane Doe, Richard Roe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Doe, J.; Roe, R.", "Jane Doe; Richard Roe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Q Doe, Richard Roe", "Jane Doe, Richard Roe"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Jane Alice Doe", "Alice Doe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "Smith-Jones, Jane", "Jane Smith-Jones"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "van der Waals, John", "John van der Waals"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "DOE J, ROE R", "Richard Roe, Jane Doe"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "DOE J, ROE R", "DOE John; ROE Richard"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "DOE J, ROE R", "ROE Richard; DOE John"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_authors_equivalent(
+                "DOE J, ROE R", "DOE John; POE Richard"
+            )
+        )
+
+    def test_bibliography_author_parser_preserves_order_and_name_identity(self) -> None:
+        sequence = VALIDATOR_MODULE.bibliography_author_sequence
+        equivalent = VALIDATOR_MODULE.bibliography_authors_equivalent
+
+        self.assertEqual(
+            [("张三", ()), ("李四", ())], sequence("张三, 李四")
+        )
+        self.assertFalse(equivalent("张三, 李四", "李四 张三"))
+        self.assertFalse(equivalent("张三, 李四", "李四, 张三"))
+
+        self.assertEqual(
+            [("doe", ("j",)), ("roe", ("r",))],
+            sequence("Doe, J., & Roe, R."),
+        )
+        self.assertTrue(
+            equivalent("Doe, J., & Roe, R.", "Jane Doe and Richard Roe")
+        )
+        self.assertFalse(
+            equivalent("Doe, J., & Roe, R.", "Richard Roe and Jane Doe")
+        )
+
+        self.assertEqual(
+            [("o'connor", ("jane",))], sequence("O'Connor, Jane")
+        )
+        self.assertTrue(equivalent("O’Connor, Jane", "Jane O'Connor"))
+        self.assertTrue(equivalent("Smith-Jones, Jane", "Jane Smith-Jones"))
+        self.assertTrue(equivalent("van der Waals, John", "John van der Waals"))
+
+        self.assertEqual(
+            [("smith jr", ("john",))], sequence("Smith Jr., John")
+        )
+        self.assertTrue(equivalent("Smith Jr., John", "John Smith Jr."))
+        self.assertFalse(equivalent("Smith Jr., John", "John Smith Sr."))
+
+        self.assertEqual([("doe", ("john",))], sequence("DOE JOHN"))
+        self.assertTrue(equivalent("DOE JOHN", "John Doe"))
+        self.assertFalse(equivalent("DOE JOHN", "Doe John"))
+        self.assertFalse(equivalent("DOE JOHN", "Jane Doe"))
+
+        self.assertEqual(
+            [("doe", ("j",)), ("roe", ("r",)), ("poe", ("a",))],
+            sequence("Doe, J., Roe, R., & Poe, A."),
+        )
+        self.assertTrue(
+            equivalent(
+                "Doe, J., Roe, R., & Poe, A.",
+                "Jane Doe; Richard Roe; Alice Poe",
+            )
+        )
+        self.assertFalse(
+            equivalent(
+                "Doe, J., Roe, R., & Poe, A.",
+                "Jane Doe; Alice Poe; Richard Roe",
+            )
+        )
+        self.assertEqual(
+            [("张三", ()), ("李四", ())], sequence("张三、李四")
+        )
+        self.assertFalse(equivalent("张三、李四", "李四、张三"))
+        self.assertEqual(
+            [("张三", ()), ("doe", ("john",))], sequence("张三, John Doe")
+        )
+        self.assertTrue(equivalent("张三, John Doe", "张三; John Doe"))
+        self.assertFalse(equivalent("张三, John Doe", "John Doe; 张三"))
+
+    def test_bibliography_exact_venue_accepts_common_full_name_abbreviation(self) -> None:
+        full = "IEEE/CVF Conference on Computer Vision and Pattern Recognition"
+        self.assertTrue(VALIDATOR_MODULE.bibliography_venues_equivalent("CVPR", full))
+        self.assertTrue(VALIDATOR_MODULE.bibliography_venues_equivalent("IEEE CVPR", full))
+        tpami_full = "IEEE Transactions on Pattern Analysis and Machine Intelligence"
+        self.assertTrue(VALIDATOR_MODULE.bibliography_venues_equivalent("IEEE TPAMI", tpami_full))
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "IEEE Trans. Pattern Anal. Mach. Intell.", tpami_full
+            )
+        )
+        self.assertFalse(VALIDATOR_MODULE.bibliography_venues_equivalent("ACM MM", full))
+        self.assertFalse(VALIDATOR_MODULE.bibliography_venues_equivalent("IEEE TPAMI", full))
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "ICML", "International Conference on Machine Learning"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "ACM MM", "ACM International Conference on Multimedia"
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "TMLR", "Transactions on Machine Learning Research"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "TMLR", "Transactions on Medical Learning Research"
+            )
+        )
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_venues_equivalent(
+                "CVPR", "Pattern Recognition and Computer Vision Conference"
+            )
+        )
+
+    def test_bibliography_venue_aliases_are_explicit_and_order_preserving(self) -> None:
+        equivalent = VALIDATOR_MODULE.bibliography_venues_equivalent
+        positives = (
+            ("NeurIPS", "Advances in Neural Information Processing Systems"),
+            ("NIPS", "Advances in Neural Information Processing Systems"),
+            ("NIPS", "NeurIPS"),
+            ("ICLR", "International Conference on Learning Representations"),
+            ("CVPR", "Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition"),
+            ("ICCV", "International Conference on Computer Vision"),
+            ("ECCV", "European Conference on Computer Vision"),
+            ("AAAI", "AAAI Conference on Artificial Intelligence"),
+            ("IJCAI", "International Joint Conference on Artificial Intelligence"),
+            ("ACL", "Annual Meeting of the Association for Computational Linguistics"),
+            ("EMNLP", "Conference on Empirical Methods in Natural Language Processing"),
+            ("NAACL", "North American Chapter of the Association for Computational Linguistics"),
+            ("JMLR", "Journal of Machine Learning Research"),
+            ("TMLR", "Transactions on Machine Learning Research"),
+            ("ICML", "International Conference on Machine Learning"),
+            ("ACM MM", "ACM International Conference on Multimedia"),
+            ("TPAMI", "IEEE Transactions on Pattern Analysis and Machine Intelligence"),
+            ("ICML", "Proceedings of the 37th ICML"),
+            ("ICML", "ICML (ICML)"),
+            (
+                "CVPR",
+                "Proc. of the IEEE/CVF Conference on Computer Vision and Pattern Recognition CVPR",
+            ),
+            (
+                "CVPR",
+                "Proc. IEEE/CVF Conference on Computer Vision and Pattern Recognition",
+            ),
+        )
+        for abbreviation, full_name in positives:
+            with self.subTest(abbreviation=abbreviation):
+                self.assertTrue(equivalent(abbreviation, full_name))
+
+        negatives = (
+            ("ICLR", "International Conference on Representation Learning"),
+            ("CVPR", "Proceedings of the Conference on Pattern Recognition and Computer Vision"),
+            ("ACL", "Association for Computational Learning"),
+            ("NeurIPS", "International Symposium on Neural Information Processing"),
+            ("XYZ", "Xylophone Yielding Zenith"),
+            ("CVPR", "ACM CVPR"),
+            ("CVPR", "Springer CVPR"),
+            ("TPAMI", "Elsevier TPAMI"),
+            ("NeurIPS", "IEEE NeurIPS"),
+            ("ICML", "ACM ICML"),
+            ("ICML", "Springer ICML"),
+        )
+        for abbreviation, other_name in negatives:
+            with self.subTest(abbreviation=abbreviation, negative=other_name):
+                self.assertFalse(equivalent(abbreviation, other_name))
+
+    def test_bibliography_publication_status_synonyms_are_conservative(self) -> None:
+        classifier = VALIDATOR_MODULE.bibliography_publication_status_class
+        self.assertEqual(classifier("published"), classifier("final"))
+        self.assertEqual(classifier("published"), classifier("正式发表"))
+        self.assertNotEqual(classifier("accepted"), classifier("published"))
+        self.assertNotEqual(classifier("preprint"), classifier("published"))
+        self.assertNotEqual(classifier("unpublished"), classifier("published"))
+        self.assertNotEqual(classifier("withdrawn"), classifier("retracted"))
+
+    def test_bibliography_arxiv_version_na_requires_explicit_version_suffix(self) -> None:
+        self.assertFalse(
+            VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field(
+                "arxiv_version", "Fixture. arXiv: 2401.12345."
+            )
+        )
+        self.assertTrue(
+            VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field(
+                "arxiv_version", "Fixture. arXiv: 2401.12345v2."
+            )
+        )
+
+    def test_bibliography_legitimate_na_rejects_visibly_rendered_optional_field(self) -> None:
+        cases = (
+            ("doi", "DOI: 10.1234/fixture.1"),
+            ("arxiv_id", "arXiv: 2401.12345"),
+            ("url", "https://publisher.example/work/1"),
+            ("volume", "Vol. 12"),
+            ("issue", "Issue 3"),
+            ("pages_or_article_number", "pp. 12-34"),
+            ("pages_or_article_number", "Journal, 12(3): 45-67"),
+            ("volume", "Journal, 12(3): 45-67"),
+            ("issue", "Journal, 12(3): 45-67"),
+        )
+        for field, visible in cases:
+            with self.subTest(field=field):
+                errors: list[str] = []
+                VALIDATOR_MODULE.validate_bibliography_field_semantics(
+                    [{
+                        "ReferenceID": "REF0001", "Field": field,
+                        "RenderedValue": "N/A", "CanonicalValue": "N/A",
+                        "Verdict": "legitimate N/A",
+                    }],
+                    {"REF0001": {"RenderedEntry": f"Fixture paper. {visible}."}},
+                    "03.csv", errors,
+                )
+                self.assertTrue(any("contradicts the frozen RenderedEntry" in error for error in errors), errors)
+
+    def test_bibliography_numeric_title_text_does_not_fake_publication_fields(self) -> None:
+        title = "12(3):45-67 ways to analyze motion"
+        for field in ("volume", "issue", "pages_or_article_number"):
+            with self.subTest(field=field):
+                self.assertFalse(
+                    VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field(field, title)
+                )
+        for entry in ("Journal, 12:45-67.", "Journal, 12(3):45."):
+            self.assertTrue(
+                VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field("volume", entry)
+            )
+            self.assertTrue(
+                VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field("pages_or_article_number", entry)
+            )
+
+    def test_bibliography_structured_metadata_tail_requires_terminal_boundary(self) -> None:
+        exposes = VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field
+        positives = (
+            "Journal, 12(3):45-67.",
+            "Journal, 12(3), 45-67.",
+            "Journal. 12(3):45-67.",
+            "Journal. 12(3), 45-67; DOI: 10.1234/fixture.1",
+        )
+        for entry in positives:
+            with self.subTest(entry=entry):
+                self.assertTrue(exposes("volume", entry))
+                self.assertTrue(exposes("issue", entry))
+                self.assertTrue(exposes("pages_or_article_number", entry))
+
+        negatives = (
+            "A title. 12(3):45-67 ways to train a model.",
+            "A title, 12(3), 45-67 reasons for robust motion.",
+            "A title. 12(3):45-67. Further title prose follows.",
+        )
+        for entry in negatives:
+            with self.subTest(entry=entry):
+                self.assertFalse(exposes("volume", entry))
+                self.assertFalse(exposes("issue", entry))
+                self.assertFalse(exposes("pages_or_article_number", entry))
+
+    def test_bibliography_publication_year_tail_is_not_a_volume(self) -> None:
+        exposes = VALIDATOR_MODULE.bibliography_rendered_entry_exposes_field
+        for year in ("1800", "2024", "2199"):
+            entry = f"Proceedings of Foo, {year}, 45-67."
+            with self.subTest(year=year):
+                self.assertFalse(exposes("volume", entry))
+                self.assertFalse(exposes("issue", entry))
+                self.assertTrue(exposes("pages_or_article_number", entry))
+
+        self.assertFalse(exposes("volume", "Journal, 2024(3), 45-67."))
+        self.assertTrue(exposes("issue", "Journal, 2024(3), 45-67."))
+        self.assertTrue(
+            exposes("pages_or_article_number", "Journal, 2024(3), 45-67.")
+        )
+        self.assertFalse(exposes("volume", "Journal, 2024(3):45-67."))
+        self.assertTrue(exposes("issue", "Journal, 2024(3):45-67."))
+        self.assertTrue(
+            exposes("pages_or_article_number", "Journal, 2024(3):45-67.")
+        )
+        self.assertTrue(exposes("volume", "Journal, 1799, 45-67."))
+        self.assertTrue(exposes("volume", "Journal, 2200, 45-67."))
+
+    def test_bibliography_page_range_normalization_preserves_delimiter(self) -> None:
+        self.assertEqual(
+            "12-34",
+            VALIDATOR_MODULE.normalized_bibliography_exact_value(
+                "pages_or_article_number", "pp. 12–34"
+            ),
+        )
+        self.assertNotEqual(
+            VALIDATOR_MODULE.normalized_bibliography_exact_value("pages_or_article_number", "12-34"),
+            VALIDATOR_MODULE.normalized_bibliography_exact_value("pages_or_article_number", "1234"),
+        )
+
+    def test_bibliography_doi_scalar_requires_whole_value(self) -> None:
+        for value in (
+            "10.1234/fixture.1", "DOI: 10.1234/fixture.1",
+            "https://doi.org/10.1234/fixture.1",
+        ):
+            with self.subTest(value=value):
+                self.assertIsNone(VALIDATOR_MODULE.bibliography_scalar_shape_error("doi", value))
+        self.assertIsNotNone(
+            VALIDATOR_MODULE.bibliography_scalar_shape_error(
+                "doi", "official record contains DOI 10.1234/fixture.1 and was checked"
+            )
+        )
+
+    def test_bibliography_fragment_identity_does_not_govern_source(self) -> None:
+        rows = [{
+            "ReferenceID": "REF0001", "Field": "doi", "RenderedValue": "10.1234/full.123",
+            "CanonicalValue": "10.1234/full.123", "Verdict": "exact",
+            "EvidenceEndpoint": "https://example.org/article#doi=10.1234/full.123",
+        }]
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_source_identity(
+            rows, {"REF0001": {"RenderedEntry": "Fixture. DOI: 10.1234/full.123."}}, "03.csv", errors
+        )
+        self.assertTrue(any("fragment" in error.casefold() or "complete canonical DOI" in error for error in errors), errors)
+
     def test_bibliography_legitimate_na_requires_absent_field_values(self) -> None:
         errors: list[str] = []
         VALIDATOR_MODULE.validate_bibliography_field_semantics(
@@ -2605,6 +3036,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
         self.assertTrue(
             all(
                 "legitimate N/A requires field-specific absent values" in error
+                or "legitimate N/A is not allowed for required" in error
                 for error in errors
             ),
             errors,
@@ -2929,6 +3361,31 @@ class ValidateReviewBundleTests(unittest.TestCase):
         )
         self.assertTrue(
             any("DominantContent merely repeats Region" in e for e in errors), errors
+        )
+
+    def test_page_audit_rejects_title_laundered_rotating_templates(self) -> None:
+        inventory = {}
+        rows = []
+        for index in range(1, 173):
+            page_id = f"P{index:04d}"
+            signal = f"extracted_text_chars={1000 + index}; text extracted"
+            inventory[page_id] = {"MechanicalSignals": signal}
+            rows.append({
+                "PageID": page_id,
+                "Region": f"chapter {1 + index // 30}",
+                "DominantContent": f"unique page heading {index}",
+                "Signals": signal,
+                "Disposition": "clean",
+                "Evidence": (
+                    f"Template {index % 12}: unique page heading {index}; physical p.{index}; "
+                    "180 dpi inspection checked clipping, overlap, margins, and float placement."
+                ),
+            })
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_page_audit_specificity(rows, inventory, "02.csv", errors)
+        self.assertTrue(
+            any("rotating normalized visual-evidence templates" in error for error in errors),
+            errors,
         )
 
     def test_bibliography_rendered_url_path_case_is_exact(self) -> None:
@@ -3718,7 +4175,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             bib_row["EvidenceEndpoint"] = BIB_ENDPOINT
             bib_row["EndpointType"] = "official route inaccessible"
             bib_row["EvidenceNote"] = (
-                "Attempted the complete official publisher route on "
+                "field=type; Attempted the complete official publisher route on "
                 "2026-08-29; the record was inaccessible."
             )
             write_csv(
