@@ -101,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             if process and expected_hash:
+                module.validate_manifest_extraction_runtime(
+                    root / "00-manifest.md", errors
+                )
+            if process and expected_hash and not errors:
                 module.validate_ai_report(
                     root / "05-ai-style-assessment.md",
                     expected_hash,

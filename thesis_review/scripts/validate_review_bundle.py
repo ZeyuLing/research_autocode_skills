@@ -3299,6 +3299,365 @@ def derive_and_validate_reference_pages(
     return derived_pages
 
 
+_CHINESE_DIGITS = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3,
+    "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9,
+}
+_ROMAN_DIGITS = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100}
+
+
+def _parse_rendered_chapter_number(value: str) -> int | None:
+    """Parse compact Arabic, Roman, and Chinese chapter-number forms."""
+
+    token = re.sub(r"\s+", "", value).upper()
+    if re.fullmatch(r"\d{1,3}", token):
+        number = int(token)
+        return number if number > 0 else None
+    if token and all(character in _ROMAN_DIGITS for character in token):
+        total = 0
+        previous = 0
+        for character in reversed(token):
+            current = _ROMAN_DIGITS[character]
+            total += -current if current < previous else current
+            previous = max(previous, current)
+        return total if 0 < total <= 999 else None
+    if token and all(
+        character in _CHINESE_DIGITS or character in {"十", "百"}
+        for character in token
+    ):
+        total = 0
+        pending = 0
+        for character in token:
+            if character in _CHINESE_DIGITS:
+                pending = _CHINESE_DIGITS[character]
+            elif character == "十":
+                total += (pending or 1) * 10
+                pending = 0
+            elif character == "百":
+                total += (pending or 1) * 100
+                pending = 0
+        total += pending
+        return total if 0 < total <= 999 else None
+    return None
+
+
+def _rendered_top_lines(text: str, limit: int = 14) -> list[str]:
+    """Return stable nonempty page-top lines without flattening boundaries."""
+
+    return [
+        re.sub(r"\s+", " ", line).strip()
+        for line in text.splitlines()
+        if line.strip()
+    ][:limit]
+
+
+def _looks_like_independent_title(value: str) -> bool:
+    """Reject sentence-like prose while accepting compact rendered titles."""
+
+    title = re.sub(r"\s+", " ", value).strip(" :：-—")
+    if len(title) < 2 or re.search(r"\.{3,}|\u2026{2,}|\u00b7{3,}", title):
+        return False
+    if re.search(r"[.!?。！？;；]$", title):
+        return False
+    return re.match(
+        r"(?i)^(?:presents?|introduces?|describes?|discusses?|explains?|"
+        r"reviews?|shows?|this\b|we\b|介绍(?:了)?|讨论(?:了)?|提出(?:了)?|"
+        r"说明(?:了)?|展示(?:了)?|本章|我们|"
+        r"(?:中|内)(?:[，,、]|我们|本文))",
+        title,
+    ) is None
+
+
+def detect_rendered_chapter_start(text: str) -> int | None:
+    """Detect a chapter-opening page from strong page-top rendered cues.
+
+    A bare ``4 Title`` line is accepted only when duplicated by a running
+    header or followed by the chapter's ``4.1`` heading.  Body-text references
+    to ``Chapter 4`` or ``4.1`` therefore do not become boundaries.
+    """
+
+    lines = _rendered_top_lines(text)
+    explicit_contents_heading = any(
+        re.fullmatch(r"(?i)(?:目录|contents|table\s+of\s+contents)", line)
+        for line in lines[:2]
+    )
+    navigation_lines = sum(
+        re.fullmatch(
+            r"(?i)(?:(?:chapter|chap\.)\s+(?:\d{1,3}|[ivxlc]{1,8})\b|"
+            r"第\s*(?:\d{1,3}|零〇一二两三四五六七八九十百]{1,8})\s*章|"
+            r"\d{1,3}(?:[.\uff0e]\d{1,3})*)\s+.+\s+(?:\d{1,4}|[ivxlcdm]+)",
+            line,
+        ) is not None
+        for line in lines
+    )
+    if explicit_contents_heading or navigation_lines >= 2:
+        return None
+    for index, line in enumerate(lines[:6]):
+        if re.search(r"\.{3,}|\u2026{2,}|\u00b7{3,}", line):
+            # Table-of-contents and list-of-* entries are navigation lines,
+            # not rendered chapter-title boundaries.
+            continue
+        standalone_explicit = False
+        number_token: str | None = None
+        title_text: str | None = None
+        match = re.fullmatch(
+            r"(?i)(?:chapter|chap\.)\s+([0-9]{1,3}|[ivxlc]{1,8})",
+            line,
+        )
+        if match:
+            standalone_explicit = True
+            number_token = match.group(1)
+        else:
+            match = re.fullmatch(
+                r"第\s*([0-9]{1,3}|零〇一二两三四五六七八九十百]{1,8})\s*章",
+                line,
+            )
+            if match:
+                standalone_explicit = True
+                number_token = match.group(1)
+        match = re.fullmatch(
+            r"(?i)(?:chapter|chap\.)\s+([0-9]{1,3}|[ivxlc]{1,8})"
+            r"(?:\s*[:\-\u2014]\s*|\s+)(.+)",
+            line,
+        )
+        if number_token is None and match:
+            number_token = match.group(1)
+            title_text = match.group(2)
+        elif number_token is None:
+            match = re.fullmatch(
+                r"第\s*([0-9]{1,3}|零〇一二两三四五六七八九十百]{1,8})"
+                r"\s*章\s*[:：\-\u2014]?\s*(.+)",
+                line,
+            )
+            if match:
+                number_token = match.group(1)
+                title_text = match.group(2)
+            else:
+                match = re.fullmatch(r"([0-9]{1,3})[ \t]+(.{2,})", line)
+                if match:
+                    number_token = match.group(1)
+                    title_text = match.group(2)
+        if number_token is None:
+            continue
+        number = _parse_rendered_chapter_number(number_token)
+        if number is None:
+            continue
+        duplicated_by_header = any(
+            prior != line and prior.endswith(line) for prior in lines[:index]
+        )
+        subsection_cue = any(
+            re.match(rf"^{number}\s*[.\uff0e]\s*1(?:\D|$)", following)
+            for following in lines[index + 1:index + 9]
+        )
+        if standalone_explicit:
+            following_title = lines[index + 1] if index + 1 < len(lines) else ""
+            if index <= 1 and _looks_like_independent_title(following_title):
+                return number
+            continue
+        if (
+            title_text is not None
+            and _looks_like_independent_title(title_text)
+            and (duplicated_by_header or subsection_cue)
+        ):
+            return number
+    return None
+
+
+def _has_rendered_structural_heading(text: str, region: str) -> bool:
+    """Recognize an independent page-top appendix or back-matter heading."""
+
+    lines = _rendered_top_lines(text, limit=8)
+    patterns = {
+        "appendix": (
+            r"(?i)(?:appendix|appendices)(?:\s+[A-Z0-9]+)?(?:\s*[:\-\u2014]?\s*.*)?",
+            r"附\s*录(?:\s*[A-Z0-9一二三四五六七八九]+)?(?:\s*[:：\-\u2014]?\s*.*)?",
+        ),
+        "back": (
+            r"(?i)(?:acknowledg(?:e)?ments?|curriculum\s+vitae|author\s+biography|publications?)(?:\s*[:\-\u2014]?\s*.*)?",
+            r"(?:致\s*谢|作者\s*(?:简历|简介)|个人\s*简历|攻读学位期间(?:的)?主要学术成果)(?:\s*[:：\-\u2014]?\s*.*)?",
+        ),
+    }
+    return any(
+        re.search(r"\.{3,}|\u2026{2,}|\u00b7{3,}", line) is None
+        and re.fullmatch(pattern, line) is not None
+        for line in lines[:4]
+        for pattern in patterns[region]
+    )
+
+
+def _inventory_region_semantics(value: str) -> tuple[str, int | None]:
+    """Map descriptive and canonical-neutral Region labels to one meaning."""
+
+    normalized = re.sub(r"\s+", " ", value).strip().casefold()
+    if re.search(r"reference|bibliograph|参考\s*文献", normalized):
+        return "references", None
+    if re.search(r"appendix|appendices|附\s*录", normalized):
+        return "appendix", None
+    if re.search(
+        r"front\s+matter|preliminar(?:y|ies)|前置|封面|摘要|目录|声明",
+        normalized,
+    ):
+        return "front", None
+    if re.search(
+        r"back\s+matter|postliminar(?:y|ies)|acknowledg|curriculum\s+vitae|"
+        r"author\s+biography|后置|致\s*谢|作者\s*(?:简历|简介)|个人\s*简历",
+        normalized,
+    ):
+        return "back", None
+    match = re.search(r"(?i)\bchapter\s+([0-9]{1,3}|[ivxlc]{1,8})\b", value)
+    if match:
+        return "chapter", _parse_rendered_chapter_number(match.group(1))
+    match = re.search(
+        r"第\s*([0-9]{1,3}|零〇一二两三四五六七八九十百]{1,8})\s*章",
+        value,
+    )
+    if match:
+        return "chapter", _parse_rendered_chapter_number(match.group(1))
+    if re.fullmatch(
+        r"(?:chapter|body(?: matter)?|main matter|main text|正文)"
+        r"(?:\s*(?:-|\u2014|:|：)\s*.+)?",
+        normalized,
+    ):
+        return "chapter", None
+    if re.fullmatch(
+        r"(?:separator|boundary|transition|blank)"
+        r"(?:\s*(?:-|\u2014|:|：)\s*.+)?",
+        normalized,
+    ):
+        return "neutral", None
+    return "unknown", None
+
+
+def validate_pdf_derived_page_regions(
+    pdf_path: Path,
+    page_inventory: list[dict[str, str]],
+    reference_pages: set[int],
+    errors: list[str],
+) -> None:
+    """Bind declared Regions to boundaries derived only from rendered PDF."""
+
+    try:
+        from pypdf import PdfReader
+        reader = PdfReader(str(pdf_path), strict=False)
+    except Exception as exc:
+        errors.append(f"cannot derive rendered page regions: {exc}")
+        return
+    page_texts: dict[int, str] = {}
+    for physical_page, page in enumerate(reader.pages, start=1):
+        try:
+            page_texts[physical_page] = page.extract_text() or ""
+        except Exception as exc:
+            errors.append(
+                "page-region extraction failed on physical page "
+                f"{physical_page}: {exc}"
+            )
+            page_texts[physical_page] = ""
+    chapter_starts = {
+        physical_page: number
+        for physical_page, text in page_texts.items()
+        if physical_page not in reference_pages
+        and (number := detect_rendered_chapter_start(text)) is not None
+    }
+    first_chapter = min(chapter_starts, default=None)
+    appendix_starts = [
+        physical_page for physical_page, text in page_texts.items()
+        if _has_rendered_structural_heading(text, "appendix")
+        and (first_chapter is None or physical_page > first_chapter)
+    ]
+    back_starts = [
+        physical_page for physical_page, text in page_texts.items()
+        if _has_rendered_structural_heading(text, "back")
+        and (first_chapter is None or physical_page > first_chapter)
+    ]
+    structural_events: list[tuple[int, str, int | None]] = [
+        (page, "chapter", number) for page, number in chapter_starts.items()
+    ]
+    structural_events.extend((page, "appendix", None) for page in appendix_starts)
+    structural_events.extend((page, "back", None) for page in back_starts)
+    structural_events.sort(key=lambda item: item[0])
+    furniture_counts: Counter[str] = Counter()
+    for text in page_texts.values():
+        lines = _rendered_top_lines(text, limit=10000)
+        for candidate in {*lines[:2], *lines[-2:]}:
+            if candidate and re.fullmatch(
+                r"(?:\d+|[ivxlcdm]+)", candidate, re.I
+            ) is None:
+                furniture_counts[candidate] += 1
+    repeated_furniture = {
+        candidate for candidate, count in furniture_counts.items()
+        if len(candidate) <= 200
+        and (
+            count >= 3
+            or (
+                count >= 2
+                and re.search(
+                    r"(?i)thesis|dissertation|university|chapter|学位论文|大学",
+                    candidate,
+                ) is not None
+            )
+        )
+    }
+
+    def rendered_separator_page(physical_page: int) -> bool:
+        lines = _rendered_top_lines(
+            page_texts.get(physical_page, ""), limit=10000
+        )
+        substantive = [
+            candidate for candidate in lines
+            if candidate not in repeated_furniture
+            and re.fullmatch(r"(?:\d+|[ivxlcdm]+)", candidate, re.I) is None
+        ]
+        return not substantive
+
+    for line, row in enumerate(page_inventory, start=2):
+        try:
+            physical_page = int(row.get("PhysicalPage", ""))
+        except (TypeError, ValueError):
+            continue
+        declared = _inventory_region_semantics(row.get("Region", ""))
+        if declared[0] == "neutral":
+            if not rendered_separator_page(physical_page):
+                errors.append(
+                    f"00-page-inventory.csv:{line}: neutral Region cannot hide "
+                    f"substantive rendered content at physical p.{physical_page}"
+                )
+            continue
+        expected: tuple[str, int | None] | None = None
+        boundary_page: int | None = None
+        if physical_page in reference_pages:
+            expected = ("references", None)
+            boundary_page = min(reference_pages) if reference_pages else None
+        else:
+            preceding = [event for event in structural_events if event[0] <= physical_page]
+            if preceding:
+                boundary_page, kind, number = preceding[-1]
+                expected = (kind, number)
+            elif first_chapter is not None and physical_page < first_chapter:
+                expected = ("front", None)
+                boundary_page = first_chapter
+        if expected is None:
+            # Minimal synthetic PDFs can lack rendered chapter headings.  Their
+            # neutral ``chapter`` label remains valid; numbered claims are
+            # checked whenever the PDF exposes a deterministic boundary.
+            continue
+        expected_kind, expected_number = expected
+        matches = declared[0] == expected_kind
+        if expected_kind == "chapter" and matches:
+            matches = declared[1] in {None, expected_number}
+        if not matches:
+            expected_label = (
+                f"chapter {expected_number}"
+                if expected_kind == "chapter" and expected_number is not None
+                else expected_kind
+            )
+            errors.append(
+                f"00-page-inventory.csv:{line}: PDF-derived region mismatch at "
+                f"physical p.{physical_page}; declared={row.get('Region', '')!r}; "
+                f"expected={expected_label} from rendered boundary at physical "
+                f"p.{boundary_page}"
+            )
+
+
 def parse_physical_page_locator(value: str) -> int | None:
     match = re.search(
         r"(?i)(?:\bphysical\s+(?:page\s*)?p?\.?\s*0*(\d+)\b"
@@ -8461,6 +8820,47 @@ def manifest_process_projection(process: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def validate_manifest_extraction_runtime(
+    path: Path,
+    errors: list[str],
+    *,
+    manifest_text: str | None = None,
+) -> None:
+    """Bind every PDF-reading scoped/full gate to Stage P's pypdf version."""
+
+    if manifest_text is None:
+        if is_link_or_reparse(path) or not path.is_file():
+            errors.append(
+                f"{path.name}: cannot validate PDF extraction runtime because "
+                "the manifest is missing or unsafe"
+            )
+            return
+        try:
+            manifest_text = path.read_text(encoding="utf-8", errors="replace")
+        except OSError as exc:
+            errors.append(
+                f"{path.name}: cannot read PDF extraction runtime: {exc}"
+            )
+            return
+    try:
+        import pypdf
+
+        pypdf_version = str(pypdf.__version__).strip()
+    except Exception as exc:
+        pypdf_version = ""
+        errors.append(
+            f"{path.name}: cannot determine current pypdf extraction runtime: {exc}"
+        )
+    extraction_runtime = labeled_value(
+        manifest_text, "PDF extraction runtime"
+    )
+    if not pypdf_version or extraction_runtime != f"pypdf={pypdf_version}":
+        errors.append(
+            f"{path.name}: PDF extraction runtime must exactly equal current "
+            f"validator runtime pypdf={pypdf_version or 'unknown'}"
+        )
+
+
 def validate_manifest(
     path: Path,
     expected_pdf_hash: str,
@@ -8487,6 +8887,7 @@ def validate_manifest(
     )
     if not text:
         return
+    validate_manifest_extraction_runtime(path, errors, manifest_text=text)
     required_headings = (
         "Thesis structure",
         "Thesis-stated questions and contributions — neutral navigation only",
@@ -8531,6 +8932,7 @@ def validate_manifest(
         "Operational prompt SHA-256",
         "Frozen PDF SHA-256 at start and end",
         "Frozen at",
+        "PDF extraction runtime",
         "Degree/institution/discipline",
         "Review round and purpose",
         "Frozen PDF path, SHA-256, frozen_at timestamp, and pages",
@@ -8546,7 +8948,7 @@ def validate_manifest(
     ):
         errors.append(
             f"{path.name}: manifest identity block must contain only the "
-            "seventeen canonical single-line fields in order"
+            "eighteen canonical single-line fields in order"
         )
     process_path = root / "00-process-parameters.json"
     process_identity = labeled_value(
@@ -9546,6 +9948,10 @@ def main(argv: list[str] | None = None) -> int:
         bib_inventory,
         errors,
     ) if frozen_path.is_file() else set()
+    if frozen_path.is_file():
+        validate_pdf_derived_page_regions(
+            frozen_path, page_inventory, reference_pages, errors
+        )
     extracted_candidates, extracted_unmatched_glyphs = (
         extract_numeric_bracket_candidates(frozen_path, reference_pages, errors)
         if frozen_path.is_file()

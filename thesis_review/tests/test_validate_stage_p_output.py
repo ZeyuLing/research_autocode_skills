@@ -180,6 +180,159 @@ class ValidateStagePOutputTests(unittest.TestCase):
                 self.assertFalse((root / "95-bundle-validation.md").exists())
                 self.assertFalse((root / "__pycache__").exists())
 
+    def test_pdf_derived_numbered_chapter_boundary_rejects_p0073_style_mislabel_in_both_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            harness.build_bundle(root, page_count=3)
+            stage_p_before = self.run_stage_p(root)
+            self.assertEqual(
+                stage_p_before.returncode,
+                0,
+                stage_p_before.stdout + stage_p_before.stderr,
+            )
+            for filename in (
+                "00-page-inventory.csv",
+                "02-page-layout-ledger.csv",
+            ):
+                path = root / filename
+                headers, rows = read_rows(path)
+                rows[1]["Region"] = "chapter 3"
+                write_rows(path, headers, rows)
+            self.assert_stage_p_and_full_fail(
+                root,
+                "PDF-derived region mismatch at physical p.2",
+            )
+
+    def test_chapter_detector_accepts_chinese_and_english_but_not_body_references(self) -> None:
+        detect = FULL_VALIDATOR_MODULE.detect_rendered_chapter_start
+        self.assertEqual(
+            detect("博士学位论文 4 可组合运动控制\n4 可组合运动控制\n4.1 引言"),
+            4,
+        )
+        self.assertEqual(
+            detect("Chapter IV Composable Motion Control\n4.1 Introduction"),
+            4,
+        )
+        self.assertIsNone(
+            detect(
+                "Discussion of prior work\n"
+                "The method follows Chapter 4 and cites Section 4.1 in prose."
+            )
+        )
+        for toc_or_prose in (
+            "目录\n第4章 可组合运动控制 73",
+            "目录\n第4章 可组合运动控制 73\n4.1 引言 75\n4.2 方法 77",
+            "Contents\nChapter 4 Composable Motion Control 73\n4.1 Introduction 75\n4.2 Method 77",
+            "Chapter 4 Composable Motion Control 73\n4.1 Introduction 75\n4.2 Method 77",
+            "Chapter 4 presents the proposed method.",
+            "第4章介绍了本章方法。",
+            "第4章中，我们介绍本章方法\n4.1 节给出实现细节",
+        ):
+            with self.subTest(text=toc_or_prose):
+                self.assertIsNone(detect(toc_or_prose))
+
+    def test_chapter_detector_supports_cross_line_titles_and_continuous_transitions(self) -> None:
+        detect = FULL_VALIDATOR_MODULE.detect_rendered_chapter_start
+        rendered_pages = (
+            "CHAPTER 3\nKinematic Unit Generation\n3.1 Introduction",
+            "Chapter 3 Kinematic Unit Generation\n3.7 Summary",
+            "CHAPTER 4\nComposable Motion Control\n4.1 Introduction",
+            "Chapter 4 Composable Motion Control\n4.6 Experiments",
+        )
+        self.assertEqual([detect(text) for text in rendered_pages], [3, None, 4, None])
+        self.assertEqual(
+            detect("CHAPTER 4\nMotion with Llama 3\n4.1 Introduction"),
+            4,
+        )
+
+    def test_region_semantics_accepts_descriptive_class_prefixes(self) -> None:
+        semantics = FULL_VALIDATOR_MODULE._inventory_region_semantics
+        self.assertEqual(semantics("chapter — methods"), ("chapter", None))
+        self.assertEqual(semantics("body — results"), ("chapter", None))
+        self.assertEqual(semantics("第4章 — experiments"), ("chapter", 4))
+
+    def test_neutral_region_requires_a_substantively_empty_rendered_page(self) -> None:
+        harness = fixture_module.ValidateReviewBundleTests(
+            methodName="test_complete_fixture_passes"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness.build_bundle(root, page_count=4)
+            path = root / "00-page-inventory.csv"
+            headers, rows = read_rows(path)
+            rows[2]["Region"] = "separator — blank verso"
+            write_rows(path, headers, rows)
+            result = self.run_stage_p(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            rows[1]["Region"] = "separator — hides content"
+            write_rows(path, headers, rows)
+            self.assert_stage_p_fails(
+                root,
+                "neutral Region cannot hide substantive rendered content at physical p.2",
+            )
+
+    def test_repeated_edge_prose_is_not_treated_as_page_furniture(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            pdf_path = root / "repeated-prose.pdf"
+            writer = fixture_module.PdfWriter()
+            for _index in range(2):
+                page = writer.add_blank_page(width=595.28, height=841.89)
+                fixture_module.add_ascii_text(
+                    writer, page, "Repeated substantive method result."
+                )
+            with pdf_path.open("wb") as handle:
+                writer.write(handle)
+            rows = [{
+                "PageID": f"P{physical_page:04d}",
+                "PhysicalPage": str(physical_page),
+                "PrintedPage": "",
+                "Region": "separator — claimed blank",
+                "MechanicalSignals": "none",
+                "PDFSHA256": "A" * 64,
+            } for physical_page in (1, 2)]
+            errors: list[str] = []
+            FULL_VALIDATOR_MODULE.validate_pdf_derived_page_regions(
+                pdf_path, rows, set(), errors
+            )
+            self.assertEqual(
+                sum("neutral Region cannot hide" in error for error in errors),
+                2,
+                errors,
+            )
+
+    def test_manifest_binds_exact_pypdf_runtime_for_scoped_and_full_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_full_fixture(root)
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                re.sub(
+                    r"(?m)^- PDF extraction runtime: .*$",
+                    "- PDF extraction runtime: pypdf=0.0.0",
+                    manifest.read_text(encoding="utf-8"),
+                ),
+                encoding="utf-8",
+            )
+            self.assert_stage_p_and_full_fail(
+                root,
+                "PDF extraction runtime must exactly equal current validator runtime",
+            )
+
+    def test_structural_heading_detector_rejects_toc_dot_leaders(self) -> None:
+        detect = FULL_VALIDATOR_MODULE._has_rendered_structural_heading
+        self.assertFalse(detect("附录 ................................ 149", "appendix"))
+        self.assertFalse(detect("致谢 ……………… 151", "back"))
+        self.assertFalse(
+            detect("Acknowledgements ........................ 151", "back")
+        )
+        self.assertTrue(detect("附录\nA 补充实验", "appendix"))
+        self.assertTrue(detect("致谢\n感谢所有帮助。", "back"))
+        self.assertTrue(detect("Curriculum Vitae\nEducation", "back"))
+
     def test_scope_does_not_enumerate_or_open_peer_outputs(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -620,6 +773,10 @@ class ValidateStagePOutputTests(unittest.TestCase):
                     "extract_numeric_bracket_candidates",
                     return_value=(extracted, []),
                 ),
+                mock.patch.object(
+                    FULL_VALIDATOR_MODULE,
+                    "validate_pdf_derived_page_regions",
+                ),
                 mock.patch.object(FULL_VALIDATOR_MODULE, "validate_manifest"),
             ):
                 STAGE_P_MODULE.validate_packet_reconciliation(
@@ -792,6 +949,12 @@ class ValidateStagePOutputTests(unittest.TestCase):
             self.assertIn("validate_stage_p_output.py", text)
         self.assertIn("PdfReader(..., strict=False)", skill_text)
         self.assertIn("semicolon-separated", skill_text)
+        self.assertIn("PDF-derived boundaries", skill_text)
+        self.assertIn("explicit chapter number must match", template_text)
+        self.assertIn("shared Stage-P/full validator", ledger_text)
+        self.assertIn("unpinned `uv --with pypdf`", skill_text)
+        self.assertIn("PDF extraction runtime", template_text)
+        self.assertIn("pypdf.__version__", ledger_text)
         self.assertIn("first nonempty stdout line is exactly `PASS`", skill_text)
 
 

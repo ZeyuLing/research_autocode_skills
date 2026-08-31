@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib.util
+import re
 import subprocess
 import sys
 import tempfile
@@ -148,6 +149,25 @@ class ValidateScopedOutputsTests(unittest.TestCase):
             invalid = self.run_ai(root)
             self.assertNotEqual(invalid.returncode, 0)
             self.assertTrue(invalid.stdout.startswith("FAIL\n"), invalid.stdout)
+
+    def test_pdf_reading_scoped_gates_reject_pypdf_runtime_drift(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            manifest = root / "00-manifest.md"
+            text = re.sub(
+                r"(?m)^- PDF extraction runtime: .*$",
+                "- PDF extraction runtime: pypdf=0.0.0",
+                manifest.read_text(encoding="utf-8"),
+            )
+            manifest.write_text(text, encoding="utf-8")
+            for result in (self.run_reviewer(root, "R1"), self.run_ai(root)):
+                self.assertNotEqual(result.returncode, 0)
+                self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+                self.assertIn(
+                    "PDF extraction runtime must exactly equal current validator runtime",
+                    result.stdout,
+                )
 
 
 if __name__ == "__main__":

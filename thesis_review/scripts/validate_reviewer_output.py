@@ -132,6 +132,11 @@ def validate_reviewer(root: Path, actor_id: str, module: Any) -> list[str]:
     )
     if not validated_process or not expected_hash:
         return errors
+    module.validate_manifest_extraction_runtime(
+        root / "00-manifest.md", errors
+    )
+    if errors:
+        return errors
     if reviewer_index > reviewer_count:
         errors.append(
             f"{actor_id} is outside the process reviewer_count={reviewer_count}"

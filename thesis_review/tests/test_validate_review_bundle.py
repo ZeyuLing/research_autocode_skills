@@ -14,7 +14,7 @@ import unittest
 import zlib
 from pathlib import Path
 
-from pypdf import PdfWriter
+from pypdf import PdfWriter, __version__ as PYPDF_VERSION
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
 
 
@@ -1247,6 +1247,15 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     "fixture proposition [1]; quantization levels are [3, 8]; "
                     "scale interval [0.85, 1].",
                 )
+            elif physical_page == 2 and page_count >= 3:
+                add_ascii_text(
+                    writer,
+                    page,
+                    "Doctoral Thesis 4 Rendered Boundary\n"
+                    "4 Rendered Boundary\n"
+                    "4.1 Introduction\n"
+                    "This page begins the fourth rendered chapter.",
+                )
             elif physical_page == page_count:
                 add_ascii_text(writer, page, "References\n[1] Fixture reference.")
         with pdf.open("wb") as handle:
@@ -1267,7 +1276,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "PhysicalPage": str(physical_page),
             "PrintedPage": "",
             "Region": (
-                "bibliography" if physical_page == page_count else "chapter"
+                "bibliography"
+                if physical_page == page_count
+                else (
+                    "front matter"
+                    if page_count >= 3 and physical_page == 1
+                    else "chapter"
+                )
             ),
             "DominantContent": "text",
             "Signals": "none",
@@ -1392,6 +1407,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + f"- Operational prompt SHA-256: {process['actor_prompt_sha256']['P']}\n"
             + f"- Frozen PDF SHA-256 at start and end: {digest} / {digest}\n"
             + "- Frozen at: 2026-08-29T12:34:56+08:00\n"
+            + f"- PDF extraction runtime: pypdf={PYPDF_VERSION}\n"
             + "- Degree/institution/discipline: degree_level=masters ; degree_type=academic ; institution=null ; school_or_department=null ; discipline=computer science ; expected_submission_year=2026\n"
             + "- Review round and purpose: round_id=fixture ; retry_id=r1 ; review_mode=initial ; artifact_type=author-copy ; output_language=zh-CN\n"
             + f"- Frozen PDF path, SHA-256, frozen_at timestamp, and pages: file=frozen-thesis.pdf ; sha256={digest} ; frozen_at=2026-08-29T12:34:56+08:00 ; pages={page_count}\n"
@@ -1492,7 +1508,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "PhysicalPage": str(physical_page),
                 "PrintedPage": "",
                 "Region": (
-                    "bibliography" if physical_page == page_count else "chapter"
+                    "bibliography"
+                    if physical_page == page_count
+                    else (
+                        "front matter"
+                        if page_count >= 3 and physical_page == 1
+                        else "chapter"
+                    )
                 ),
                 "MechanicalSignals": "none",
                 "PDFSHA256": digest,

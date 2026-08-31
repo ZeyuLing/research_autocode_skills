@@ -310,6 +310,9 @@ def validate_packet_reconciliation(
     reference_pages = module.derive_and_validate_reference_pages(
         frozen_path, declared_reference_pages, bibliography_inventory, errors
     )
+    module.validate_pdf_derived_page_regions(
+        frozen_path, page_inventory, reference_pages, errors
+    )
     extracted_candidates, extracted_unmatched = (
         module.extract_numeric_bracket_candidates(
             frozen_path, reference_pages, errors

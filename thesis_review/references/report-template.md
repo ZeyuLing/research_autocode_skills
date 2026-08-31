@@ -99,6 +99,7 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
 - Frozen at: <exact process-envelope frozen_at value>
+- PDF extraction runtime: pypdf=<exact `pypdf.__version__` used to generate every PDF-derived Stage-P field>
 - Degree/institution/discipline: degree_level=<value> ; degree_type=<value> ; institution=<value-or-null> ; school_or_department=<value-or-null> ; discipline=<value-or-null> ; expected_submission_year=<value-or-null>
 - Review round and purpose: round_id=<value> ; retry_id=<value> ; review_mode=<value> ; artifact_type=<value> ; output_language=<value>
 - Frozen PDF path, SHA-256, frozen_at timestamp, and pages: file=<frozen_pdf_file> ; sha256=<selected_pdf_sha256> ; frozen_at=<frozen_at> ; pages=<physical_page_count>
@@ -115,7 +116,7 @@ Record a neutral structural map with physical-page anchors. Do not evaluate it.
 Record only statements explicitly visible in the PDF, with exact page anchors. Do not adjudicate them or create a consensus map.
 
 ## Objective inventories and locations
-Name at least `00-page-inventory.csv`, `00-bibliography-inventory.csv`, `00-citation-candidate-ledger.csv`, `00-citation-inventory.csv`, and `00-unmatched-bracket-ledger.csv`, plus the locations of chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, citation occurrences, and any PDF-derived corpus.
+Name at least `00-page-inventory.csv`, `00-bibliography-inventory.csv`, `00-citation-candidate-ledger.csv`, `00-citation-inventory.csv`, and `00-unmatched-bracket-ledger.csv`, plus the locations of chapters/sections, figures, tables, equations, algorithms, appendices, bibliography entries, citation occurrences, and any PDF-derived corpus. In `00-page-inventory.csv`, `Region` is bound to the rendered PDF rather than copied from manifest prose: one-line or cross-line page-top chapter-title boundaries, the unique bibliography run, and independent appendix/back headings control the class for every physical page. Class-prefix descriptions such as `chapter — methods` and `body — results` are permitted, while any explicit chapter number must match the rendered chapter number. `separator`/`boundary` is permitted only for a substantively empty rendered page after repeated page furniture and a standalone page number are removed. TOC/list entries and sentence-like prose cross-references never establish a boundary. The Stage-P scoped gate and full-bundle gate call the same shared Region implementation.
 
 - Numeric-bracket candidate rows: <integer>
 - Citation-classified candidate rows: <integer>
@@ -124,7 +125,7 @@ Name at least `00-page-inventory.csv`, `00-bibliography-inventory.csv`, `00-cita
 - Unmatched glyph dispositions: <concrete physical-page/context audit result; state none found when the validated count is zero>
 ```
 
-The manifest uses exactly this H1 followed by these three H2 sections in this order. The fourteen identity bullets occur once, in the shown order, before the first H2. Its process fields are deterministic projections, not prose paraphrases. The process-parameter hash is the hash of the final closed JSON bytes; if the JSON changes, regenerate the manifest before any actor starts. Apart from specifically hash-bound governing-rule PDFs declared in the process envelope, the round root contains exactly one PDF: the process-selected frozen thesis.
+The manifest uses exactly this H1 followed by these three H2 sections in this order. The eighteen identity bullets occur once, in the shown order, before the first H2. Its process fields are deterministic projections, not prose paraphrases. The process-parameter hash is the hash of the final closed JSON bytes; if the JSON changes, regenerate the manifest before any actor starts. `PDF extraction runtime` is mechanically compared with the validator's current `pypdf.__version__`; changing extraction runtimes inside one round invalidates every scoped/full gate rather than silently changing text slices. Apart from specifically hash-bound governing-rule PDFs declared in the process envelope, the round root contains exactly one PDF: the process-selected frozen thesis.
 
 When the unmatched count is positive, `00-unmatched-bracket-ledger.csv` is the row-level master with schema `GlyphID,PhysicalPage,Glyph,AdjacentPDFText,Disposition,PDFSHA256`; the manifest disposition names that file and its exact row count. When the count is zero, retain the header-only CSV and state explicitly that none were found.
 
