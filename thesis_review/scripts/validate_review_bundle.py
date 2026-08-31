@@ -3309,12 +3309,13 @@ def validate_chair_report(
     citation_inventory: list[dict[str, str]],
     citation_ledger: list[dict[str, str]],
     academic_ledger: list[dict[str, str]],
+    reviewer_finding_ids: set[str],
     reviewer_question_ids: set[str],
     reviewer_count: int,
     decision_regime_status: str | None,
     allowed_governing_sources: set[str],
     errors: list[str],
-) -> None:
+) -> set[str]:
     allowed_chair_public = {
         *(
             value for value in process.get("governing_rule_urls", [])
@@ -3333,7 +3334,8 @@ def validate_chair_report(
         },
     )
     if not text:
-        return
+        return set()
+    direct_rejected_finding_ids: set[str] = set()
     require_unique_level2_headings(text, (
         "Clean-room boundary",
         "Overall risk and recommendation",
@@ -3977,28 +3979,55 @@ def validate_chair_report(
                 errors.append(f"{path.name}: invalid disagreement Decision ID {row[0]!r}")
             else:
                 decision_numbers.append(int(decision_match.group(1)))
-            source_ids = re.findall(r"(?:R\d+-Q\d{2,4}|C-F\d{2,4})", row[1])
-            residue = re.sub(r"(?:R\d+-Q\d{2,4}|C-F\d{2,4})", "", row[1])
+            source_ids = re.findall(
+                r"(?:R\d+-(?:F|Q)\d{2,4}|C-F\d{2,4})", row[1]
+            )
+            residue = re.sub(
+                r"(?:R\d+-(?:F|Q)\d{2,4}|C-F\d{2,4})", "", row[1]
+            )
             residue = re.sub(r"[\s,，;/|]+", "", residue)
             if not source_ids or residue:
                 errors.append(
                     f"{path.name}: {row[0]} Source item IDs must contain only "
-                    "canonical reviewer-question or chair-finding IDs"
+                    "canonical reviewer-finding, reviewer-question, or "
+                    "chair-finding IDs"
                 )
             source_counts.update(source_ids)
-            if row[5].casefold() not in {
+            status = row[5].casefold()
+            if status not in {
                 "resolved", "unresolved", "not verifiable", "rejected", "disputed",
             }:
                 errors.append(f"{path.name}: {row[0]} has invalid disagreement Status")
+            direct_finding_ids = [
+                identifier for identifier in source_ids
+                if re.fullmatch(r"R\d+-F\d{2,4}", identifier)
+            ]
+            if direct_finding_ids:
+                if status != "rejected":
+                    errors.append(
+                        f"{path.name}: {row[0]} direct reviewer-finding sources "
+                        "require Status=rejected"
+                    )
+                if len(direct_finding_ids) != len(source_ids):
+                    errors.append(
+                        f"{path.name}: {row[0]} direct reviewer-finding rejection "
+                        "cannot mix Rn-Fxx with reviewer questions or Chair findings"
+                    )
+                if status == "rejected":
+                    direct_rejected_finding_ids.update(direct_finding_ids)
         if decision_numbers != list(range(1, len(decision_numbers) + 1)):
             errors.append(f"{path.name}: disagreement Decision IDs must be continuous from D01")
         required_disagreement_ids = {
             row.get("ChairFindingID", "") for row in academic_ledger
             if row.get("EvidenceStatus", "").casefold() in {
-                "rejected", "not verifiable from submitted pdf", "disputed",
+                "not verifiable from submitted pdf", "disputed",
             }
         }
-        required_sources = required_disagreement_ids | reviewer_question_ids
+        required_sources = (
+            required_disagreement_ids
+            | reviewer_question_ids
+            | direct_rejected_finding_ids
+        )
         missing_disagreements = sorted(required_sources - set(source_counts))
         duplicate_disagreements = sorted(
             identifier for identifier, count in source_counts.items()
@@ -4016,12 +4045,23 @@ def validate_chair_report(
             )
         unknown_question_sources = sorted(
             identifier for identifier in source_counts
-            if identifier.startswith("R") and identifier not in reviewer_question_ids
+            if re.fullmatch(r"R\d+-Q\d{2,4}", identifier)
+            and identifier not in reviewer_question_ids
         )
         if unknown_question_sources:
             errors.append(
                 f"{path.name}: disagreements table contains unknown reviewer questions "
                 f"{unknown_question_sources}"
+            )
+        unknown_reviewer_finding_sources = sorted(
+            identifier for identifier in source_counts
+            if re.fullmatch(r"R\d+-F\d{2,4}", identifier)
+            and identifier not in reviewer_finding_ids
+        )
+        if unknown_reviewer_finding_sources:
+            errors.append(
+                f"{path.name}: disagreements table contains unknown reviewer findings "
+                f"{unknown_reviewer_finding_sources}"
             )
         known_chair_finding_ids = {
             row.get("ChairFindingID", "") for row in academic_ledger
@@ -4036,6 +4076,7 @@ def validate_chair_report(
                 f"{path.name}: disagreements table contains unknown chair findings "
                 f"{unknown_chair_sources}"
             )
+    return direct_rejected_finding_ids
 
 
 def parse_count_label(
@@ -7937,7 +7978,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         if row["EvidenceStatus"].casefold() not in {
             "verified", "partially verified", "not verifiable from submitted pdf",
-            "rejected", "deduplicated", "disputed",
+            "deduplicated", "disputed",
         }:
             errors.append(
                 f"91-revision-ledger.csv:{line}: invalid EvidenceStatus "
@@ -8491,6 +8532,25 @@ def main(argv: list[str] | None = None) -> int:
             finding_id for finding_id, fields in current_reviewer_findings.items()
             if fields.get("Severity", "").casefold() in {"s0", "s1", "s2", "s3"}
         }
+        direct_rejected_finding_ids = validate_chair_report(
+            root / "90-chair-synthesis.md",
+            expected_hash,
+            process,
+            bib_inventory,
+            bib_ledger,
+            citation_inventory,
+            citation_ledger,
+            academic_ledger,
+            required_reviewer_finding_ids,
+            set(current_reviewer_questions),
+            reviewer_count,
+            (
+                process.get("decision_regime_status")
+                if isinstance(process, dict) else None
+            ),
+            allowed_governing_sources,
+            errors,
+        )
         source_id_counts: Counter[str] = Counter()
         def reviewer_finding_sort_key(value: str) -> tuple[int, int]:
             match = re.fullmatch(r"R(\d+)-F(\d{2,4})", value)
@@ -8525,7 +8585,13 @@ def main(argv: list[str] | None = None) -> int:
                     f"finding IDs {unknown}"
                 )
         missing_source_closure = sorted(
-            required_reviewer_finding_ids - set(source_id_counts),
+            required_reviewer_finding_ids
+            - set(source_id_counts)
+            - direct_rejected_finding_ids,
+            key=reviewer_finding_sort_key,
+        )
+        duplicate_path_closure = sorted(
+            set(source_id_counts) & direct_rejected_finding_ids,
             key=reviewer_finding_sort_key,
         )
         duplicate_source_closure = sorted(
@@ -8537,8 +8603,14 @@ def main(argv: list[str] | None = None) -> int:
         )
         if missing_source_closure:
             errors.append(
-                "91-revision-ledger.csv: actionable reviewer findings omitted from "
-                f"chair adjudication {missing_source_closure}"
+                "current reviewer findings omitted from Chair adjudication: each "
+                "S0-S3 finding must enter 91 or one direct Status=rejected decision; "
+                f"missing={missing_source_closure}"
+            )
+        if duplicate_path_closure:
+            errors.append(
+                "current reviewer findings cannot enter both 91 and a direct "
+                f"Status=rejected decision; repeated={duplicate_path_closure}"
             )
         if duplicate_source_closure:
             errors.append(
@@ -8588,24 +8660,6 @@ def main(argv: list[str] | None = None) -> int:
                         f"91-ai-actionable-ledger.csv:{finding_id}: current AI "
                         "finding must enter the chair ledger as open"
                     )
-        validate_chair_report(
-            root / "90-chair-synthesis.md",
-            expected_hash,
-            process,
-            bib_inventory,
-            bib_ledger,
-            citation_inventory,
-            citation_ledger,
-            academic_ledger,
-            set(current_reviewer_questions),
-            reviewer_count,
-            (
-                process.get("decision_regime_status")
-                if isinstance(process, dict) else None
-            ),
-            allowed_governing_sources,
-            errors,
-        )
         validate_identical_actor_access_receipts(
             (
                 root / "90-chair-synthesis.md",

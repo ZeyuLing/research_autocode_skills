@@ -15,6 +15,8 @@ All reviewers receive the same frozen **PDF-only reviewer-visible** evidence pac
 - the thesis source tree, `.bib`, build logs, auxiliary files, Git history, old commits, diffs, blame output, prior artifact versions, or source/provenance audits;
 - sibling paper repositories, unpublished drafts, internal configs/logs, TODOs, private data documentation, or author declarations.
 
+The same PDF-only boundary limits proposed remedies. Reviewers judge experimental credibility from the thesis's visible method, protocol, numbers, internal consistency, and claim scope. They do not turn the absence of code commits, environment locks, full commands, file/checkpoint hashes, member-level hashes, immutable manifests, controlled evidence packs, internal logs, or confidential raw data into findings or questions, except when a verified governing rule makes an item a formal submission component or the PDF explicitly makes an exact public-artifact claim that is central to the conclusion.
+
 Use separate output files and private scratch directories. If reviewers share a filesystem, give each reviewer exact input paths; it must not enumerate the parent round, neighboring rounds, repository root, or unrelated workspace paths. Every reviewer must include a fresh-context and input-receipt/access declaration covering the prompt hash, all received blocks, opened artifacts, and public endpoints. Access to any prohibited context or artifact invalidates the round and requires the recovery defined in `clean-room-orchestration.md`; relabeling it as author-side evidence does not cure the violation. Batch execution is acceptable; evidence leakage is not.
 
 Before freezing or exiting, every reviewer runs the exact role-scoped gate in `ledger-validation.md`: ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware gates; master's R3 uses the combined owner gate. The actor may correct only its own current report and assigned ledgers/renders before freeze. A failure attributable to the packet, process envelope, PDF, governing rules, staged validators, or another actor's artifact stops the actor and triggers Stage O's global retry; no reviewer may patch an upstream or peer artifact. A mechanical `PASS` is mandatory but never substitutes for the whole-thesis semantic and visual judgment.
@@ -146,7 +148,7 @@ Persona-weighted emphasis after the common review:
 - numerical consistency and provenance visible inside the thesis and its public citations;
 - exhaustive citation-claim review: every active in-text citation occurrence, every source in a citation cluster, and the exact proposition attached to it;
 - data construction, private/public source descriptions, splits, leakage, and licenses;
-- checkpoint/config/log traceability as disclosed in the PDF, without opening private artifacts;
+- internal consistency of the configurations, model-selection descriptions, and reported results that are actually disclosed in the PDF, without requiring or opening private artifacts;
 - citations, publication status, authorship/contribution statements, and internal alignment among the PDF's prose, tables, figures, appendices, and bibliography;
 - ethics, privacy, academic integrity, and reproducibility limitations.
 
@@ -158,6 +160,7 @@ Behavior:
 - produces `04-citation-claim-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records every inaccessible, partially supporting, context-only, or mismatched source use;
 - completes the authoritative `04` CSV first, records every auxiliary opened route with the closed endpoint marker, runs the staged owner materializer, inspects its exact Markdown/receipt projection, and only then runs the read-only R4 gate;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
+- never substitutes forensic artifact reconstruction for thesis-level reproducibility and never requests hidden hashes, logs, manifests, or replay packages as a default remedy;
 - labels inference and uncertainty explicitly.
 
 Cross-domain obligation:
@@ -170,7 +173,7 @@ Cross-domain obligation:
 Persona-weighted emphasis after the common review:
 
 - final rendered PDF, headings, contents, pages, figures, tables, equations, references, and typography;
-- exhaustive bibliography-integrity review of every entry rendered in the PDF: type, title, complete ordered authorship, year, venue, publication or acceptance status, volume/issue, page range or article number, DOI, arXiv identifier/version, URL/access date, ISBN/other persistent ID, existence, and retraction/withdrawal/correction/superseding status;
+- exhaustive bibliography-integrity review of every entry rendered in the PDF: type, title, complete ordered authorship, year, venue, publication or acceptance status, volume/issue, page range or article number, DOI, arXiv identifier/version, URL/access-date applicability under the binding style, ISBN/other persistent ID, existence, and retraction/withdrawal/correction/superseding status;
 - when an actual blind-review copy is supplied, a full-artifact identity-disclosure scan covering body text, captions, tables, data/project descriptions, publications, URLs, metadata, filenames, comments, and watermarks--not only the cover;
 - self-contained explanation for a broad computer-science evaluator;
 - formal Chinese academic writing and terminology;
@@ -232,7 +235,7 @@ The chair is not a sixth reviewer. Launch it as a new clean actor with no inheri
 - records fresh-context and input-receipt/access declarations and applies the contamination recovery in `clean-room-orchestration.md` if prohibited context or an artifact was used.
 - reports the standalone AI-style judgment separately and never converts it into an authorship or misconduct conclusion.
 
-If the chair needs evidence beyond the frozen PDF and permitted public citation sources, the blind-review round cannot resolve that question. Record it as `not verifiable from the submitted PDF`. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
+Before preserving a question that would need evidence beyond the frozen PDF and permitted public citation sources, the chair first decides whether that evidence is part of the thesis's verified submission obligation. If not, reject the source item as an out-of-scope artifact request; do not label it `not verifiable`, keep it open, or send it to Stage S. Use `not verifiable from the submitted PDF` only for an otherwise legitimate thesis question whose answer is required to judge a claim visible in the PDF. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
 
 Before freezing or exiting, the Chair runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS, repeating both after any Chair-source edit. Materialization preserves semantic decisions and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
 

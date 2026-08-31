@@ -1957,6 +1957,53 @@ class ValidateReviewBundleTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(needle, result.stdout)
 
+    def add_external_artifact_finding_and_chair_decision(
+        self, root: Path, *, status: str = "rejected", finding_id: str = "R1-F02"
+    ) -> None:
+        reviewer = root / "R1-comprehensive-review.md"
+        reviewer_text = reviewer.read_text(encoding="utf-8")
+        finding = (
+            f"### {finding_id} — external author-side artifact request\n"
+            "- Primary gate: G\n"
+            "- Secondary gates: E\n"
+            "- Scope: local\n"
+            "- Severity: S2\n"
+            "- S0 subtype: N/A\n"
+            "- Remedy: E\n"
+            "- Required for the current defense conclusion: no; Chair scope decision required\n"
+            "- Location: physical p.1, fixture section\n"
+            "- Observation: The PDF does not include an author-side forensic replay package.\n"
+            "- Why it matters: The reviewer incorrectly treats hidden artifacts as a thesis obligation.\n"
+            "- Evidence: The frozen PDF and governing rules contain no formal attachment requirement or exact public-artifact claim.\n"
+            "- Required action: Supply private source commits, environment locks, full commands, training logs, checkpoint and member hashes, an immutable manifest, a controlled replay package, and confidential raw data.\n"
+            "- Verification: Inspect the requested private package outside the submitted thesis.\n"
+            "- Confidence: high\n\n"
+        )
+        reviewer.write_text(
+            reviewer_text.replace(
+                "## Questions, not findings", finding + "## Questions, not findings", 1
+            ),
+            encoding="utf-8",
+        )
+
+        chair = root / "90-chair-synthesis.md"
+        chair_text = chair.read_text(encoding="utf-8")
+        decision_header = (
+            "| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |\n"
+            "|---|---|---|---|---|---|---|\n"
+        )
+        decision_row = (
+            f"| D01 | {finding_id} | external author-side artifact demand | "
+            "reviewer requests hidden artifacts | frozen PDF and governing rules "
+            "show no formal submission obligation or exact public-artifact claim | "
+            f"{status} | outside the thesis submission obligation; no thesis action |\n"
+        )
+        self.assertIn(decision_header, chair_text)
+        chair.write_text(
+            chair_text.replace(decision_header, decision_header + decision_row, 1),
+            encoding="utf-8",
+        )
+
     def test_complete_fixture_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -3879,7 +3926,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             text = text[:match.end()] + "\n" + duplicate + text[match.end():]
             report.write_text(text, encoding="utf-8")
             self.assert_fails(
-                root, "actionable reviewer findings omitted from chair adjudication"
+                root, "current reviewer findings omitted from Chair adjudication"
             )
 
     def test_chair_finding_ids_are_unique_and_evidence_status_is_mandatory(self) -> None:
@@ -3906,7 +3953,26 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "blank mandatory field EvidenceStatus")
 
-    def test_rejected_or_disputed_findings_require_explicit_chair_decisions(self) -> None:
+    def test_disputed_findings_require_explicit_chair_decisions(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _headers, rows = read_csv(root / "91-revision-ledger.csv")
+            rows[0]["EvidenceStatus"] = "disputed"
+            write_csv(
+                root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
+            )
+            for filename in ("91-revision-ledger.md", "90-chair-synthesis.md"):
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "| verified |", "| disputed |", 1
+                    ),
+                    encoding="utf-8",
+                )
+            self.assert_fails(root, "disagreements table omits chair dispositions ['C-F01']")
+
+    def test_rejected_is_not_a_valid_revision_ledger_evidence_status(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
@@ -3915,15 +3981,56 @@ class ValidateReviewBundleTests(unittest.TestCase):
             write_csv(
                 root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
             )
-            for filename in ("91-revision-ledger.md", "90-chair-synthesis.md"):
-                path = root / filename
-                path.write_text(
-                    path.read_text(encoding="utf-8").replace(
-                        "| verified |", "| rejected |", 1
-                    ),
-                    encoding="utf-8",
+            self.assert_fails(root, "invalid EvidenceStatus 'rejected'")
+
+    def test_out_of_scope_reviewer_finding_is_rejected_without_action_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.add_external_artifact_finding_and_chair_decision(root)
+            result = self.run_validator(root)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn(
+                "| D01 | R1-F02 | external author-side artifact demand |",
+                (root / "90-chair-synthesis.md").read_text(encoding="utf-8"),
+            )
+            for filename in (
+                "91-revision-ledger.csv",
+                "91-revision-ledger.md",
+                "92-new-evidence-or-experiments.csv",
+                "92-new-evidence-or-experiments.md",
+                "93-current-actionable-items.csv",
+                "93-user-facing-summary.md",
+            ):
+                self.assertNotIn(
+                    "R1-F02", (root / filename).read_text(encoding="utf-8"), filename
                 )
-            self.assert_fails(root, "disagreements table omits chair dispositions ['C-F01']")
+
+    def test_direct_reviewer_finding_rejection_is_a_strict_partition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.add_external_artifact_finding_and_chair_decision(
+                root, status="not verifiable"
+            )
+            self.assert_fails(root, "direct reviewer-finding sources require Status=rejected")
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            self.add_external_artifact_finding_and_chair_decision(root)
+            _headers, rows = read_csv(root / "91-revision-ledger.csv")
+            rows[0]["SourceReviewerFindingIDs"] = (
+                "R1-F01, R1-F02, R2-F01, R3-F01"
+            )
+            write_csv(
+                root / "91-revision-ledger.csv", ACADEMIC_LEDGER_COLUMNS, rows
+            )
+            self.assert_fails(
+                root,
+                "current reviewer findings cannot enter both 91 and a direct "
+                "Status=rejected decision",
+            )
 
     def test_summary_cannot_invent_optional_or_limitation_content(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

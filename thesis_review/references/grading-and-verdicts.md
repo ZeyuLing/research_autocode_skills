@@ -43,6 +43,7 @@ These are action categories, not quality adjectives. Do not relabel them as “e
 
 - `S4` never lowers a grade.
 - Local `S3` corrections may coexist with A only when they do not affect interpretation, traceability, compliance, or defense readiness. A defect that materially affects any of those four properties is not local `S3`; record an evidence-backed finding at least as `S2` (or higher when warranted), so that it maps unambiguously to B, C, or D.
+- In this rule, traceability means PDF-visible claim, protocol, result, and citation traceability. It does not mean forensic reconstruction of hidden code, commits, hashes, logs, manifests, private member lists, or exact replay artifacts. Their absence cannot create an `S2` or lower a grade unless they are verified formal submission components or are necessary to resolve an exact public-artifact claim made by the PDF.
 - Any unresolved `S2` prevents A until it is closed, but does not by itself require C.
 - Any confirmed `S1` or unresolved mandatory `N` remedy prevents A and B.
 - Classify every `S0` as `integrity/foundational` or `procedural`. A repairable anonymity, identity-disclosure, wrong-artifact, or submission-form failure is procedural unless evidence supports substantive misconduct; it requires C and corrected re-review under the default scheme, not an automatic D. A substantiated integrity/foundational `S0` requires D.

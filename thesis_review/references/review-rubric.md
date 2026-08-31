@@ -8,7 +8,7 @@ Every R-numbered reviewer applies the entire rubric to the complete thesis. Gate
 
 Each report must summarize its judgment of Gates A--I before the persona-weighted deep review. Every gate row needs an evidence anchor and a disposition such as `adequate`, `concern`, `unverifiable`, or justified `N/A`. The reviewer's persona labels the depth as `baseline`, `emphasized`, or `primary`; these depth labels are attention descriptors, not scoring weights or voting rights.
 
-In an independent blind-review round, every evidence anchor must be visible in the frozen PDF or in a public authoritative source opened to verify a citation already present in that PDF. Do not inspect the thesis source, `.bib`, Git history, sibling repositories, local papers, code, configs, logs, old rounds, or author-side records. A question that requires those materials is `not verifiable from the submitted PDF`, not a hidden defect.
+In an independent blind-review round, every evidence anchor must be visible in the frozen PDF or in a public authoritative source opened to verify a citation already present in that PDF. Do not inspect the thesis source, `.bib`, Git history, sibling repositories, local papers, code, configs, logs, old rounds, or author-side records. This boundary also governs remedies: the absence of hidden code, logs, hashes, manifests, command files, checkpoints, private member lists, or forensic replay packages is neither a finding nor a question unless a verified governing rule makes the material a formal submission component or the PDF explicitly makes an exact public-artifact claim whose identity decides a central conclusion. Otherwise omit the request and assess credibility from the PDF-visible protocol, internal consistency, and claim--evidence relation.
 
 Use `N/A` only when a criterion is genuinely inapplicable to the thesis, not because it falls outside the reviewer's primary expertise. Limited expertise may lower confidence and should be disclosed, but it does not remove the gate from the assessment. Requiring a disposition does not impose a finding quota: a reviewer may record an evidence-backed strength or no material concern. The final category follows `grading-and-verdicts.md` and reflects the whole thesis.
 
@@ -74,15 +74,15 @@ Evaluate practical problem definition, engineering or professional value, requir
 
 - Evidence conflicts in blind review are limited to contradictions visible within the frozen PDF or between a PDF citation claim and its public authoritative source. Comparisons against final papers, local supplements, formal table/figure sources, TODOs, debug notes, or other author-side artifacts belong to a separate non-review source audit.
 - Dataset origin, composition, licenses, private-data constraints, and construction contribution are described at a defensible granularity.
-- Official dataset splits are stated correctly; custom splits are reproducible.
+- Official dataset splits are stated correctly; custom split construction is described precisely enough in the thesis to understand and reimplement the evaluation protocol.
 - Training data exclude protected public test partitions where claimed.
-- Duplicate or near-duplicate leakage is investigated when the dataset construction or task makes it a credible risk. Do not require a generic overlap audit without a plausible pathway.
-- Do not demand member hashes or an immutable manifest merely because a dataset is aggregated. Require them only when a concrete inconsistency, plausible leakage path, or thesis claim makes member-level identity necessary to decide the finding.
+- Duplicate or near-duplicate leakage is investigated when the PDF's dataset construction, split description, or reported counts make it a credible risk. Do not infer a hidden leakage pathway or require a generic overlap audit from aggregation alone.
+- When the thesis makes an absolute no-duplicate claim, first check whether it defines the relevant scope and procedure clearly and whether its own counts and descriptions are consistent. Resolve a bounded ambiguity through natural PDF-visible clarification or claim narrowing; do not demand member hashes, immutable manifests, controlled access packages, or confidential member-level disclosure as the default remedy.
 - Training, validation, checkpoint selection, and test evaluation roles are unambiguous when the wording could imply test-guided selection.
 - Preprocessing, coordinate systems, skeleton mappings, frame rates, missing-data handling, and conversions are documented.
 - Baselines use comparable data, representations, metrics, and evaluation implementations, or differences are disclosed.
 - Retrained baselines are labeled and their configuration source is traceable.
-- Hardware, software, optimizer, learning rate, batch size, steps/epochs, model size, seeds, and inference settings are available at the level needed to interpret results.
+- Hardware, software, optimizer, learning rate, batch size, steps/epochs, model size, stochastic protocol where material, and inference settings are available at the level needed to interpret results.
 - Compute or simulation budget is reported when it controls fairness or reproducibility.
 
 ## Gate F: experiments and results
@@ -106,9 +106,10 @@ Evaluate practical problem definition, engineering or professional value, requir
 - Values repeated across the PDF's prose, tables, figures, captions, and appendices agree and retain protocol context.
 - A blind reviewer does not compare against local source papers or repositories. Whether a sibling paper update has been propagated is outside scope unless the PDF itself contains a visible contradiction or cites a public version for the exact disputed claim.
 - Configuration tables avoid columns dominated by `N/A`; heterogeneous modules may be described separately in prose.
-- Code, commands, configs, checkpoints, logs, and dependencies are cited when available and relevant.
+- The PDF describes the method, training, configuration, and evaluation choices at the level needed to interpret and reasonably reimplement the reported result. Exact code commits, environment locks, full commands, checkpoint/model-file hashes, internal logs, and table scripts are not default thesis requirements, and their absence is not a finding.
 - Private data or enterprise constraints are described honestly without demanding disclosure that violates confidentiality.
 - Missing implementation details are classified as writing/evidence retrieval before requesting a new run.
+- An epoch or checkpoint label is ordinary experimental description, not an “artifact exposure” defect. If the label is unnecessarily internal or confusing, the most it warrants is a natural local wording edit such as “the final trained model,” not an external-evidence demand.
 
 ## Gate H: writing and self-contained exposition
 
@@ -142,14 +143,15 @@ Evaluate practical problem definition, engineering or professional value, requir
 
 ## Finding test
 
-Before reporting an issue, answer all five:
+Before reporting an issue, answer all six:
 
 1. What exactly is visible or stated?
 2. Where is it?
 3. Which claim, rule, or reader task does it affect?
 4. What evidence supports the concern?
 5. What is the least costly sufficient remedy?
+6. Is that remedy part of the thesis or a verified formal submission obligation, rather than a request for hidden author-side proof?
 
-If any answer is missing, downgrade it to a question or omit it.
+If answers 1--5 are missing, downgrade the issue to an in-scope question or omit it. If answer 6 is no, omit it; do not preserve an out-of-scope artifact wishlist as `not verifiable`.
 
 For every experiment-scope statement, additionally ask whether the PDF states it directly or whether it is only inferred from formatting or omission. Formatting-only inferences about seeds, run counts, checkpoint selection, or training coverage must not become findings.

@@ -248,6 +248,8 @@ Explain the additional scrutiny performed because of this reviewer's expertise. 
 
 Every Gate A--I row, every finding block, and every nonempty question row contains at least one physical-page anchor within `1..physical_page_count`; new artifacts emit that anchor as `physical p.<n>`. A logical page, section, table, figure, or equation locator may follow but never replaces the physical anchor. Finding headings use continuous `Rn-F01...` IDs in report order, with no gap or duplicate. Nonempty question rows use continuous `Rn-Q01...` IDs in report order; the header-only canonical question table is the explicit no-question result.
 
+`Required action` and `Needed clarification/evidence` are constrained by the thesis submission obligation. They may request a PDF-visible edit, genuinely necessary new evidence whose result will be reported in the revised thesis, or a verified formal submission attachment. They must not request hidden code/commit identifiers, environment locks, full command files, checkpoint/model-file hashes, sample/member hashes, immutable manifests, controlled audit packages, internal logs, table scripts, or confidential raw data merely because such materials are absent. That absence is not preserved as a reviewer question. If a verified governing rule or an exact public-artifact claim creates an exception, name the rule or PDF claim and ask only for the least disclosure needed in the revised submission.
+
 The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
 
 ```markdown
@@ -283,6 +285,8 @@ The bibliography-owning reviewer (doctoral R5 or master's R3) must additionally 
 - Machine-readable master: 03-bibliography-audit-ledger.csv; duplicate/missing/extra reference IDs:
 ```
 
+In the long-form bibliography ledger, `Field=url` and `Field=access_date` describe fields rendered by the frozen thesis and are carried by `RenderedValue`/`CanonicalValue`. `EvidenceEndpoint` and `CheckedAt` separately record the authoritative source and date used by the auditor. A metadata URL does not become an accessed `public_endpoints` receipt merely by appearing in a rendered or canonical bibliography value.
+
 The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
 
 ```markdown
@@ -302,6 +306,8 @@ The citation-claim-owning reviewer (doctoral R4 or master's R3) must additionall
 Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals and suspect/resolved/unresolved counts reconcile to `02`, while `Actionable layout findings` equals the distinct current-owner finding IDs referenced by exact final `02` dispositions; unrelated Gate-I findings do not inflate it. Bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
 
 Questions are not counted as defects until evidence supports them. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.
+
+A question still has to be within the thesis-review obligation. A reviewer may not use the question table to retain an external-artifact wishlist that would be invalid as a finding.
 
 Before freezing an R-numbered report, verify that the decision regime, category, recommendation, severity profile, and required revision path are consistent with `grading-and-verdicts.md`.
 
@@ -428,6 +434,8 @@ These rows populate `91-ai-actionable-ledger.csv` and never receive academic sev
 | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Owner | Minimum required action | Verification |
 |---|---|---|---|---|---|---|---|---|---|---|
 
+Before creating a `C-Fxx` row, the Chair applies the submission-obligation gate. A reviewer finding that merely asks for hidden author-side material not required in the thesis or a verified formal attachment is cited directly by its `Rn-Fxx` ID in a `rejected` decision-table row and produces no Chair finding, revision-ledger row, `92` evidence item, or Stage-S actionable/question projection. `not verifiable from submitted PDF` is reserved for a surviving in-scope thesis question, not for uncertainty about whether an out-of-scope private artifact exists.
+
 ## Mandatory citation cross-ledger consistency gate
 | Rendered reference ID | Displayed label | Affected Pair IDs | Citation-ledger identity/source projection | Bibliography-ledger canonical identity projection | Version/record agreement (`agree` / `disagree` / `not verifiable`) | Conflict class (`none` / `local` / `substantive`) | Chair finding ID(s) | Resolution (`closed` / `open`) |
 |---|---|---|---|---|---|---|---|---|
@@ -449,7 +457,7 @@ The agreement value is derived from the frozen ledgers: `disagree` when any proj
 | Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |
 |---|---|---|---|---|---|---|
 
-Keep this exact table even when it has no rows. Use continuous `D01...` IDs. `Source item IDs` is a canonical list containing current `Rn-Qxx` and/or `C-Fxx` IDs only. Every reviewer question and every `C-Fxx` whose `EvidenceStatus` is `rejected`, `not verifiable from submitted PDF`, or `disputed` appears exactly once. `Status` is exactly `resolved`, `unresolved`, `not verifiable`, `rejected`, or `disputed`; the row preserves the positions, checked evidence, and chair decision. Stage S projects the `unresolved`, `not verifiable`, and `disputed` rows exactly and in order.
+Keep this exact table even when it has no rows. Use continuous `D01...` IDs. `Source item IDs` is a canonical list containing current `Rn-Qxx`, current `C-Fxx`, and/or current `Rn-Fxx` IDs. A direct `Rn-Fxx` token is permitted only in a `Status=rejected` row, only for a finding rejected by the submission-obligation gate, and may not be mixed with question or Chair-finding IDs in that row. Every reviewer question, every `C-Fxx` whose `EvidenceStatus` is `not verifiable from submitted PDF` or `disputed`, and every directly rejected reviewer finding appears exactly once. `Status` is exactly `resolved`, `unresolved`, `not verifiable`, `rejected`, or `disputed`; the row preserves the positions, checked evidence, and chair decision. A direct `Rn-Fxx` `rejected` row is the terminal disposition for an out-of-scope external-artifact request and never enters `91`, `92`, or Stage S. Stage S projects the `unresolved`, `not verifiable`, and `disputed` rows exactly and in order.
 
 ## Thesis-level narrative and chapter logic
 ...
@@ -473,12 +481,14 @@ Prioritize by risk, not by chapter order.
 ```markdown
 | Ledger ID | Priority | Chair finding ID | Source reviewer finding IDs | Severity | S0 subtype | Remedy | Exact PDF anchor | Direct observation | Evidence status | Minimum edit/evidence | Dependency | Owner | Status | Verification |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| L01 | P0 | C-F01 | Rn-Fxx | S0/S1 | procedural / integrity/foundational / N/A | W/E/N/P | ... | ... | verified / partially verified / not verifiable from submitted PDF / rejected / deduplicated / disputed | ... | ... | ... | open | ... |
+| L01 | P0 | C-F01 | Rn-Fxx | S0/S1 | procedural / integrity/foundational / N/A | W/E/N/P | ... | ... | verified / partially verified / not verifiable from submitted PDF / deduplicated / disputed | ... | ... | ... | open | ... |
 | L02 | P1 | C-F02 | Rn-Fxx | S2 | N/A | W/E/N/P | ... | ... | verified | ... | ... | ... | open | ... |
 | L03 | P2 | C-F03 | Rn-Fxx | S3 | N/A | W/E/N/P | ... | ... | verified | ... | ... | ... | open | ... |
 ```
 
-Every current reviewer `S0`--`S3` finding enters chair adjudication exactly once: either as its own row or as one member of a supported deduplicated row. `Source reviewer finding IDs` is a duplicate-free canonical comma-space list in reviewer/finding-number order; no current actionable finding may disappear, recur in two rows, or point to another round. `Ledger ID` and `Chair finding ID` are unique continuous `L01...` and `C-F01...` sequences. Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
+Every current reviewer `S0`--`S3` finding enters chair adjudication exactly once: either as its own row or as one member of a supported deduplicated row in `91`, or as a direct `Rn-Fxx` `Status=rejected` row in the Chair decision table when the submission-obligation gate rejects the request. These two paths are mutually exclusive. `Source reviewer finding IDs` is a duplicate-free canonical comma-space list in reviewer/finding-number order; no current actionable finding may disappear, recur in two paths, or point to another round. `Ledger ID` and `Chair finding ID` are unique continuous `L01...` and `C-F01...` sequences. Every open required `S0`--`S3` chair finding appears exactly once. Optional `S4` suggestions and non-finding questions do not enter this required ledger; put them in separately labeled sections of the chair report.
+
+An upstream reviewer finding rejected by the submission-obligation gate is adjudicated by its original `Rn-Fxx` ID in the Chair decision table but is not an actionable Chair finding and therefore never enters `91`. This is rejection of an invalid review demand, not disappearance of a supported thesis defect.
 
 When one action depends on another ledger row, `Dependency` names the existing
 `Lnn` foreign key(s) directly. Do not use the current row's own ID, repeat an
@@ -513,6 +523,8 @@ Always split the list:
 ```
 
 The W/E/P table is the exact ledger-order projection of every open current `91-revision-ledger.csv` row whose remedy is W, E, or P. Each open current row whose remedy is N has exactly one `92` CSV row and Markdown row; no other `91` row may enter the CSV. `EvidenceItemID` is continuous `N01...`, and `LedgerID`, `ChairFindingID`, and `Remedy=N` exactly match the linked `91` row. An empty N CSV/table is valid and often preferable when no open N remedy exists.
+
+Within the no-new-experiment table, `E` means existing evidence whose necessary content will be incorporated into the revised PDF or a verified formal submission attachment. Evidence that would remain only in an author's private repository, log, hash list, or audit package is not an `E` thesis remedy. Use `W` for a sufficient clarification or claim narrowing; omit an out-of-scope request entirely.
 
 ## Clean user-facing summary
 
