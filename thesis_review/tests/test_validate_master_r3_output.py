@@ -4,6 +4,7 @@ import csv
 import hashlib
 import importlib.util
 import subprocess
+import shutil
 import sys
 import tempfile
 import types
@@ -46,6 +47,7 @@ PEER_AND_DOWNSTREAM_FILES = {
     "R1-comprehensive-review.md",
     "R2-comprehensive-review.md",
     "05-ai-style-assessment.md",
+    "06-semantic-acceptance-gate.json",
     "90-chair-synthesis.md",
     "91-revision-ledger.md",
     "91-revision-ledger.csv",
@@ -121,6 +123,9 @@ class ValidateMasterR3OutputTests(unittest.TestCase):
             harness.build_bundle(root)
         for filename in PEER_AND_DOWNSTREAM_FILES:
             (root / filename).unlink(missing_ok=True)
+        shutil.rmtree(
+            root / fixture_module.VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+        )
 
     def validate(self, root: Path) -> list[str]:
         full_canonical = canonical_with_master_r3(FULL_VALIDATOR_MODULE)
@@ -153,6 +158,30 @@ class ValidateMasterR3OutputTests(unittest.TestCase):
             self.assertEqual(before, after)
             for filename in PEER_AND_DOWNSTREAM_FILES:
                 self.assertFalse((root / filename).exists())
+
+    def test_packet_gate_requires_exact_non_citation_role_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            path = root / "00-citation-candidate-ledger.csv"
+            headers, rows = read_rows(path)
+            non_citation = next(
+                row for row in rows
+                if row["Classification"].strip().casefold() == "non-citation"
+            )
+            non_citation["ClassificationEvidence"] = (
+                "visible numeric array with contextual non-source semantics"
+            )
+            write_rows(path, headers, rows)
+            errors = self.validate(root)
+            self.assertTrue(
+                any(
+                    "lacks a canonical predicate or the exact derived role token"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
 
     def test_scoped_bibliography_requires_attempted_endpoint(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -195,6 +224,62 @@ class ValidateMasterR3OutputTests(unittest.TestCase):
                     for error in errors
                 ),
                 errors,
+            )
+
+    def test_master_r3_rejects_pdf_inconsistent_bibliography_range(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            path = root / "02-page-layout-ledger.csv"
+            headers, rows = read_rows(path)
+            rows[-1]["DominantContent"] = "bibliography entries [1]-[2]"
+            write_rows(path, headers, rows)
+            markdown = root / "02-page-layout-ledger.md"
+            markdown.write_text(
+                markdown.read_text(encoding="utf-8").replace(
+                    "bibliography entries [1]-[1]",
+                    "bibliography entries [1]-[2]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            errors = self.validate(root)
+            self.assertTrue(
+                any(
+                    "bibliography DominantContent new-label range (1, 2) != "
+                    "frozen-PDF visible line-start range (1, 1)" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_master_r3_rejects_bibliography_laundering_and_canonical_wrap(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            primary = (
+                "https://openaccess.thecvf.com/content/CVPR2026/html/X"
+                "#u_Fixture_CVPR_2026_paper.html"
+            )
+            auxiliary = (
+                "https://openaccess.thecvf.com/content/CVPR2026/html/"
+                "Xu_Fixture_CVPR_2026_paper.html"
+            )
+            path = root / "03-bibliography-audit-ledger.csv"
+            headers, rows = read_rows(path)
+            rows[0]["EvidenceEndpoint"] = primary
+            rows[0]["EvidenceNote"] = (
+                f"accessed endpoint: {auxiliary}; fixture official record checked"
+            )
+            venue = next(row for row in rows if row["Field"] == "venue")
+            venue["CanonicalValue"] = "Fixture Pro- ceedings"
+            write_rows(path, headers, rows)
+            errors = self.validate(root)
+            self.assertTrue(any("via fragment-to-path" in error for error in errors), errors)
+            self.assertTrue(
+                any("PDF line-wrap artifact" in error for error in errors), errors
             )
 
     def test_scope_does_not_enumerate_root_or_probe_peer_outputs(self) -> None:
@@ -385,6 +470,26 @@ class ValidateMasterR3OutputTests(unittest.TestCase):
                     for error in errors
                 ),
                 errors,
+            )
+
+    def test_master_r3_rejects_same_window_non_target_proposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_master_r3_only_fixture(root)
+            path = root / "04-citation-claim-audit-ledger.csv"
+            headers, rows = read_rows(path)
+            proposition = "quantization levels are [3, 8]"
+            rows[0]["ExactAttachedProposition"] = proposition
+            rows[0]["DispositionEvidence"] = (
+                FULL_VALIDATOR_MODULE.citation_occurrence_binding_marker(
+                    rows[0]["PairID"], proposition
+                )
+                + "; the opened source reports this quantization-level claim"
+            )
+            write_rows(path, headers, rows)
+            errors = self.validate(root)
+            self.assertTrue(
+                any("CIT-PROP-NOT-ANCHORED" in error for error in errors), errors
             )
 
 

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import importlib.util
 import json
 import math
 import re
@@ -24,7 +25,7 @@ import zlib
 from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any, Iterable, NamedTuple
 from urllib.parse import parse_qsl, unquote, urlsplit, urlunsplit
 
 
@@ -86,6 +87,7 @@ CONTENT_ENDPOINT_REQUIRED_QUERY_KEYS = {
     },
 }
 KNOWN_TRUNCATED_CONTENT_HOSTS = {"proceedings.mlr"}
+CVF_OPEN_ACCESS_HOST = "openaccess.thecvf.com"
 
 
 def ordered_unique(values: Iterable[str]) -> list[str]:
@@ -217,6 +219,16 @@ def validate_bibliography_endpoint_records(
                     f"{filename}:{line}: auxiliary accessed endpoint {endpoint!r} "
                     f"{endpoint_error}"
                 )
+        primary = str(row.get("EvidenceEndpoint", "")).strip()
+        if primary:
+            validate_primary_and_auxiliary_endpoints(
+                primary,
+                marked,
+                filename,
+                line,
+                "EvidenceEndpoint",
+                errors,
+            )
 
 
 def complete_content_endpoint_error(value: str) -> str | None:
@@ -251,6 +263,14 @@ def complete_content_endpoint_error(value: str) -> str | None:
         return "does not contain a source-specific path or query identity"
     if decoded_path.endswith("_"):
         return "ends with '_' and appears truncated"
+    if (
+        (hostname == CVF_OPEN_ACCESS_HOST
+         or hostname.endswith("." + CVF_OPEN_ACCESS_HOST))
+        and "/html/" in decoded_path.casefold()
+        and decoded_path.casefold().split("/html/", 1)[1]
+        and not decoded_path.casefold().endswith(".html")
+    ):
+        return "uses an incomplete CVF /html/ work path that does not end in .html"
 
     query = dict(parse_qsl(parts.query, keep_blank_values=True))
     valid_required_query_route = False
@@ -286,35 +306,87 @@ def complete_content_endpoint_error(value: str) -> str | None:
     return None
 
 
-def endpoint_is_strict_completion(primary: str, auxiliary: str) -> bool:
-    """Whether an auxiliary URL completes a visibly truncated primary route."""
+def endpoint_completion_relation(primary: str, auxiliary: str) -> str | None:
+    """Name a strong primary-to-auxiliary endpoint-completion relation.
+
+    The comparison is deliberately route-shaped rather than network-shaped.
+    It catches only cases where the auxiliary supplies bytes that mechanically
+    complete the *same* host/path identity: a fragment or query moved into the
+    path, a visibly truncated final path segment, or a truncated query value.
+    Ordinary redirects, mirrors, presentation fragments, and child resources
+    are not completions.
+    """
 
     try:
         left = urlsplit(primary.strip())
         right = urlsplit(auxiliary.strip())
+        left_port = left.port
+        right_port = right.port
     except ValueError:
-        return False
+        return None
     left_host = (left.hostname or "").casefold().rstrip(".")
     right_host = (right.hostname or "").casefold().rstrip(".")
-    if not left_host or left_host != right_host:
-        return False
+    if (
+        not left_host
+        or left_host != right_host
+        or left.scheme.casefold() != right.scheme.casefold()
+        or left_port != right_port
+    ):
+        return None
     # A complete DOI or arXiv identity is not a truncated primary merely because
     # an auxiliary adds a version, fragment, or presentation route.
     if normalized_doi_tokens(primary) or normalized_arxiv_ids(primary):
-        return False
+        return None
     left_path = unquote(left.path or "").rstrip("/")
     right_path = unquote(right.path or "").rstrip("/")
-    path_suffix = right_path[len(left_path):] if right_path.casefold().startswith(left_path.casefold()) else ""
-    path_completion = (
-        bool(left_path)
-        and right_path.casefold().startswith(left_path.casefold())
-        and len(right_path) > len(left_path)
-        and not path_suffix.startswith("/")
-        and left_path.endswith("_")
+    left_query_pairs = parse_qsl(left.query, keep_blank_values=True)
+    right_query_pairs = parse_qsl(right.query, keep_blank_values=True)
+    if (
+        left.fragment
+        and not right.fragment
+        and left_query_pairs == right_query_pairs
+        and unquote((left.path or "") + left.fragment).rstrip("/") == right_path
+    ):
+        return "fragment-to-path"
+
+    if left.query and not right.query and not right.fragment:
+        query_suffixes = [unquote(left.query)]
+        for key, value in left_query_pairs:
+            query_suffixes.append(unquote(value if value else key))
+        if any(
+            suffix and (left_path + suffix).rstrip("/") == right_path
+            for suffix in query_suffixes
+        ):
+            return "query-to-path"
+
+    path_suffix = (
+        right_path[len(left_path):]
+        if right_path.startswith(left_path)
+        else ""
     )
+    final_segment = left_path.rsplit("/", 1)[-1]
+    strong_truncation_signal = (
+        len(final_segment) <= 2
+        or left_path.endswith(("_", "-"))
+        or (
+            (left_host == CVF_OPEN_ACCESS_HOST
+             or left_host.endswith("." + CVF_OPEN_ACCESS_HOST))
+            and "/html/" in left_path.casefold()
+            and not left_path.casefold().endswith(".html")
+        )
+        or complete_content_endpoint_error(primary) is not None
+    )
+    if (
+        left_path
+        and path_suffix
+        and not path_suffix.startswith("/")
+        and not left.query
+        and strong_truncation_signal
+    ):
+        return "truncated-path-prefix"
+
     left_query = dict(parse_qsl(left.query, keep_blank_values=True))
     right_query = dict(parse_qsl(right.query, keep_blank_values=True))
-    query_completion = False
     if left_path.casefold() == right_path.casefold() and left_query:
         for key, value in left_query.items():
             completed = right_query.get(key, "")
@@ -323,9 +395,36 @@ def endpoint_is_strict_completion(primary: str, auxiliary: str) -> bool:
                 and len(completed) > len(value)
                 and (len(value) < 6 or value.endswith("_"))
             ):
-                query_completion = True
-                break
-    return path_completion or query_completion
+                return "truncated-query-value"
+    return None
+
+
+def endpoint_is_strict_completion(primary: str, auxiliary: str) -> bool:
+    """Backward-compatible boolean form of :func:`endpoint_completion_relation`."""
+
+    return endpoint_completion_relation(primary, auxiliary) is not None
+
+
+def validate_primary_and_auxiliary_endpoints(
+    primary: str,
+    auxiliaries: Iterable[str],
+    filename: str,
+    line: int,
+    primary_label: str,
+    errors: list[str],
+) -> None:
+    """Reject an auxiliary route that supplies a missing primary identity."""
+
+    seen: set[tuple[str, str]] = set()
+    for auxiliary in auxiliaries:
+        relation = endpoint_completion_relation(primary, auxiliary)
+        if relation is None or (auxiliary, relation) in seen:
+            continue
+        seen.add((auxiliary, relation))
+        errors.append(
+            f"{filename}:{line}: truncated primary laundered by auxiliary "
+            f"accessed endpoint ({primary_label}) via {relation}: {auxiliary!r}"
+        )
 
 
 def validate_citation_endpoint_records(
@@ -377,10 +476,14 @@ def validate_citation_endpoint_records(
                     f"{filename}:{line}: auxiliary accessed endpoint {endpoint!r} "
                     f"{auxiliary_error}"
                 )
-        if content and any(endpoint_is_strict_completion(content, item) for item in marked):
-            errors.append(
-                f"{filename}:{line}: truncated primary laundered by auxiliary "
-                "accessed endpoint completion"
+        if content:
+            validate_primary_and_auxiliary_endpoints(
+                content,
+                marked,
+                filename,
+                line,
+                "ContentSourceOpened",
+                errors,
             )
 
 
@@ -503,6 +606,103 @@ def normalized_rendered_urls(value: str) -> set[str]:
             )
         )
     return identities
+
+
+def _complete_fragmentless_url(value: str) -> str | None:
+    """Return one normalized complete URL resource identity, without fragment."""
+
+    raw = (value or "").strip().rstrip(".,;:")
+    if not raw or complete_content_endpoint_error(raw) is not None:
+        return None
+    identities = normalized_rendered_urls(raw)
+    return next(iter(identities)) if len(identities) == 1 else None
+
+
+def _visible_complete_url_candidates(
+    visible_text: str, candidates: Iterable[str]
+) -> set[str]:
+    """Recover complete candidate URLs whose exact glyphs span PDF whitespace."""
+
+    compact = re.sub(r"\s+", "", (visible_text or "").replace("\u00ad", ""))
+    recovered: set[str] = set()
+    for candidate in candidates:
+        raw = (candidate or "").strip().rstrip(".,;:")
+        identity = _complete_fragmentless_url(raw)
+        if identity is None:
+            continue
+        try:
+            parts = urlsplit(raw)
+        except ValueError:
+            continue
+        resource = urlunsplit(
+            (parts.scheme, parts.netloc, parts.path, parts.query, "")
+        )
+        if raw in compact or resource in compact or identity in compact:
+            recovered.add(identity)
+    return recovered
+
+
+def bibliography_url_recovery_candidates(
+    bibliography_ledger: Iterable[dict[str, Any]],
+) -> dict[str, tuple[str, ...]]:
+    """Collect route candidates only; visibility remains a PDF-derived test."""
+
+    candidates: dict[str, list[str]] = defaultdict(list)
+    for row in bibliography_ledger:
+        reference_id = str(row.get("ReferenceID", ""))
+        values: list[str] = []
+        if str(row.get("Field", "")) == "url":
+            values.extend(
+                match.group(0) for match in PUBLIC_URL_RE.finditer(
+                    str(row.get("CanonicalValue", ""))
+                )
+            )
+        endpoint = str(row.get("EvidenceEndpoint", "")).strip()
+        if endpoint:
+            values.append(endpoint)
+        note = str(row.get("EvidenceNote", ""))
+        values.extend(
+            match.group(1) for match in ACCESS_ENDPOINT_MARKER_RE.finditer(note)
+        )
+        candidates[reference_id].extend(values)
+    return {
+        reference_id: tuple(ordered_unique(values))
+        for reference_id, values in candidates.items()
+    }
+
+
+def recover_rendered_bibliography_urls(
+    entry_fact: BibliographyEntryFact | None,
+    corroborating_candidates: Iterable[str],
+) -> set[str]:
+    """Recover complete rendered URLs from furniture-clean raw page segments."""
+
+    if entry_fact is None:
+        return set()
+    visible = "\n".join(segment for _page, segment in entry_fact.raw_page_segments)
+    recovered = _visible_complete_url_candidates(visible, corroborating_candidates)
+    for url in normalized_rendered_urls(visible):
+        identity = _complete_fragmentless_url(url)
+        if identity is not None:
+            recovered.add(identity)
+    return recovered
+
+
+def recovered_bibliography_urls_by_reference(
+    bibliography_ledger: Iterable[dict[str, Any]],
+    rendered_run: RenderedBibliographyRun | None,
+) -> dict[str, set[str]]:
+    """Join ledger route candidates to independently extracted entry segments."""
+
+    if rendered_run is None:
+        return {}
+    candidates = bibliography_url_recovery_candidates(bibliography_ledger)
+    return {
+        reference_id: recover_rendered_bibliography_urls(
+            entry_fact, candidates.get(reference_id, ())
+        )
+        for reference_id, entry_fact in rendered_run.entry_facts.items()
+    }
 
 
 def endpoint_resource_identity(
@@ -687,6 +887,7 @@ def validate_bibliography_source_identity(
     bibliography_inventory_by_id: dict[str, dict[str, Any]],
     filename: str,
     errors: list[str],
+    rendered_run: RenderedBibliographyRun | None = None,
 ) -> None:
     """Bind every bibliography evidence route to the complete rendered work.
 
@@ -703,6 +904,7 @@ def validate_bibliography_source_identity(
     """
 
     rows = list(bibliography_ledger)
+    recovered_urls = recovered_bibliography_urls_by_reference(rows, rendered_run)
     rows_by_reference: dict[str, dict[str, dict[str, Any]]] = defaultdict(dict)
     for row in rows:
         rows_by_reference[str(row.get("ReferenceID", ""))][
@@ -716,9 +918,17 @@ def validate_bibliography_source_identity(
         rendered = str(inventory_row.get("RenderedEntry", ""))
         rendered_dois = rendered_doi_tokens(rendered)
         rendered_arxiv = rendered_arxiv_ids(rendered)
-        rendered_urls = identity_compatible_rendered_urls(
-            rendered, rendered_dois, rendered_arxiv
-        )
+        # A normalized inventory entry can stop a URL at a page boundary and
+        # accidentally leave the visible prefix looking like a second official
+        # route.  Once raw PDF entry segments are available, their
+        # furniture-clean recovered set is authoritative: never union the old
+        # flattened-prefix parse back into the governing URL identities.
+        if reference_id in recovered_urls:
+            rendered_urls = set(recovered_urls[reference_id])
+        else:
+            rendered_urls = identity_compatible_rendered_urls(
+                rendered, rendered_dois, rendered_arxiv
+            )
         field_rows = rows_by_reference.get(reference_id, {})
 
         def usable_canonical(field: str) -> str:
@@ -995,6 +1205,57 @@ def normalized_bibliography_membership_text(value: str) -> str:
 
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     return re.sub(r"[^\w\u3400-\u9fff]+", "", normalized, flags=re.UNICODE)
+
+
+BIB_CANONICAL_PROSE_FIELDS = {
+    "title", "ordered_authors", "venue", "publication_status",
+}
+BIB_PROSE_LINE_WRAP_RE = re.compile(r"(?<=[A-Za-z])-(?=[ \t\r\n]+[A-Za-z])")
+BIB_PROSE_LINE_WRAP_GAP_RE = re.compile(
+    r"(?P<left>[A-Za-z])-(?P<space>[ \t\r\n]+)(?P<right>[A-Za-z])"
+)
+
+
+def canonical_bibliography_prose_shape_error(
+    field: str, value: str
+) -> str | None:
+    """Reject PDF line-wrap hyphenation copied into authoritative metadata."""
+
+    if field in BIB_CANONICAL_PROSE_FIELDS and BIB_PROSE_LINE_WRAP_RE.search(
+        value or ""
+    ):
+        return (
+            "contains an ASCII letter-hyphen-whitespace-letter PDF line-wrap "
+            "artifact"
+        )
+    return None
+
+
+def rendered_line_wrap_variants(value: str, max_gaps: int = 6) -> set[str]:
+    """Return conservative dehyphenation variants for one rendered scalar.
+
+    Each extraction gap may represent either a wrapped unhyphenated word
+    (``Con- ference`` -> ``Conference``) or a wrapped true compound
+    (``Spatio- Temporal`` -> ``Spatio-Temporal``).  The authoritative canonical
+    scalar is never changed.  The small gap cap prevents combinatorial work on
+    an entry-sized value and leaves such malformed input to the ordinary exact
+    equivalence failure.
+    """
+
+    source = value or ""
+    matches = list(BIB_PROSE_LINE_WRAP_GAP_RE.finditer(source))
+    if not matches or len(matches) > max_gaps:
+        return {source}
+    variants = {source}
+    for match in reversed(matches):
+        start = match.start() + 1
+        end = match.end() - 1
+        expanded: set[str] = set()
+        for candidate in variants:
+            expanded.add(candidate[:start] + candidate[end:])
+            expanded.add(candidate[:start] + "-" + candidate[end:])
+        variants = expanded
+    return variants
 
 
 BIB_NAME_TOKEN_RE = re.compile(
@@ -1523,6 +1784,7 @@ def validate_bibliography_field_semantics(
     bibliography_inventory_by_id: dict[str, dict[str, Any]],
     filename: str,
     errors: list[str],
+    rendered_run: RenderedBibliographyRun | None = None,
 ) -> None:
     """Reject field ledgers that merely duplicate an entry-level citation.
 
@@ -1535,6 +1797,7 @@ def validate_bibliography_field_semantics(
     """
 
     rows = list(bibliography_ledger)
+    recovered_urls = recovered_bibliography_urls_by_reference(rows, rendered_run)
     canonical_signatures: dict[str, dict[str, list[str]]] = defaultdict(
         lambda: defaultdict(list)
     )
@@ -1554,6 +1817,15 @@ def validate_bibliography_field_semantics(
         canonical_absent = bibliography_value_is_absent(canonical_value, field)
         inventory_row = bibliography_inventory_by_id.get(reference_id)
         rendered_entry = str((inventory_row or {}).get("RenderedEntry", ""))
+        recovered_entry_urls = recovered_urls.get(reference_id, set())
+        canonical_shape_error = canonical_bibliography_prose_shape_error(
+            field, canonical_value
+        )
+        if canonical_shape_error is not None:
+            errors.append(
+                f"{location}: CanonicalValue for {field!r} "
+                f"{canonical_shape_error}"
+            )
         if verdict == "legitimate n/a":
             if field not in BIB_LEGITIMATE_NA_FIELDS:
                 errors.append(
@@ -1565,7 +1837,10 @@ def validate_bibliography_field_semantics(
                     f"{location}: legitimate N/A requires field-specific absent "
                     "values in both RenderedValue and CanonicalValue"
                 )
-            if bibliography_rendered_entry_exposes_field(field, rendered_entry):
+            if (
+                bibliography_rendered_entry_exposes_field(field, rendered_entry)
+                or (field == "url" and bool(recovered_entry_urls))
+            ):
                 errors.append(
                     f"{location}: legitimate N/A contradicts the frozen "
                     f"RenderedEntry, which visibly exposes {field!r}"
@@ -1576,6 +1851,25 @@ def validate_bibliography_field_semantics(
                 f"{location}: an absent field value must use legitimate N/A or "
                 "an evidence-bound mismatch/unverifiable verdict, not exact"
             )
+
+        if field == "url" and recovered_entry_urls:
+            declared_rendered_urls = normalized_rendered_urls(rendered_value)
+            declared_rendered_urls.update(_visible_complete_url_candidates(
+                rendered_value, recovered_entry_urls
+            ))
+            if rendered_absent:
+                errors.append(
+                    f"{location}: RenderedValue claims the URL is absent, but "
+                    "the furniture-clean cross-page RenderedEntry visibly "
+                    f"contains {sorted(recovered_entry_urls)}"
+                )
+            elif declared_rendered_urls != recovered_entry_urls:
+                errors.append(
+                    f"{location}: RenderedValue URL set "
+                    f"{sorted(declared_rendered_urls)} != furniture-clean "
+                    f"cross-page RenderedEntry URL set "
+                    f"{sorted(recovered_entry_urls)}"
+                )
 
         full_entry = normalized_metadata_cell(
             rendered_entry
@@ -1594,6 +1888,16 @@ def validate_bibliography_field_semantics(
             if (
                 len(rendered_membership) >= 2
                 and rendered_membership not in entry_membership
+                and not (
+                    field == "url"
+                    and bool(recovered_entry_urls)
+                    and (
+                        normalized_rendered_urls(rendered_value)
+                        | _visible_complete_url_candidates(
+                            rendered_value, recovered_entry_urls
+                        )
+                    ) == recovered_entry_urls
+                )
             ):
                 errors.append(
                     f"{location}: RenderedValue for {field!r} is not recoverable "
@@ -1675,23 +1979,32 @@ def validate_bibliography_field_semantics(
             )
 
         if verdict == "exact" and field in BIB_EXACT_EQUIVALENCE_FIELDS:
+            rendered_variants = (
+                rendered_line_wrap_variants(rendered_value)
+                if field in BIB_CANONICAL_PROSE_FIELDS
+                else {rendered_value}
+            )
             if field == "ordered_authors":
-                equivalent = bibliography_authors_equivalent(
-                    rendered_value, canonical_value
+                equivalent = any(
+                    bibliography_authors_equivalent(variant, canonical_value)
+                    for variant in rendered_variants
                 )
             elif field == "venue":
-                equivalent = bibliography_venues_equivalent(
-                    rendered_value, canonical_value
+                equivalent = any(
+                    bibliography_venues_equivalent(variant, canonical_value)
+                    for variant in rendered_variants
                 )
             elif field == "publication_status":
-                equivalent = (
-                    bibliography_publication_status_class(rendered_value)
+                equivalent = any(
+                    bibliography_publication_status_class(variant)
                     == bibliography_publication_status_class(canonical_value)
+                    for variant in rendered_variants
                 )
             else:
-                equivalent = (
-                    normalized_bibliography_exact_value(field, rendered_value)
+                equivalent = any(
+                    normalized_bibliography_exact_value(field, variant)
                     == normalized_bibliography_exact_value(field, canonical_value)
+                    for variant in rendered_variants
                 )
             if not equivalent:
                 errors.append(
@@ -2261,8 +2574,56 @@ SUBSTANTIVE_CITATION_SUPPORT_VALUES = {
     "direct", "partial", "context-only", "mismatch",
 }
 CITATION_TEMPLATE_MIN_UNITS = 12
-
-
+CITATION_PROPOSITION_SOFT_MAX_NORMALIZED_CHARS = 200
+CITATION_PROPOSITION_MAX_NORMALIZED_CHARS = 300
+CITATION_TEMPLATE_WORD_NGRAM = 10
+CITATION_TEMPLATE_CJK_NGRAM = 24
+CITATION_TEMPLATE_MIN_BODY_SHARE = 0.20
+CITATION_LOCATOR_DOMINANCE_MIN_ROWS = 24
+CITATION_LOCATOR_DOMINANCE_MIN_REFERENCES = 12
+CITATION_LOCATOR_DOMINANCE_MIN_PROPOSITIONS = 18
+CITATION_LOCATOR_DOMINANCE_RATIO = 0.85
+CITATION_COATTACHED_SEPARATOR_MAX_CHARS = 24
+CITATION_COATTACHED_SEPARATOR_RE = re.compile(
+    r"(?i)(?:(?:and|or)|[\u548c\u53ca\u4e0e]|[ \t,\uff0c\u3001:&/])*"
+)
+CITATION_RIGHT_ATTACHMENT_SEPARATOR_RE = re.compile(
+    r"(?i)[\s,\uff0c\u3001:\uff1a()\uff08\uff09]*"
+    r"(?:(?:according\s+to|as\s+(?:reported|shown)\s+in|"
+    r"(?:shows?|demonstrates?|reports?)\s+that)|"
+    r"(?:\u6839\u636e|\u4f9d\u636e|\u53c2\u89c1|\u89c1|"
+    r"\u8868\u660e|\u6307\u51fa|\u6240\u793a))?"
+    r"[\s,\uff0c\u3001:\uff1a()\uff08\uff09]*"
+)
+CITATION_LEFT_ATTACHMENT_SEPARATOR_RE = re.compile(
+    r"(?i)[\s,\uff0c\u3001:\uff1a(\uff08]*"
+    r"(?:(?:see(?:\s+also)?|e\.g\.,?|cf\.?|"
+    r"as\s+(?:shown|reported)\s+in|according\s+to)|"
+    r"(?:\u5982\u6587\u732e|\u6587\u732e|\u4f8b\u5982|\u89c1|"
+    r"\u53c2\u89c1|\u6839\u636e|\u4f9d\u636e))?"
+    r"[\s,\uff0c\u3001:\uff1a(\uff08]*"
+)
+CITATION_LOCAL_AUTHOR_CUE_RE = re.compile(
+    r"(?:本章|本文|本研究|本工作|本节|本方法|所提方法|"
+    r"我们(?:的)?(?:方法|模型|实验|结果)|"
+    r"(?:表|图)\s*\d+(?:\.\d+)+)",
+    re.IGNORECASE,
+)
+CITATION_LOCAL_RESULT_CUE_RE = re.compile(
+    r"(?:实验|结果|评测|复评|消融|指标|数值|对比|能力矩阵|"
+    r"FID|R[- ]?Precision|BAS|准确率|成功率|得分|"
+    r"达到|取得|优于|低于|高于|提升|下降)",
+    re.IGNORECASE,
+)
+CITATION_DETAILED_CONTENT_RE = re.compile(
+    r"(?:公式|方程|等式|Top\s*k|R[- ]?Precision\s*=|"
+    r"[=∑Σ∈]|\b(?:theorem|lemma|equation)\b)",
+    re.IGNORECASE,
+)
+CITATION_FURNITURE_PREFIX_RE = re.compile(
+    r"^浙江大学(?:硕士|博士)?学位论文",
+    re.IGNORECASE,
+)
 def normalized_citation_projection_text(value: str) -> str:
     """Normalize PDF/CSV spacing without rewriting proposition semantics."""
 
@@ -2325,11 +2686,12 @@ def normalized_citation_occurrence_comparison_text(
         match for match in NUMERIC_BRACKET_RE.finditer(normalized)
         if normalize_numeric_marker(match.group(0)) == exact_marker
     ]
-    if not matches:
+    if len(matches) != 1:
         return normalized
-    # Remove one occurrence only: the citation marker nearest the end of the
-    # attached proposition/window. Identical numeric data earlier remains.
-    chosen = matches[-1]
+    # Without a raw occurrence anchor, repeated equal markers are ambiguous:
+    # one may be numeric data.  The production chain removes the true marker by
+    # offset; this conservative fallback strips only a unique textual match.
+    chosen = matches[0]
     return re.sub(
         r"\s+", " ", normalized[:chosen.start()] + " " + normalized[chosen.end():]
     ).strip()
@@ -2384,6 +2746,1037 @@ def normalized_citation_template_signature(
     return signature
 
 
+def citation_template_ngrams(signature: str) -> set[tuple[str, str]]:
+    """Return only long, body-dominating template shingles.
+
+    A source title at the start of an evidence sentence must not make a copied
+    support explanation look unique.  Conversely, a short conventional phrase
+    inside a substantially source-specific explanation is not enough to fail a
+    row.  Word and CJK-character shingles are therefore retained only when the
+    shingle occupies a material share of that row's normalized evidence body.
+    """
+
+    normalized = (signature or "").casefold()
+    result: set[tuple[str, str]] = set()
+    words = re.findall(r"[a-z]+(?:'[a-z]+)?|<[^>]+>", normalized)
+    if len(words) >= CITATION_TEMPLATE_WORD_NGRAM:
+        share = CITATION_TEMPLATE_WORD_NGRAM / len(words)
+        if share >= CITATION_TEMPLATE_MIN_BODY_SHARE:
+            for index in range(
+                0, len(words) - CITATION_TEMPLATE_WORD_NGRAM + 1
+            ):
+                result.add((
+                    "words",
+                    " ".join(
+                        words[index:index + CITATION_TEMPLATE_WORD_NGRAM]
+                    ),
+                ))
+    cjk = "".join(re.findall(r"[\u3400-\u9fff]", normalized))
+    if len(cjk) >= CITATION_TEMPLATE_CJK_NGRAM:
+        share = CITATION_TEMPLATE_CJK_NGRAM / len(cjk)
+        if share >= CITATION_TEMPLATE_MIN_BODY_SHARE:
+            for index in range(
+                0, len(cjk) - CITATION_TEMPLATE_CJK_NGRAM + 1
+            ):
+                result.add((
+                    "cjk",
+                    cjk[index:index + CITATION_TEMPLATE_CJK_NGRAM],
+                ))
+    return result
+
+
+def normalized_citation_text_without_numeric_brackets(value: str) -> str:
+    """Normalize one span and remove numeric bracket groups for overlap tests."""
+
+    normalized = normalized_citation_projection_text(value)
+    return re.sub(r"\s+", "", NUMERIC_BRACKET_RE.sub(" ", normalized))
+
+
+def normalized_citation_projection_with_raw_map(
+    value: str,
+) -> tuple[str, list[int], list[int]]:
+    """Return citation normalization plus raw offsets for every output glyph.
+
+    The ordinary projection intentionally erases PDF line wrapping.  Citation
+    attachment validation additionally needs to know whether a matched span
+    crossed the *actual* Stage-P candidate or a raw top/bottom furniture line.
+    Per-character NFKC expansion and a pending-space accumulator preserve that
+    mapping without changing any serialized Stage-P field.
+    """
+
+    source = value or ""
+
+    def hangul_jamo(character: str) -> bool:
+        codepoint = ord(character)
+        return (
+            0x1100 <= codepoint <= 0x11FF
+            or 0x3130 <= codepoint <= 0x318F
+            or 0xA960 <= codepoint <= 0xA97F
+            or 0xD7B0 <= codepoint <= 0xD7FF
+        )
+
+    def normalized_units(
+        raw_start: int, raw_end: int
+    ) -> list[tuple[str, int, int]]:
+        """NFKC-normalize one no-space/no-bracket run with stable raw spans."""
+
+        raw = source[raw_start:raw_end]
+        whole = unicodedata.normalize("NFKC", raw.replace("\u00ad", ""))
+        if not whole:
+            return []
+        clusters: list[tuple[int, int]] = []
+        cluster_start = raw_start
+        seen_character = False
+        previous_character = ""
+        for index in range(raw_start, raw_end):
+            character = source[index]
+            if character == "\u00ad":
+                continue
+            if not seen_character:
+                seen_character = True
+                previous_character = character
+                continue
+            if (
+                unicodedata.combining(character)
+                or (hangul_jamo(previous_character) and hangul_jamo(character))
+            ):
+                previous_character = character
+                continue
+            clusters.append((cluster_start, index))
+            cluster_start = index
+            previous_character = character
+        if seen_character:
+            clusters.append((cluster_start, raw_end))
+        units: list[tuple[str, int, int]] = []
+        for start, end in clusters:
+            normalized = unicodedata.normalize(
+                "NFKC", source[start:end].replace("\u00ad", "")
+            )
+            units.extend((character, start, end) for character in normalized)
+        if "".join(character for character, _, _ in units) != whole:
+            # An unusual normalization interaction outside combining marks or
+            # Hangul still keeps exact text identity.  The coarse span is
+            # confined to this no-space run; square brackets are always split
+            # into their own runs below, so citation offsets remain precise.
+            return [(character, raw_start, raw_end) for character in whole]
+        return units
+
+    units: list[tuple[str, int, int]] = []
+    index = 0
+    while index < len(source):
+        if source[index].isspace():
+            end = index + 1
+            while end < len(source) and source[end].isspace():
+                end += 1
+            units.append((" ", index, end))
+            index = end
+            continue
+        if source[index] in {"[", "]"}:
+            units.append((source[index], index, index + 1))
+            index += 1
+            continue
+        end = index + 1
+        while (
+            end < len(source)
+            and not source[end].isspace()
+            and source[end] not in {"[", "]"}
+        ):
+            end += 1
+        units.extend(normalized_units(index, end))
+        index = end
+
+    output: list[str] = []
+    raw_starts: list[int] = []
+    raw_ends: list[int] = []
+    pending_space_start: int | None = None
+    pending_space_end: int | None = None
+    for character, raw_start, raw_end in units:
+        if character.isspace():
+            if output:
+                if pending_space_start is None:
+                    pending_space_start = raw_start
+                pending_space_end = raw_end
+            continue
+        if pending_space_start is not None and output and output[-1] != " ":
+            output.append(" ")
+            raw_starts.append(pending_space_start)
+            raw_ends.append(pending_space_end or pending_space_start + 1)
+        pending_space_start = None
+        pending_space_end = None
+        output.append(character)
+        raw_starts.append(raw_start)
+        raw_ends.append(raw_end)
+    projected = "".join(output)
+    expected = normalized_citation_projection_text(source)
+    if projected != expected:
+        # Defensive exactness for future Unicode versions.  This fallback is
+        # deliberately conservative; current Unicode NFKC reaches it only for
+        # normalization interactions not represented above.
+        return expected, [0] * len(expected), [len(source)] * len(expected)
+    return projected, raw_starts, raw_ends
+
+
+def normalized_span_for_raw_span(
+    raw_starts: list[int],
+    raw_ends: list[int],
+    raw_start: int,
+    raw_end: int,
+) -> tuple[int, int] | None:
+    """Project one half-open raw span into normalized-text coordinates."""
+
+    indices = [
+        index
+        for index, (start, end) in enumerate(zip(raw_starts, raw_ends))
+        if end > raw_start and start < raw_end
+    ]
+    if not indices:
+        return None
+    return indices[0], indices[-1] + 1
+
+
+def raw_text_boundary_lines(value: str) -> list[tuple[int, int, str]]:
+    """Return nonempty raw line spans without losing their PDF offsets."""
+
+    result: list[tuple[int, int, str]] = []
+    offset = 0
+    for line in (value or "").splitlines(keepends=True):
+        content = line.rstrip("\r\n")
+        end = offset + len(content)
+        normalized = normalized_citation_projection_text(content)
+        if normalized:
+            result.append((offset, end, normalized))
+        offset += len(line)
+    if offset < len(value or ""):
+        content = (value or "")[offset:]
+        normalized = normalized_citation_projection_text(content)
+        if normalized:
+            result.append((offset, len(value or ""), normalized))
+    return result
+
+
+def canonical_boundary_furniture_signature(value: str) -> str:
+    """Erase only a terminal page counter from likely running furniture."""
+
+    normalized = normalized_citation_projection_text(value).casefold()
+    if re.search(
+        r"(?i)(?:thesis|dissertation|university|chapter|学位论文|大学|"
+        r"第\s*\d+\s*(?:章|页))",
+        normalized,
+    ) is None:
+        return normalized
+    return re.sub(
+        r"(?i)(?:^|\s*[-–—:/]\s*|\s+)"
+        r"(?:第\s*)?(?:\d{1,4}|[ivxlcdm]{1,12})(?:\s*页)?"
+        r"(?:\s*(?:/|of|共)\s*(?:第\s*)?"
+        r"(?:\d{1,4}|[ivxlcdm]{1,12})(?:\s*页)?)?\s*$",
+        " <page>",
+        normalized,
+    )
+
+
+def plausible_bare_roman_page_counter(value: str) -> bool:
+    """Accept canonical Roman front-matter counters with a conservative bound."""
+
+    if not value or not (value.islower() or value.isupper()):
+        return False
+    normalized = value.casefold()
+    if re.fullmatch(
+        r"m{0,3}(?:cm|cd|d?c{0,3})(?:xc|xl|l?x{0,3})"
+        r"(?:ix|iv|v?i{0,3})",
+        normalized,
+    ) is None:
+        return False
+    values = {
+        "i": 1, "v": 5, "x": 10, "l": 50,
+        "c": 100, "d": 500, "m": 1000,
+    }
+    total = 0
+    previous = 0
+    for character in reversed(normalized):
+        current = values[character]
+        if current < previous:
+            total -= current
+        else:
+            total += current
+            previous = current
+    # All-uppercase bare folios are common, but keeping that form to the usual
+    # front-matter range avoids silently deleting acronym-like LIV/MIX/CIVIL.
+    maximum = 50 if value.isupper() else 500
+    return 1 <= total <= maximum
+
+
+def generic_dynamic_boundary_furniture_observation(
+    value: str,
+) -> tuple[str, str] | None:
+    """Return a stable title/counter pair for a strong-delimiter running line.
+
+    Generic thesis and chapter titles often omit words such as ``thesis`` or
+    ``chapter`` while appending a changing folio (for example,
+    ``Motion Generation Framework -- 17``).  A single such line is ambiguous,
+    so this helper only exposes an observation; the cross-page inference below
+    requires the same signature on at least three pages with changing counters.
+    Colons and slashes are deliberately not generic delimiters because they are
+    common in substantive result and ratio lines.
+    """
+
+    normalized = normalized_citation_projection_text(value).casefold()
+    match = re.fullmatch(
+        r"(?P<prefix>.+?\S)[ \t]+(?:-{1,3}|[–—])[ \t]*"
+        r"(?:(?:page|p\.?)\s*)?"
+        r"(?:第\s*)?(?P<counter>\d{1,4}|[ivxlcdm]{1,12})(?:\s*页)?"
+        r"(?:\s*(?:/|of|共)\s*(?:第\s*)?"
+        r"(?:\d{1,4}|[ivxlcdm]{1,12})(?:\s*页)?)?",
+        normalized,
+        re.I,
+    )
+    if match is None:
+        return None
+    prefix = match.group("prefix").strip()
+    if sum(character.isalnum() for character in prefix) < 2:
+        return None
+    counter = match.group("counter").casefold()
+    if counter.isalpha() and not plausible_bare_roman_page_counter(counter):
+        return None
+    if counter.isdigit():
+        counter = str(int(counter))
+    return f"{prefix} <page>", counter
+
+
+def raw_page_furniture_spans(
+    value: str,
+    repeated_boundary_lines: set[str] | None = None,
+) -> list[tuple[int, int, str]]:
+    """Identify raw page-number and repeated-header/footer line spans.
+
+    A terminal integer inside prose is deliberately *not* furniture.  Only a
+    complete top/bottom line is eligible, preserving legitimate measurements,
+    equation indices, and years inside a citation-attached proposition.
+    """
+
+    lines = raw_text_boundary_lines(value)
+    if not lines:
+        return []
+    boundary = [*lines[:2], *lines[-2:]]
+    repeated = repeated_boundary_lines or set()
+    result: list[tuple[int, int, str]] = []
+    seen: set[tuple[int, int]] = set()
+    for start, end, normalized in boundary:
+        key = (start, end)
+        if key in seen:
+            continue
+        seen.add(key)
+        standalone_shape = re.fullmatch(
+                r"(?:\d{1,4}|[ivxlcdm]{1,12}|"
+                r"[-–—]\s*(?:\d{1,4}|[ivxlcdm]{1,12})\s*[-–—]|"
+                r"(?:page|p\.?)\s*(?:\d{1,4}|[ivxlcdm]{1,12})"
+                r"(?:\s*(?:/|of)\s*(?:\d{1,4}|[ivxlcdm]{1,12}))?|"
+                r"(?:\d{1,4}|[ivxlcdm]{1,12})\s*(?:/|of)\s*\d{1,4}|"
+                r"\(\s*(?:\d{1,4}|[ivxlcdm]{1,12})\s*\)|"
+                r"(?:university|thesis|dissertation|chapter|大学|学位论文|第\s*\d+\s*章)"
+                r".*[-–—]\s*(?:第\s*)?(?:\d{1,4}|[ivxlcdm]{1,12})"
+                r"(?:\s*页)?"
+                r"(?:\s*(?:/|of|共)\s*\d{1,4})?|"
+                r"第\s*\d{1,4}\s*页"
+                r"(?:\s*共\s*\d{1,4}\s*页)?)",
+                normalized,
+                re.I,
+            )
+        if (
+            re.fullmatch(r"[ivxlcdm]{1,12}", normalized, re.I)
+            and not plausible_bare_roman_page_counter(normalized)
+        ):
+            standalone_shape = None
+        if (
+            standalone_shape is not None
+            or normalized in repeated
+            or canonical_boundary_furniture_signature(normalized) in repeated
+            or (
+                (dynamic := generic_dynamic_boundary_furniture_observation(
+                    normalized
+                ))
+                is not None
+                and dynamic[0] in repeated
+            )
+        ):
+            result.append((start, end, normalized))
+    return result
+
+
+def infer_repeated_boundary_furniture(
+    page_texts: dict[int, str],
+) -> set[str]:
+    """Infer exact, keyworded, and changing-folio boundary furniture.
+
+    Counts are page-based rather than line-occurrence-based, so duplicating one
+    line at both boundaries of one page cannot manufacture repetition.  The
+    generic dynamic form is stricter than ordinary repeated furniture: it must
+    occur on at least three distinct pages and expose at least two different
+    terminal counters.
+    """
+
+    signature_pages: dict[str, set[int]] = defaultdict(set)
+    dynamic_pages: dict[str, set[int]] = defaultdict(set)
+    dynamic_counters: dict[str, set[str]] = defaultdict(set)
+    for physical_page, text in page_texts.items():
+        lines = raw_text_boundary_lines(text)
+        page_candidates = {
+            candidate for _, _, candidate in [*lines[:2], *lines[-2:]]
+        }
+        for candidate in page_candidates:
+            if (
+                not candidate
+                or NUMERIC_BRACKET_RE.search(candidate) is not None
+                or re.fullmatch(
+                    r"(?:\d{1,4}|[ivxlcdm]{1,12})", candidate, re.I
+                )
+                is not None
+            ):
+                continue
+            signature_pages[
+                canonical_boundary_furniture_signature(candidate)
+            ].add(physical_page)
+            dynamic = generic_dynamic_boundary_furniture_observation(candidate)
+            if dynamic is not None:
+                signature, counter = dynamic
+                dynamic_pages[signature].add(physical_page)
+                dynamic_counters[signature].add(counter)
+
+    repeated = {
+        signature
+        for signature, pages in signature_pages.items()
+        if len(signature) <= 200
+        and (
+            len(pages) >= 3
+            or (
+                len(pages) >= 2
+                and re.search(
+                    r"(?i)thesis|dissertation|university|chapter|"
+                    r"学位论文|大学",
+                    signature,
+                )
+                is not None
+            )
+        )
+    }
+    repeated.update(
+        signature
+        for signature, pages in dynamic_pages.items()
+        if len(signature) <= 200
+        and len(pages) >= 3
+        and len(dynamic_counters[signature]) >= 2
+    )
+    return repeated
+
+
+def _normalized_candidate_span(
+    extracted: dict[str, Any], marker: str
+) -> tuple[str, int, int, int, int, list[tuple[int, int, str]]]:
+    """Recover one extracted candidate's normalized page/context coordinates."""
+
+    page_text = str(extracted.get("NormalizedPageText", ""))
+    target_start = extracted.get("NormalizedStart")
+    target_end = extracted.get("NormalizedEnd")
+    context_start = extracted.get("NormalizedContextStart")
+    context_end = extracted.get("NormalizedContextEnd")
+    furniture = list(extracted.get("NormalizedFurnitureSpans", []))
+    if (
+        page_text
+        and isinstance(target_start, int)
+        and isinstance(target_end, int)
+    ):
+        return (
+            page_text,
+            target_start,
+            target_end,
+            int(context_start) if isinstance(context_start, int) else 0,
+            int(context_end) if isinstance(context_end, int) else len(page_text),
+            furniture,
+        )
+
+    # Test doubles and legacy callers may provide only the public extraction
+    # shape.  This fallback remains offset-aware within that exact context; the
+    # production gates always receive the raw-page coordinates above.
+    page_text = normalized_citation_projection_text(
+        str(extracted.get("Adjacent", ""))
+        or (
+            str(extracted.get("Prefix", ""))
+            + str(extracted.get("Marker", marker))
+            + str(extracted.get("Suffix", ""))
+        )
+    )
+    matches = [
+        match
+        for match in NUMERIC_BRACKET_RE.finditer(page_text)
+        if normalize_numeric_marker(match.group(0)) == marker
+    ]
+    hint = len(normalized_citation_projection_text(str(extracted.get("Prefix", ""))))
+    if matches:
+        chosen = min(matches, key=lambda item: abs(item.start() - hint))
+        target_start, target_end = chosen.span()
+    else:
+        target_start = target_end = -1
+    return page_text, target_start, target_end, 0, len(page_text), furniture
+
+
+def _is_coattached_citation_separator(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", value or "")
+    if re.search(r"(?:\r?\n)[ \t]*(?:\r?\n)", normalized):
+        return False
+    line_breaks = len(re.findall(r"\r?\n", normalized))
+    if line_breaks:
+        # One extractor line wrap is layout, not a responsibility boundary:
+        # ``[1] [2]`` and ``[1]\n[2]`` must bind identically.  A blank line,
+        # multiple wraps, semicolon, or sentence punctuation still terminates
+        # the co-citation run through this branch or the closed separator RE.
+        if line_breaks != 1:
+            return False
+        normalized = re.sub(r"\r?\n", " ", normalized)
+        normalized = re.sub(r"[ \t]+", " ", normalized)
+    return (
+        len(normalized) <= CITATION_COATTACHED_SEPARATOR_MAX_CHARS
+        and CITATION_COATTACHED_SEPARATOR_RE.fullmatch(normalized) is not None
+    )
+
+
+def build_citation_occurrence_anchors(
+    candidate_rows: Iterable[dict[str, Any]],
+    extracted_candidates: Iterable[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Join Stage-P candidate IDs to true PDF offsets and citation runs.
+
+    The caller has already reconciled row order and exact marker/context values
+    to the frozen-PDF extraction.  This helper adds no serialized fields; it
+    merely carries the validator's raw offsets forward to the R4 semantic gate.
+    """
+
+    records: list[dict[str, Any]] = []
+    for row, extracted in zip(candidate_rows, extracted_candidates):
+        marker = normalize_numeric_marker(str(row.get("Marker", "")))
+        (
+            page_text,
+            target_start,
+            target_end,
+            context_start,
+            context_end,
+            furniture,
+        ) = _normalized_candidate_span(extracted, marker)
+        try:
+            physical_page = int(row.get("PhysicalPage", 0) or 0)
+        except (TypeError, ValueError):
+            physical_page = 0
+        records.append({
+            "CandidateID": str(row.get("CandidateID", "")),
+            "OccurrenceID": str(row.get("MappedOccurrenceID", "")),
+            "Classification": str(row.get("Classification", "")).casefold(),
+            "PhysicalPage": physical_page,
+            "Marker": marker,
+            "ExpandedNumbers": tuple(
+                expand_numeric_marker(marker) or []
+            ),
+            "PageText": page_text,
+            "Start": target_start,
+            "End": target_end,
+            "ContextStart": context_start,
+            "ContextEnd": context_end,
+            "FurnitureSpans": tuple(furniture),
+            "RawPageText": str(extracted.get("RawPageText", "")),
+            "RawStart": int(extracted.get("RawStart", -1)),
+            "RawEnd": int(extracted.get("RawEnd", -1)),
+            "RawContextStart": int(extracted.get("RawContextStart", 0)),
+            "RawContextEnd": int(extracted.get("RawContextEnd", 0)),
+            "RawFurnitureSpans": tuple(extracted.get("RawFurnitureSpans", ())),
+            "NormalizedRawStarts": tuple(extracted.get("NormalizedRawStarts", ())),
+            "NormalizedRawEnds": tuple(extracted.get("NormalizedRawEnds", ())),
+        })
+
+    by_page: dict[int, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        if record["Start"] >= 0 and record["End"] >= record["Start"]:
+            by_page[record["PhysicalPage"]].append(record)
+    for page_records in by_page.values():
+        page_records.sort(key=lambda item: (item["Start"], item["End"]))
+
+    anchors: dict[str, dict[str, Any]] = {}
+    for record in records:
+        occurrence_id = record["OccurrenceID"]
+        if record["Classification"] != "citation" or not OCCURRENCE_ID_RE.fullmatch(
+            occurrence_id
+        ):
+            continue
+        page_text = record["PageText"]
+        citation_records = [
+            item for item in by_page.get(record["PhysicalPage"], [])
+            if item["Classification"] == "citation"
+            and item["PageText"] == page_text
+        ]
+        try:
+            target_index = next(
+                index for index, item in enumerate(citation_records)
+                if item["CandidateID"] == record["CandidateID"]
+            )
+        except StopIteration:
+            citation_records = [record]
+            target_index = 0
+        left = right = target_index
+        while left > 0:
+            previous = citation_records[left - 1]
+            current = citation_records[left]
+            raw_page = str(current.get("RawPageText", ""))
+            raw_gap = (
+                raw_page[int(previous.get("RawEnd", -1)):int(current.get("RawStart", -1))]
+                if raw_page
+                and raw_page == str(previous.get("RawPageText", ""))
+                and int(previous.get("RawEnd", -1)) >= 0
+                and int(current.get("RawStart", -1)) >= int(previous.get("RawEnd", -1))
+                else page_text[previous["End"]:current["Start"]]
+            )
+            if not _is_coattached_citation_separator(
+                raw_gap
+            ):
+                break
+            left -= 1
+        while right + 1 < len(citation_records):
+            current = citation_records[right]
+            following = citation_records[right + 1]
+            raw_page = str(current.get("RawPageText", ""))
+            raw_gap = (
+                raw_page[int(current.get("RawEnd", -1)):int(following.get("RawStart", -1))]
+                if raw_page
+                and raw_page == str(following.get("RawPageText", ""))
+                and int(current.get("RawEnd", -1)) >= 0
+                and int(following.get("RawStart", -1)) >= int(current.get("RawEnd", -1))
+                else page_text[current["End"]:following["Start"]]
+            )
+            if not _is_coattached_citation_separator(
+                raw_gap
+            ):
+                break
+            right += 1
+        run = citation_records[left:right + 1]
+        anchors[occurrence_id] = {
+            **record,
+            "RunStart": min(item["Start"] for item in run),
+            "RunEnd": max(item["End"] for item in run),
+            "RunCandidateIDs": frozenset(
+                item["CandidateID"] for item in run
+            ),
+            "PageCandidates": tuple(by_page.get(record["PhysicalPage"], [])),
+        }
+    return anchors
+
+
+def _literal_and_whitespace_free_spans(
+    haystack: str, needle: str
+) -> set[tuple[int, int]]:
+    """Return exact spans while retaining the existing PDF-space tolerance."""
+
+    result: set[tuple[int, int]] = set()
+    if not needle:
+        return result
+    start = 0
+    while True:
+        found = haystack.find(needle, start)
+        if found < 0:
+            break
+        result.add((found, found + len(needle)))
+        start = found + 1
+    compact_haystack: list[str] = []
+    compact_map: list[int] = []
+    for index, character in enumerate(haystack):
+        if character.isspace():
+            continue
+        compact_haystack.append(character)
+        compact_map.append(index)
+    compact_needle = re.sub(r"\s+", "", needle)
+    compact_text = "".join(compact_haystack)
+    if compact_needle:
+        start = 0
+        while True:
+            found = compact_text.find(compact_needle, start)
+            if found < 0:
+                break
+            end_index = found + len(compact_needle) - 1
+            result.add((compact_map[found], compact_map[end_index] + 1))
+            start = found + 1
+    return result
+
+
+def _virtual_text_without_span(
+    value: str, removed_start: int, removed_end: int
+) -> tuple[str, list[int]]:
+    """Remove one true marker span while mapping virtual text to page offsets."""
+
+    output: list[str] = []
+    offsets: list[int] = []
+    pending_space: int | None = None
+    for index, character in enumerate(value):
+        if removed_start <= index < removed_end:
+            continue
+        if character.isspace():
+            if output and pending_space is None:
+                pending_space = index
+            continue
+        if pending_space is not None and output and output[-1] != " ":
+            output.append(" ")
+            offsets.append(pending_space)
+        pending_space = None
+        output.append(character)
+        offsets.append(index)
+    return "".join(output), offsets
+
+
+def _proposition_spans_for_anchor(
+    proposition: str, anchor: dict[str, Any]
+) -> set[tuple[int, int]]:
+    page_text = str(anchor.get("PageText", ""))
+    result = _literal_and_whitespace_free_spans(page_text, proposition)
+    target_start = int(anchor.get("Start", -1))
+    target_end = int(anchor.get("End", -1))
+    if target_start < 0 or target_end < target_start:
+        return result
+    virtual, offsets = _virtual_text_without_span(
+        page_text, target_start, target_end
+    )
+    for start, end in _literal_and_whitespace_free_spans(virtual, proposition):
+        mapped = offsets[start:end]
+        if mapped:
+            result.add((min(mapped), max(mapped) + 1))
+    return result
+
+
+def _anchored_proposition_spans(
+    proposition: str, anchor: dict[str, Any]
+) -> set[tuple[int, int]]:
+    context_start = int(anchor.get("ContextStart", 0))
+    context_end = int(anchor.get("ContextEnd", len(anchor.get("PageText", ""))))
+    return {
+        span
+        for span in _proposition_spans_for_anchor(proposition, anchor)
+        if span[0] >= context_start
+        and span[1] <= context_end
+        and _span_touches_citation_run(span, anchor)
+    }
+
+
+def anchored_citation_proposition_core(
+    proposition: str,
+    anchor: dict[str, Any],
+    span: tuple[int, int] | None = None,
+) -> str:
+    """Project one proposition after removing only the true target-marker span."""
+
+    normalized = normalized_citation_projection_text(proposition)
+    if span is None:
+        spans = _anchored_proposition_spans(normalized, anchor)
+        if len(spans) != 1:
+            return normalized
+        span = next(iter(spans))
+    page_text = str(anchor.get("PageText", ""))
+    start, end = span
+    target_start = int(anchor.get("Start", -1))
+    target_end = int(anchor.get("End", -1))
+    if start < 0 or end > len(page_text) or end < start:
+        return normalized
+    left = page_text[start:min(end, target_start)] if target_start > start else ""
+    right = page_text[max(start, target_end):end] if target_end < end else ""
+    if target_start >= end or target_end <= start:
+        return normalized_citation_projection_text(page_text[start:end])
+    return normalized_citation_projection_text(f"{left} {right}")
+
+
+def raw_text_for_normalized_span(
+    anchor: dict[str, Any], span: tuple[int, int]
+) -> str | None:
+    """Recover the exact raw PDF-extraction bytes covered by one span."""
+
+    page_text = str(anchor.get("PageText", ""))
+    raw_page = str(anchor.get("RawPageText", ""))
+    raw_starts = tuple(anchor.get("NormalizedRawStarts", ()))
+    raw_ends = tuple(anchor.get("NormalizedRawEnds", ()))
+    start, end = span
+    if (
+        not raw_page
+        or len(raw_starts) != len(page_text)
+        or len(raw_ends) != len(page_text)
+        or start < 0
+        or end < start
+        or end > len(page_text)
+    ):
+        return None
+    raw_start = int(raw_starts[start]) if start < len(raw_starts) else len(raw_page)
+    raw_end = int(raw_ends[end - 1]) if end > 0 else 0
+    return raw_page[raw_start:raw_end]
+
+
+def _span_touches_citation_run(
+    span: tuple[int, int], anchor: dict[str, Any]
+) -> bool:
+    start, end = span
+    page_text = str(anchor.get("PageText", ""))
+    run_start = int(anchor.get("RunStart", anchor.get("Start", -1)))
+    run_end = int(anchor.get("RunEnd", anchor.get("End", -1)))
+
+    def raw_gap(normalized_start: int, normalized_end: int) -> str | None:
+        raw_page = str(anchor.get("RawPageText", ""))
+        raw_starts = tuple(anchor.get("NormalizedRawStarts", ()))
+        raw_ends = tuple(anchor.get("NormalizedRawEnds", ()))
+        if (
+            not raw_page
+            or len(raw_starts) != len(page_text)
+            or len(raw_ends) != len(page_text)
+            or normalized_start < 0
+            or normalized_end < normalized_start
+            or normalized_end > len(page_text)
+        ):
+            return None
+        raw_start = (
+            int(raw_starts[normalized_start])
+            if normalized_start < len(raw_starts)
+            else len(raw_page)
+        )
+        raw_end = (
+            int(raw_ends[normalized_end - 1])
+            if normalized_end > 0
+            else 0
+        )
+        return raw_page[raw_start:raw_end]
+
+    def has_blank_line(value: str) -> bool:
+        return re.search(r"(?:\r?\n)[ \t]*(?:\r?\n)", value) is not None
+
+    if start < run_end and end > run_start:
+        return True
+    if end <= run_start:
+        gap = raw_gap(end, run_start)
+        if gap is None:
+            gap = page_text[end:run_start]
+        budget_gap = (
+            re.sub(r"\s+", " ", gap)
+            if "\n" in gap or "\r" in gap
+            else gap
+        )
+        return (
+            not has_blank_line(gap)
+            and len(budget_gap) <= CITATION_COATTACHED_SEPARATOR_MAX_CHARS
+            and CITATION_LEFT_ATTACHMENT_SEPARATOR_RE.fullmatch(budget_gap)
+            is not None
+        )
+    if start >= run_end:
+        gap = raw_gap(run_end, start)
+        if gap is None:
+            gap = page_text[run_end:start]
+        budget_gap = (
+            re.sub(r"\s+", " ", gap)
+            if "\n" in gap or "\r" in gap
+            else gap
+        )
+        return (
+            not has_blank_line(gap)
+            and len(budget_gap) <= CITATION_COATTACHED_SEPARATOR_MAX_CHARS
+            and CITATION_RIGHT_ATTACHMENT_SEPARATOR_RE.fullmatch(budget_gap) is not None
+        )
+    return False
+
+
+def citation_has_internal_strong_boundary(value: str) -> bool:
+    """Detect a true internal sentence/clause split, excluding abbreviations."""
+
+    normalized = normalized_citation_projection_text(value)
+    if re.search(r"[\u3002\uff01\uff1f!?\uff1b;]\s*\S", normalized):
+        return True
+    abbreviation_spans = [
+        match.span()
+        for match in re.finditer(
+            r"(?i)\b(?:e\.g\.|i\.e\.|et\s+al\.|dr\.|mr\.|mrs\.|ms\.|"
+            r"prof\.|vs\.|cf\.|(?:[a-z]\.){2,})",
+            normalized,
+        )
+    ]
+    for match in re.finditer(r"\.\s*\S", normalized):
+        dot = match.start()
+        if any(start <= dot < end for start, end in abbreviation_spans):
+            continue
+        next_index = dot + 1
+        while next_index < len(normalized) and normalized[next_index].isspace():
+            next_index += 1
+        if (
+            dot > 0
+            and next_index < len(normalized)
+            and normalized[dot - 1].isdigit()
+            and normalized[next_index].isdigit()
+        ):
+            continue
+        prefix_with_period = normalized[:dot + 1]
+        if (
+            next_index < len(normalized)
+            and normalized[next_index].isdigit()
+            and re.search(
+                r"(?i)\b(?:fig|eq|sec|no|vol|pp)\.$",
+                prefix_with_period,
+            )
+        ):
+            continue
+        if (
+            next_index < len(normalized)
+            and normalized[next_index].isalpha()
+            and re.search(r"\b[A-Z]\.$", prefix_with_period)
+        ):
+            continue
+        return True
+    return False
+
+
+def validate_citation_claim_occurrence_attachment(
+    citation_ledger: Iterable[dict[str, Any]],
+    citation_inventory_by_pair: dict[str, dict[str, Any]],
+    occurrence_anchors: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Require each proposition to touch its true Stage-P citation candidate."""
+
+    for line, row in enumerate(citation_ledger, start=2):
+        pair_id = str(row.get("PairID", ""))
+        inventory_row = citation_inventory_by_pair.get(pair_id)
+        if inventory_row is None:
+            continue
+        occurrence_id = str(inventory_row.get("OccurrenceID", ""))
+        anchor = occurrence_anchors.get(occurrence_id)
+        if anchor is None:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-MISSING-ANCHOR: no validated "
+                f"Stage-P candidate offset exists for {occurrence_id}"
+            )
+            continue
+        proposition = normalized_citation_projection_text(
+            str(row.get("ExactAttachedProposition", ""))
+        )
+        candidate_spans = _anchored_proposition_spans(proposition, anchor)
+        if not candidate_spans:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-NOT-ANCHORED: "
+                "ExactAttachedProposition is not an exact left-, right-, or "
+                f"enclosing span of {occurrence_id}'s true Stage-P candidate"
+            )
+            continue
+        if len(candidate_spans) != 1:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-AMBIGUOUS-ANCHOR: proposition "
+                f"matches {len(candidate_spans)} target-adjacent spans for "
+                f"{occurrence_id}"
+            )
+            continue
+        proposition_span = next(iter(candidate_spans))
+        raw_proposition = raw_text_for_normalized_span(anchor, proposition_span)
+        if raw_proposition is not None and re.search(
+            r"(?:\r?\n)[ \t]*(?:\r?\n)", raw_proposition
+        ):
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-PARAGRAPH-CROSSING: proposition "
+                "crosses a raw blank-line paragraph boundary around the "
+                "citation occurrence"
+            )
+        allowed_candidate_ids = set(anchor.get("RunCandidateIDs", ()))
+        page_text = str(anchor.get("PageText", ""))
+        excluded_offsets: set[int] = set()
+        for candidate in anchor.get("PageCandidates", ()):
+            if candidate.get("CandidateID") not in allowed_candidate_ids:
+                continue
+            candidate_start = max(
+                proposition_span[0], int(candidate.get("Start", -1))
+            )
+            candidate_end = min(
+                proposition_span[1], int(candidate.get("End", -1))
+            )
+            if candidate_start >= 0 and candidate_end > candidate_start:
+                excluded_offsets.update(range(candidate_start, candidate_end))
+        proposition_core = normalized_citation_projection_text("".join(
+            character
+            for offset, character in enumerate(
+                page_text[proposition_span[0]:proposition_span[1]],
+                start=proposition_span[0],
+            )
+            if offset not in excluded_offsets
+        ))
+        separator_only_core = any(
+            pattern.fullmatch(proposition_core) is not None
+            for pattern in (
+                CITATION_COATTACHED_SEPARATOR_RE,
+                CITATION_LEFT_ATTACHMENT_SEPARATOR_RE,
+                CITATION_RIGHT_ATTACHMENT_SEPARATOR_RE,
+            )
+        )
+        substantive_core_length = (
+            0 if separator_only_core else sum(
+                character.isalnum() for character in proposition_core
+            )
+        )
+        if substantive_core_length < 2:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-EMPTY-CORE: proposition contains "
+                "no substantive citation-attached clause after the true target "
+                "marker and punctuation are removed"
+            )
+        foreign_occurrences = sorted({
+            str(candidate.get("OccurrenceID", ""))
+            for candidate in anchor.get("PageCandidates", ())
+            if candidate.get("Classification") == "citation"
+            and candidate.get("CandidateID") not in allowed_candidate_ids
+            and int(candidate.get("Start", -1)) < proposition_span[1]
+            and int(candidate.get("End", -1)) > proposition_span[0]
+        })
+        if foreign_occurrences:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-FOREIGN-CITATION: proposition "
+                "contains citation candidate(s) outside the target co-citation "
+                f"run: {foreign_occurrences}"
+            )
+        furniture_hits = [
+            label
+            for start, end, label in anchor.get("FurnitureSpans", ())
+            if start < proposition_span[1] and end > proposition_span[0]
+        ]
+        if furniture_hits:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-PAGE-FURNITURE: proposition "
+                f"intersects raw page-furniture line(s) {furniture_hits[:3]}"
+            )
+        core_length = len(re.sub(r"\s+", "", proposition_core))
+        if (
+            core_length > CITATION_PROPOSITION_SOFT_MAX_NORMALIZED_CHARS
+            and core_length <= CITATION_PROPOSITION_MAX_NORMALIZED_CHARS
+            and citation_has_internal_strong_boundary(proposition_core)
+        ):
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-SOFT-LIMIT: proposition has "
+                f"{core_length} marker-stripped non-whitespace characters and crosses an "
+                "internal sentence/strong-clause boundary; split it at the "
+                "citation responsibility boundary"
+            )
+
+
+def validate_citation_claim_mechanical_semantics(
+    citation_ledger: Iterable[dict[str, Any]],
+    citation_inventory_by_pair: dict[str, dict[str, Any]],
+    occurrence_anchors: dict[str, dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Run the one shared R4/full/master occurrence-level mechanical chain."""
+
+    rows = list(citation_ledger)
+    validate_citation_claim_semantic_specificity(
+        rows,
+        citation_inventory_by_pair,
+        filename,
+        errors,
+        occurrence_anchors=occurrence_anchors,
+    )
+    validate_citation_claim_occurrence_attachment(
+        rows, citation_inventory_by_pair, occurrence_anchors, filename, errors
+    )
+
+
 def atomic_structured_locator(signature: str) -> bool:
     """Whether a signature is one concise, valid source anchor, not a template."""
 
@@ -2407,11 +3800,74 @@ def atomic_structured_locator(signature: str) -> bool:
     ) is not None
 
 
+def canonical_atomic_locator_identity(value: str) -> str:
+    """Canonicalize display variants only inside closed structural locators.
+
+    Official DOI/arXiv/work-record locators retain their normalized literal
+    identity.  Global zero stripping or punctuation trimming would otherwise
+    merge distinct persistent identifiers and manufacture locator dominance.
+    """
+
+    projected = normalized_citation_projection_text(value)
+    display = projected.casefold().strip(" \t.,;:!?，。；：！？")
+    generic_aliases = {
+        "abstract": "abstract",
+        "introduction": "introduction",
+        "conclusion": "conclusion",
+        "method": "method",
+        "methods": "method",
+        "result": "result",
+        "results": "result",
+    }
+    if display in generic_aliases:
+        return generic_aliases[display]
+    official = re.fullmatch(
+        r"(?i)(?P<label>publisher|official|metadata)\s+record\s*:\s*"
+        r"(?:(?P<cue>doi|arxiv)\s+)?(?P<identity>\S.+|\S)",
+        projected,
+    )
+    if official is not None:
+        cue = f"{official.group('cue').casefold()} " if official.group("cue") else ""
+        return (
+            f"{official.group('label').casefold()} record: {cue}"
+            f"{official.group('identity')}"
+        )
+    match = re.fullmatch(
+        r"(?P<label>section|sec\.?|p\.?|pp\.?|page|pages|table|figure|fig\.?|"
+        r"equation|eq\.?|appendix|supplement|theorem|lemma)\s+"
+        r"(?P<start>\d+(?:\.\d+)*|[a-z])"
+        r"(?:\s*(?P<dash>[-–])\s*(?P<end>\d+(?:\.\d+)*|[a-z]))?",
+        display,
+    )
+    if match is None:
+        return projected
+
+    def canonical_coordinate(coordinate: str) -> str:
+        if coordinate.isalpha():
+            return coordinate
+        return ".".join(str(int(component)) for component in coordinate.split("."))
+
+    label_aliases = {
+        "section": "section", "sec": "section", "sec.": "section",
+        "p": "page", "p.": "page", "pp": "page", "pp.": "page",
+        "page": "page", "pages": "page",
+        "figure": "figure", "fig": "figure", "fig.": "figure",
+        "equation": "equation", "eq": "equation", "eq.": "equation",
+    }
+    label = label_aliases.get(match.group("label"), match.group("label"))
+    result = f"{label} {canonical_coordinate(match.group('start'))}"
+    if match.group("end") is not None:
+        result += f"-{canonical_coordinate(match.group('end'))}"
+    return result
+
+
 def validate_citation_claim_semantic_specificity(
     citation_ledger: Iterable[dict[str, Any]],
     citation_inventory_by_pair: dict[str, dict[str, Any]],
     filename: str,
     errors: list[str],
+    *,
+    occurrence_anchors: dict[str, dict[str, Any]] | None = None,
 ) -> None:
     """Bind each substantive verdict to its occurrence and reject bulk filler.
 
@@ -2424,8 +3880,16 @@ def validate_citation_claim_semantic_specificity(
     rows = list(citation_ledger)
     locator_groups: dict[str, list[tuple[int, str, str, str]]] = defaultdict(list)
     disposition_groups: dict[str, list[tuple[int, str, str, str]]] = defaultdict(list)
+    locator_support_groups: dict[
+        str, dict[str, list[tuple[int, str, str]]]
+    ] = defaultdict(lambda: defaultdict(list))
+    locator_support_members: dict[
+        str, list[tuple[int, str, str]]
+    ] = defaultdict(list)
+    evidence_ngram_groups: dict[
+        tuple[str, str, str], list[tuple[int, str, str]]
+    ] = defaultdict(list)
     occurrence_markers = citation_marker_by_occurrence(citation_inventory_by_pair)
-
     for line, row in enumerate(rows, start=2):
         pair_id = str(row.get("PairID", ""))
         reference_id = str(row.get("ReferenceID", ""))
@@ -2435,11 +3899,41 @@ def validate_citation_claim_semantic_specificity(
         inventory_row = citation_inventory_by_pair.get(pair_id)
         occurrence_id = str(inventory_row.get("OccurrenceID", "")) if inventory_row else ""
         exact_marker = occurrence_markers.get(occurrence_id, "")
-        proposition_comparison = normalized_citation_occurrence_comparison_text(
-            proposition, exact_marker
+        anchor = (
+            occurrence_anchors.get(occurrence_id)
+            if occurrence_anchors is not None and occurrence_id
+            else None
+        )
+        anchored_spans = (
+            _anchored_proposition_spans(proposition, anchor)
+            if anchor is not None
+            else set()
+        )
+        proposition_comparison = (
+            anchored_citation_proposition_core(
+                proposition, anchor, next(iter(anchored_spans))
+            )
+            if anchor is not None and len(anchored_spans) == 1
+            else normalized_citation_occurrence_comparison_text(
+                proposition, exact_marker
+            )
         )
         proposition_compact = re.sub(r"\s+", "", proposition_comparison)
-        if inventory_row is not None and proposition:
+        if len(proposition_compact) > CITATION_PROPOSITION_MAX_NORMALIZED_CHARS:
+            errors.append(
+                f"{filename}:{line}: CIT-PROP-TOO-LONG: "
+                "ExactAttachedProposition has "
+                f"{len(proposition_compact)} marker-stripped non-whitespace characters; "
+                f"limit={CITATION_PROPOSITION_MAX_NORMALIZED_CHARS}; split the "
+                "occurrence into the smallest citation-attached clause"
+            )
+        if CITATION_FURNITURE_PREFIX_RE.search(proposition_comparison):
+            errors.append(
+                f"{filename}:{line}: ExactAttachedProposition includes a rendered "
+                "running header/page-furniture prefix rather than only the "
+                "citation-attached clause"
+            )
+        if inventory_row is not None and proposition and anchor is None:
             adjacent = normalized_citation_occurrence_comparison_text(
                 str(inventory_row.get("AdjacentPDFText", "")), exact_marker
             )
@@ -2457,6 +3951,17 @@ def validate_citation_claim_semantic_specificity(
         support = str(row.get("Support", "")).strip().casefold()
         if support not in SUBSTANTIVE_CITATION_SUPPORT_VALUES:
             continue
+        if (
+            support == "direct"
+            and CITATION_LOCAL_AUTHOR_CUE_RE.search(proposition_comparison)
+            and CITATION_LOCAL_RESULT_CUE_RE.search(proposition_comparison)
+        ):
+            errors.append(
+                f"{filename}:{line}: support=direct attaches a thesis-local "
+                "method/result/table proposition to an external source; narrow "
+                "the proposition to the source-attributed fact or classify the "
+                "source as context-only/partial as warranted"
+            )
         disposition = str(row.get("DispositionEvidence", ""))
         marker_label_count = len(
             re.findall(r"(?i)occurrence\s+binding\s*:", disposition)
@@ -2494,14 +3999,32 @@ def validate_citation_claim_semantic_specificity(
                 "substantive evidence beyond the occurrence binding"
             )
 
-        proposition_digest = citation_proposition_sha256(proposition)
+        proposition_digest = citation_proposition_sha256(proposition_comparison)
         locator_signature = normalized_citation_template_signature(
             str(row.get("ExactSourceLocator", "")), proposition
         )
         disposition_signature = normalized_citation_template_signature(
             disposition, proposition
         )
+        if (
+            support == "direct"
+            and locator_signature == "abstract"
+            and CITATION_DETAILED_CONTENT_RE.search(proposition_comparison)
+        ):
+            errors.append(
+                f"{filename}:{line}: an Abstract-only locator cannot establish "
+                "the detailed equation/definition attached to this direct row; "
+                "record the exact source section/equation/table locator"
+            )
         concise_locator = atomic_structured_locator(locator_signature)
+        exact_locator = canonical_atomic_locator_identity(
+            str(row.get("ExactSourceLocator", ""))
+        )
+        if exact_locator:
+            member = (line, reference_id, proposition_digest)
+            locator_support_members[support].append(member)
+            if concise_locator:
+                locator_support_groups[support][exact_locator].append(member)
         if locator_signature and not concise_locator:
             locator_groups[locator_signature].append(
                 (line, reference_id, proposition_digest, support)
@@ -2510,6 +4033,10 @@ def validate_citation_claim_semantic_specificity(
             disposition_groups[disposition_signature].append(
                 (line, reference_id, proposition_digest, support)
             )
+            for kind, ngram in citation_template_ngrams(disposition_signature):
+                evidence_ngram_groups[(support, kind, ngram)].append(
+                    (line, reference_id, proposition_digest)
+                )
 
     def report_repeated_templates(
         label: str,
@@ -2539,6 +4066,58 @@ def validate_citation_claim_semantic_specificity(
 
     report_repeated_templates("ExactSourceLocator", locator_groups)
     report_repeated_templates("DispositionEvidence", disposition_groups)
+
+    for support, by_locator in locator_support_groups.items():
+        support_rows = locator_support_members[support]
+        if len(support_rows) < CITATION_LOCATOR_DOMINANCE_MIN_ROWS:
+            continue
+        for locator, members in by_locator.items():
+            references = {reference_id for _, reference_id, _ in members}
+            propositions = {digest for _, _, digest in members}
+            ratio = len(members) / len(support_rows)
+            if (
+                ratio < CITATION_LOCATOR_DOMINANCE_RATIO
+                or len(references) < CITATION_LOCATOR_DOMINANCE_MIN_REFERENCES
+                or len(propositions) < CITATION_LOCATOR_DOMINANCE_MIN_PROPOSITIONS
+            ):
+                continue
+            errors.append(
+                f"{filename}: CIT-LOC-ATOMIC-DOMINANCE: one exact atomic "
+                f"ExactSourceLocator={locator!r} covers "
+                f"{len(members)}/{len(support_rows)} support={support} rows "
+                f"(ratio={ratio:.3f}, distinct ReferenceID={len(references)}, "
+                f"distinct propositions={len(propositions)}); a cross-source "
+                "locator monoculture is not an occurrence-level source audit"
+            )
+
+    strongest_ngram_by_support: dict[
+        str, tuple[str, str, list[tuple[int, str, str]]]
+    ] = {}
+    for (support, kind, ngram), members in evidence_ngram_groups.items():
+        units = {(reference_id, digest) for _, reference_id, digest in members}
+        references = {reference_id for _, reference_id, _ in members}
+        propositions = {digest for _, _, digest in members}
+        if (
+            len(units) < CITATION_TEMPLATE_MIN_UNITS
+            or len(references) < 6
+            or len(propositions) < 8
+        ):
+            continue
+        current = strongest_ngram_by_support.get(support)
+        if current is None or len(members) > len(current[2]):
+            strongest_ngram_by_support[support] = (kind, ngram, members)
+    for support, (kind, ngram, members) in strongest_ngram_by_support.items():
+        references = {reference_id for _, reference_id, _ in members}
+        propositions = {digest for _, _, digest in members}
+        lines = [line for line, _, _ in members[:12]]
+        errors.append(
+            f"{filename}: repeated long {kind} evidence shingle for "
+            f"support={support} covers {len(members)} rows, "
+            f"distinct ReferenceID={len(references)}, distinct propositions="
+            f"{len(propositions)}, sample lines={lines}; changing only a source "
+            f"title/proposition does not create source-specific evidence; "
+            f"shingle={ngram!r}"
+        )
 
 
 CLOSED_STATUSES = {
@@ -2647,6 +4226,7 @@ AI_VALIDATOR_RULE_INPUTS = [
 CHAIR_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
     "rules/scripts/materialize_owner_outputs.py",
+    "rules/scripts/validate_semantic_acceptance_output.py",
     "rules/scripts/validate_chair_output.py",
 ]
 SUMMARY_VALIDATOR_RULE_INPUTS = [
@@ -2658,6 +4238,14 @@ P_VALIDATOR_RULE_INPUTS = [
     "rules/scripts/validate_review_bundle.py",
     "rules/scripts/validate_stage_p_output.py",
 ]
+SEMANTIC_ACCEPTANCE_GATE_FILE = "06-semantic-acceptance-gate.json"
+SEMANTIC_ACCEPTANCE_DIRECTORY = "06-semantic-acceptance"
+SEMANTIC_ACCEPTANCE_VALIDATOR_BASENAME = (
+    "validate_semantic_acceptance_output.py"
+)
+SEMANTIC_ACCEPTANCE_MATERIALIZER_BASENAME = (
+    "materialize_semantic_acceptance_gate.py"
+)
 
 
 def portable_basename_key(value: str) -> str:
@@ -2837,6 +4425,7 @@ RESERVED_ROUND_BASENAMES = {
     "02-page-layout-ledger.csv", "03-bibliography-audit-ledger.md",
     "03-bibliography-audit-ledger.csv", "04-citation-claim-audit-ledger.md",
     "04-citation-claim-audit-ledger.csv", "05-ai-style-assessment.md",
+    SEMANTIC_ACCEPTANCE_GATE_FILE,
     "90-chair-synthesis.md", "91-revision-ledger.md",
     "91-revision-ledger.csv", "91-ai-actionable-ledger.csv",
     "92-new-evidence-or-experiments.md",
@@ -2845,6 +4434,9 @@ RESERVED_ROUND_BASENAMES = {
     "94-post-freeze-prior-issue-closure.md", "95-bundle-validation.md",
     *(f"R{index}-comprehensive-review.md" for index in range(1, 6)),
     "page-renders", "helpers", "stage-v-inputs",
+    SEMANTIC_ACCEPTANCE_DIRECTORY,
+    SEMANTIC_ACCEPTANCE_VALIDATOR_BASENAME,
+    SEMANTIC_ACCEPTANCE_MATERIALIZER_BASENAME,
 }
 RESERVED_ROUND_BASENAME_KEYS = {
     portable_basename_key(value) for value in RESERVED_ROUND_BASENAMES
@@ -2858,6 +4450,237 @@ def sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest().upper()
+
+
+def load_semantic_acceptance_validator(errors: list[str]) -> Any | None:
+    """Load the sibling semantic gate without importing round-resident code."""
+
+    path = Path(__file__).with_name(SEMANTIC_ACCEPTANCE_VALIDATOR_BASENAME)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "thesis_review_semantic_acceptance_for_full_gate", path
+        )
+        if spec is None or spec.loader is None:
+            raise RuntimeError("import specification has no loader")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+    except Exception as exc:
+        errors.append(
+            "cannot load the installed semantic-acceptance validator safely: "
+            f"{exc}"
+        )
+        return None
+
+
+def read_closed_semantic_gate(path: Path, errors: list[str]) -> dict[str, Any] | None:
+    """Read one duplicate-key-free JSON authorization projection."""
+
+    duplicate_keys: list[str] = []
+
+    def closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                duplicate_keys.append(key)
+            else:
+                result[key] = value
+        return result
+
+    try:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"), object_pairs_hook=closed_object
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append(f"{path.name}: cannot read strict JSON gate: {exc}")
+        return None
+    if duplicate_keys:
+        errors.append(
+            f"{path.name}: duplicate JSON key(s) are forbidden: "
+            f"{sorted(set(duplicate_keys))}"
+        )
+    if not isinstance(payload, dict):
+        errors.append(f"{path.name}: gate root must be one JSON object")
+        return None
+    return payload
+
+
+def validate_semantic_acceptance_gate_projection(
+    root: Path,
+    process: dict[str, Any],
+    errors: list[str],
+    *,
+    module: Any | None = None,
+) -> Any | None:
+    """Validate the hash-only PASS token exposed to the Chair.
+
+    The private ``SA-*.md/.csv`` files are deliberately absent from a Chair
+    view.  The Chair can recompute the process hash, SA prompt-hash projection,
+    exact target universe, current target-artifact hashes, and coverage
+    cardinality.  The private acceptance-file hashes are only shape-checked
+    Stage-O transport commitments here; the final full gate opens those files
+    and recomputes them byte for byte.
+    """
+
+    gate_path = root / SEMANTIC_ACCEPTANCE_GATE_FILE
+    if is_link_or_reparse(gate_path) or not gate_path.is_file():
+        errors.append(
+            f"missing or unsafe required {SEMANTIC_ACCEPTANCE_GATE_FILE}"
+        )
+        return module
+    gate = read_closed_semantic_gate(gate_path, errors)
+    if gate is None:
+        return module
+    expected_top = {
+        "schema", "round_id", "retry_id", "pdf_sha256", "process_sha256",
+        "sa_actor_prompt_sha256", "targets", "status",
+    }
+    if set(gate) != expected_top:
+        errors.append(
+            f"{gate_path.name}: top-level key set mismatch; "
+            f"missing={sorted(expected_top-set(gate))}, "
+            f"extra={sorted(set(gate)-expected_top)}"
+        )
+    expected_scalars = {
+        "schema": "thesis-review-semantic-acceptance-gate-v2",
+        "round_id": str(process.get("round_id", "")),
+        "retry_id": str(process.get("retry_id", "")),
+        "pdf_sha256": str(process.get("selected_pdf_sha256", "")).upper(),
+        "process_sha256": sha256(root / "00-process-parameters.json"),
+        "status": "PASS",
+    }
+    for key, expected in expected_scalars.items():
+        if gate.get(key) != expected:
+            errors.append(
+                f"{gate_path.name}: {key} must equal {expected!r}"
+            )
+    targets = gate.get("targets")
+    if not isinstance(targets, dict):
+        errors.append(f"{gate_path.name}: targets must be one object")
+        return module
+    reviewer_count = 5 if process.get("degree_level") == "doctorate" else 3
+    expected_targets = [
+        *(f"R{index}" for index in range(1, reviewer_count + 1)), "AI"
+    ]
+    prompt_map = process.get("actor_prompt_sha256", {})
+    expected_sa_prompt_hashes = {
+        f"SA-{target}": str(prompt_map.get(f"SA-{target}", "")).upper()
+        for target in expected_targets
+    } if isinstance(prompt_map, dict) else {}
+    if gate.get("sa_actor_prompt_sha256") != expected_sa_prompt_hashes:
+        errors.append(
+            f"{gate_path.name}: sa_actor_prompt_sha256 must exactly project "
+            "the current process actor_prompt_sha256 values for all SA actors"
+        )
+    if set(targets) != set(expected_targets):
+        errors.append(
+            f"{gate_path.name}: target actor set mismatch; "
+            f"missing={sorted(set(expected_targets)-set(targets))}, "
+            f"extra={sorted(set(targets)-set(expected_targets))}"
+        )
+    active_module = module or load_semantic_acceptance_validator(errors)
+    if active_module is None:
+        return None
+    try:
+        shared = active_module.load_shared_validator()
+    except Exception as exc:
+        errors.append(
+            "cannot load the shared validator for semantic gate projection: "
+            f"{exc}"
+        )
+        return active_module
+    derived_cache: dict[str, Any] = {}
+    expected_target_keys = {
+        "target_artifacts", "acceptance_md_sha256",
+        "acceptance_csv_sha256", "coverage_rows", "status",
+    }
+    for target in expected_targets:
+        projection = targets.get(target)
+        if not isinstance(projection, dict):
+            errors.append(f"{gate_path.name}: target {target} must be one object")
+            continue
+        if set(projection) != expected_target_keys:
+            errors.append(
+                f"{gate_path.name}: {target} key set mismatch; "
+                f"missing={sorted(expected_target_keys-set(projection))}, "
+                f"extra={sorted(set(projection)-expected_target_keys)}"
+            )
+        if projection.get("status") != "PASS":
+            errors.append(f"{gate_path.name}: {target} status must be PASS")
+        for key in ("acceptance_md_sha256", "acceptance_csv_sha256"):
+            value = projection.get(key)
+            if not isinstance(value, str) or HEX64_RE.fullmatch(value) is None:
+                errors.append(
+                    f"{gate_path.name}: {target}.{key} must be a 64-hex "
+                    "Stage-O transport commitment; the Chair cannot recompute "
+                    "private SA file bytes"
+                )
+        artifact_names = active_module.target_artifacts(
+            root, process, target, errors
+        )
+        expected_artifacts: dict[str, str] = {}
+        for relative in artifact_names:
+            artifact = root / relative
+            if is_link_or_reparse(artifact) or not artifact.is_file():
+                errors.append(
+                    f"{gate_path.name}: missing or unsafe target artifact {relative}"
+                )
+                continue
+            expected_artifacts[relative] = sha256(artifact)
+        declared_artifacts = projection.get("target_artifacts")
+        if declared_artifacts != expected_artifacts:
+            errors.append(
+                f"{gate_path.name}: {target} target_artifacts do not exactly "
+                "match the current frozen target bytes"
+            )
+        unit_errors: list[str] = []
+        expected_units = active_module.expected_units(
+            root,
+            process,
+            target,
+            unit_errors,
+            shared=shared,
+            derived_cache=derived_cache,
+        )
+        errors.extend(
+            f"{gate_path.name}: {target} coverage derivation: {item}"
+            for item in unit_errors
+        )
+        coverage = projection.get("coverage_rows")
+        if (
+            not isinstance(coverage, int)
+            or isinstance(coverage, bool)
+            or coverage != len(expected_units)
+        ):
+            errors.append(
+                f"{gate_path.name}: {target}.coverage_rows must equal the "
+                f"current expected unit count {len(expected_units)}"
+            )
+    return active_module
+
+
+def validate_complete_semantic_acceptance_set(
+    root: Path, errors: list[str], module: Any | None = None
+) -> None:
+    """Revalidate all private acceptance artifacts and their final hash gate."""
+
+    active_module = module or load_semantic_acceptance_validator(errors)
+    if active_module is None:
+        return
+    try:
+        shared = active_module.load_shared_validator()
+        semantic_errors, _ = active_module.validate_set(
+            root,
+            shared,
+            require_gate=True,
+            derived_cache={},
+        )
+    except Exception as exc:
+        errors.append(f"semantic-acceptance full-set gate failed safely: {exc}")
+        return
+    errors.extend(
+        f"semantic-acceptance: {item}" for item in semantic_errors
+    )
 
 
 def markdown_visible_text(text: str) -> str:
@@ -3050,6 +4873,7 @@ def extract_numeric_bracket_candidates(
         return [], []
     candidates: list[dict[str, Any]] = []
     unmatched_glyphs: list[dict[str, Any]] = []
+    page_texts: dict[int, str] = {}
     for physical_page, page in enumerate(reader.pages, start=1):
         if physical_page in reference_pages:
             continue
@@ -3061,6 +4885,24 @@ def extract_numeric_bracket_candidates(
                 f"{physical_page}: {exc}"
             )
             continue
+        page_texts[physical_page] = text
+
+    repeated_furniture = infer_repeated_boundary_furniture(page_texts)
+
+    for physical_page, text in page_texts.items():
+        normalized_page, raw_starts, raw_ends = (
+            normalized_citation_projection_with_raw_map(text)
+        )
+        normalized_furniture: list[tuple[int, int, str]] = []
+        raw_furniture = raw_page_furniture_spans(
+            text, repeated_furniture
+        )
+        for raw_start, raw_end, label in raw_furniture:
+            projected = normalized_span_for_raw_span(
+                raw_starts, raw_ends, raw_start, raw_end
+            )
+            if projected is not None:
+                normalized_furniture.append((*projected, label))
         canonical_mixed_delimiter_roles = {
             offset: role
             for offset, character in enumerate(text)
@@ -3111,6 +4953,12 @@ def extract_numeric_bracket_candidates(
                 continue
             start = max(0, match.start() - 160)
             end = min(len(text), match.end() + 160)
+            normalized_target = normalized_span_for_raw_span(
+                raw_starts, raw_ends, match.start(), match.end()
+            )
+            normalized_context = normalized_span_for_raw_span(
+                raw_starts, raw_ends, start, end
+            )
             candidates.append({
                 "PhysicalPage": physical_page,
                 "Marker": normalize_numeric_marker(match.group(0)),
@@ -3118,6 +4966,32 @@ def extract_numeric_bracket_candidates(
                 "Adjacent": normalize_extracted_text(text[start:end]),
                 "Prefix": text[max(0, match.start() - 100):match.start()],
                 "Suffix": text[match.end():min(len(text), match.end() + 100)],
+                # Internal-only coordinates.  Stage-P CSV serialization remains
+                # unchanged while all downstream validators retain the true PDF
+                # occurrence and raw line-furniture identity.
+                "RawPageText": text,
+                "RawStart": match.start(),
+                "RawEnd": match.end(),
+                "RawContextStart": start,
+                "RawContextEnd": end,
+                "RawFurnitureSpans": tuple(raw_furniture),
+                "NormalizedPageText": normalized_page,
+                "NormalizedRawStarts": tuple(raw_starts),
+                "NormalizedRawEnds": tuple(raw_ends),
+                "NormalizedStart": (
+                    normalized_target[0] if normalized_target is not None else -1
+                ),
+                "NormalizedEnd": (
+                    normalized_target[1] if normalized_target is not None else -1
+                ),
+                "NormalizedContextStart": (
+                    normalized_context[0] if normalized_context is not None else 0
+                ),
+                "NormalizedContextEnd": (
+                    normalized_context[1]
+                    if normalized_context is not None else len(normalized_page)
+                ),
+                "NormalizedFurnitureSpans": tuple(normalized_furniture),
             })
     return candidates, unmatched_glyphs
 
@@ -3269,19 +5143,122 @@ def deterministic_non_citation_reason(
     return f"canonical role {role}"
 
 
-def derive_and_validate_reference_pages(
+class BibliographyPageFact(NamedTuple):
+    physical_page: int
+    new_labels: tuple[int, ...]
+    carry_in_label: int | None
+    carry_in_text: str
+
+
+class BibliographyEntryFact(NamedTuple):
+    reference_id: str
+    displayed_number: int
+    raw_page_segments: tuple[tuple[int, str], ...]
+    normalized_entry: str
+
+
+class RenderedBibliographyRun(NamedTuple):
+    first_page: int
+    last_page: int
+    reference_pages: frozenset[int]
+    page_facts: dict[int, BibliographyPageFact]
+    entry_facts: dict[str, BibliographyEntryFact]
+
+
+def _raw_nonempty_line_spans(text: str) -> list[tuple[int, int, str]]:
+    """Return raw line spans (including their newline) and normalized text."""
+
+    result: list[tuple[int, int, str]] = []
+    offset = 0
+    for line in (text or "").splitlines(keepends=True):
+        end = offset + len(line)
+        normalized = normalize_extracted_text(line.rstrip("\r\n"))
+        if normalized:
+            result.append((offset, end, normalized))
+        offset = end
+    if offset < len(text or ""):
+        normalized = normalize_extracted_text((text or "")[offset:])
+        if normalized:
+            result.append((offset, len(text or ""), normalized))
+    return result
+
+
+def _bibliography_furniture_spans(
+    page_texts: dict[int, str], reference_pages: frozenset[int]
+) -> dict[int, tuple[tuple[int, int], ...]]:
+    """Identify only verified edge furniture on bibliography pages."""
+
+    line_spans = {
+        page: _raw_nonempty_line_spans(page_texts.get(page, ""))
+        for page in reference_pages
+    }
+    boundary_counts: Counter[str] = Counter()
+    for spans in line_spans.values():
+        boundary_values = {
+            normalized for _start, _end, normalized in [*spans[:3], *spans[-3:]]
+        }
+        boundary_counts.update(boundary_values)
+    repeated_threshold = max(2, math.ceil(len(reference_pages) * 0.60))
+    repeated = {
+        value for value, count in boundary_counts.items()
+        if count >= repeated_threshold
+    }
+    heading_re = re.compile(
+        r"(?i)^(?:references|bibliography|\u53c2\u8003\u6587\u732e)$"
+    )
+    printed_page_re = re.compile(r"(?i)^(?:\d{1,4}|[ivxlcdm]{1,12})$")
+    result: dict[int, tuple[tuple[int, int], ...]] = {}
+    for page, spans in line_spans.items():
+        boundary_indices = set(range(min(3, len(spans)))) | set(
+            range(max(0, len(spans) - 3), len(spans))
+        )
+        selected: list[tuple[int, int]] = []
+        for index, (start, end, normalized) in enumerate(spans):
+            if index not in boundary_indices:
+                continue
+            if (
+                normalized in repeated
+                or heading_re.fullmatch(normalized)
+                or printed_page_re.fullmatch(normalized)
+            ):
+                selected.append((start, end))
+        result[page] = tuple(selected)
+    return result
+
+
+def _slice_without_furniture(
+    text: str, start: int, end: int, furniture: Iterable[tuple[int, int]]
+) -> str:
+    """Slice raw page text while removing only intersecting verified spans."""
+
+    cursor = start
+    chunks: list[str] = []
+    for furniture_start, furniture_end in sorted(furniture):
+        if furniture_end <= start or furniture_start >= end:
+            continue
+        clipped_start = max(start, furniture_start)
+        clipped_end = min(end, furniture_end)
+        if cursor < clipped_start:
+            chunks.append(text[cursor:clipped_start])
+        cursor = max(cursor, clipped_end)
+    if cursor < end:
+        chunks.append(text[cursor:end])
+    return "".join(chunks)
+
+
+def extract_rendered_bibliography_run(
     pdf_path: Path,
-    declared_reference_pages: set[int],
     bibliography_rows: list[dict[str, str]],
     errors: list[str],
-) -> set[int]:
-    """Bind the bibliography region to the rendered [1]...[N] entry run."""
+) -> RenderedBibliographyRun | None:
+    """Derive the unique rendered bibliography run and its page/entry facts."""
+
     try:
         from pypdf import PdfReader
         reader = PdfReader(str(pdf_path), strict=False)
     except Exception as exc:
         errors.append(f"cannot derive rendered bibliography pages: {exc}")
-        return set()
+        return None
     expected_labels: list[int] = []
     for line, row in enumerate(bibliography_rows, start=2):
         match = re.fullmatch(r"\[(\d{1,4})\]", row.get("DisplayedLabel", ""))
@@ -3338,7 +5315,7 @@ def derive_and_validate_reference_pages(
             f"bibliography run and its length must equal the {length} inventory "
             f"rows; longest_length={longest_length}, tied_longest_runs={len(runs)}"
         )
-        return set()
+        return None
     rendered_run = runs[0]
     first_page = rendered_run[0][0]
     last_page = rendered_run[-1][0]
@@ -3351,15 +5328,40 @@ def derive_and_validate_reference_pages(
             "rendered bibliography run is not anchored by a References/参考文献 "
             f"heading on physical page {first_page}"
         )
-        return set()
-    derived_pages = set(range(first_page, last_page + 1))
-    if declared_reference_pages != derived_pages:
-        errors.append(
-            "00-page-inventory.csv: reference Region pages do not equal the "
-            f"rendered bibliography span; declared={sorted(declared_reference_pages)}, "
-            f"derived={sorted(derived_pages)}"
+        return None
+    derived_pages = frozenset(range(first_page, last_page + 1))
+    furniture_by_page = _bibliography_furniture_spans(page_texts, derived_pages)
+
+    selected_by_page: dict[int, list[tuple[int, int, int, int]]] = defaultdict(list)
+    for event in rendered_run:
+        selected_by_page[event[0]].append(event)
+    page_facts: dict[int, BibliographyPageFact] = {}
+    previous_label: int | None = None
+    for physical_page in sorted(derived_pages):
+        selected = selected_by_page.get(physical_page, [])
+        prefix_end = selected[0][2] if selected else len(page_texts.get(physical_page, ""))
+        carry_text = normalize_extracted_text(_slice_without_furniture(
+            page_texts.get(physical_page, ""),
+            0,
+            prefix_end,
+            furniture_by_page.get(physical_page, ()),
+        ))
+        carry_label = (
+            previous_label
+            if physical_page != first_page and carry_text and previous_label is not None
+            else None
         )
+        page_facts[physical_page] = BibliographyPageFact(
+            physical_page=physical_page,
+            new_labels=tuple(event[1] for event in selected),
+            carry_in_label=carry_label,
+            carry_in_text=carry_text if carry_label is not None else "",
+        )
+        if selected:
+            previous_label = selected[-1][1]
+
     expected_entries: list[str] = []
+    entry_facts: dict[str, BibliographyEntryFact] = {}
     for index, (current_page, _number, _start, current_end) in enumerate(
         rendered_run
     ):
@@ -3369,16 +5371,52 @@ def derive_and_validate_reference_pages(
             next_page = last_page
             next_start = len(page_texts.get(last_page, ""))
         chunks: list[str] = []
+        raw_page_segments: list[tuple[int, str]] = []
         if current_page == next_page:
-            chunks.append(page_texts.get(current_page, "")[current_end:next_start])
+            text = page_texts.get(current_page, "")
+            chunks.append(text[current_end:next_start])
+            raw_page_segments.append((current_page, _slice_without_furniture(
+                text,
+                current_end,
+                next_start,
+                furniture_by_page.get(current_page, ()),
+            )))
         else:
-            chunks.append(page_texts.get(current_page, "")[current_end:])
-            chunks.extend(
-                page_texts.get(page_number, "")
-                for page_number in range(current_page + 1, next_page)
-            )
-            chunks.append(page_texts.get(next_page, "")[:next_start])
-        expected_entries.append(normalize_extracted_text("\n".join(chunks)))
+            current_text = page_texts.get(current_page, "")
+            chunks.append(current_text[current_end:])
+            raw_page_segments.append((current_page, _slice_without_furniture(
+                current_text,
+                current_end,
+                len(current_text),
+                furniture_by_page.get(current_page, ()),
+            )))
+            for page_number in range(current_page + 1, next_page):
+                intermediate = page_texts.get(page_number, "")
+                chunks.append(intermediate)
+                raw_page_segments.append((page_number, _slice_without_furniture(
+                    intermediate,
+                    0,
+                    len(intermediate),
+                    furniture_by_page.get(page_number, ()),
+                )))
+            next_text = page_texts.get(next_page, "")
+            chunks.append(next_text[:next_start])
+            raw_page_segments.append((next_page, _slice_without_furniture(
+                next_text,
+                0,
+                next_start,
+                furniture_by_page.get(next_page, ()),
+            )))
+        normalized_entry = normalize_extracted_text("\n".join(chunks))
+        expected_entries.append(normalized_entry)
+        inventory_row = bibliography_rows[index]
+        reference_id = str(inventory_row.get("ReferenceID", ""))
+        entry_facts[reference_id] = BibliographyEntryFact(
+            reference_id=reference_id,
+            displayed_number=index + 1,
+            raw_page_segments=tuple(raw_page_segments),
+            normalized_entry=normalized_entry,
+        )
     for line, (row, expected_entry) in enumerate(
         zip(bibliography_rows, expected_entries), start=2
     ):
@@ -3387,7 +5425,148 @@ def derive_and_validate_reference_pages(
                 f"00-bibliography-inventory.csv:{line}: RenderedEntry does not "
                 "exactly equal the deterministic frozen-PDF entry slice"
             )
-    return derived_pages
+    return RenderedBibliographyRun(
+        first_page=first_page,
+        last_page=last_page,
+        reference_pages=derived_pages,
+        page_facts=page_facts,
+        entry_facts=entry_facts,
+    )
+
+
+def derive_and_validate_reference_run(
+    pdf_path: Path,
+    declared_reference_pages: set[int],
+    bibliography_rows: list[dict[str, str]],
+    errors: list[str],
+) -> RenderedBibliographyRun | None:
+    """Bind declared reference pages to one PDF-derived bibliography run."""
+
+    run = extract_rendered_bibliography_run(pdf_path, bibliography_rows, errors)
+    if run is not None and declared_reference_pages != run.reference_pages:
+        errors.append(
+            "00-page-inventory.csv: reference Region pages do not equal the "
+            f"rendered bibliography span; declared={sorted(declared_reference_pages)}, "
+            f"derived={sorted(run.reference_pages)}"
+        )
+    return run
+
+
+def derive_and_validate_reference_pages(
+    pdf_path: Path,
+    declared_reference_pages: set[int],
+    bibliography_rows: list[dict[str, str]],
+    errors: list[str],
+) -> set[int]:
+    """Backward-compatible page-set projection of the rendered run."""
+
+    run = derive_and_validate_reference_run(
+        pdf_path, declared_reference_pages, bibliography_rows, errors
+    )
+    return set(run.reference_pages) if run is not None else set()
+
+
+BIBLIOGRAPHY_DOMINANT_RANGE_RE = re.compile(
+    r"(?i)^(?:continuation\s+of\s+\[(?P<carry>\d{1,4})\]\s*;\s*)?"
+    r"bibliography\s+entries\s+\[(?P<first>\d{1,4})\]\s*[-\u2013\u2014]\s*"
+    r"\[(?P<last>\d{1,4})\]$"
+)
+BIBLIOGRAPHY_DOMINANT_CONTINUATION_ONLY_RE = re.compile(
+    r"(?i)^continuation\s+of\s+\[(?P<carry>\d{1,4})\]\s*;\s*"
+    r"no\s+new\s+bibliography\s+entry\s+labels$"
+)
+BIBLIOGRAPHY_ASSERTED_RANGE_RE = re.compile(
+    r"\[(?P<first>\d{1,4})\]\s*[-\u2013\u2014]\s*\[(?P<last>\d{1,4})\]"
+)
+BIBLIOGRAPHY_ASSERTED_CONTINUATION_RE = re.compile(
+    r"(?i)continuation\s+of\s+\[(?P<carry>\d{1,4})\]"
+)
+
+
+def validate_bibliography_page_content_claims(
+    page_ledger: Iterable[dict[str, Any]],
+    rendered_run: RenderedBibliographyRun | None,
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Bind bibliography-page label/carry-in claims to frozen-PDF facts."""
+
+    if rendered_run is None:
+        return
+    rows_by_page: dict[int, tuple[int, dict[str, Any]]] = {}
+    for line, row in enumerate(page_ledger, start=2):
+        try:
+            physical_page = int(str(row.get("PhysicalPage", "")))
+        except ValueError:
+            continue
+        rows_by_page[physical_page] = (line, row)
+    for physical_page in sorted(rendered_run.reference_pages):
+        fact = rendered_run.page_facts[physical_page]
+        record = rows_by_page.get(physical_page)
+        if record is None:
+            errors.append(
+                f"{filename}: missing bibliography physical page {physical_page}"
+            )
+            continue
+        line, row = record
+        location = f"{filename}:{line}"
+        dominant = str(row.get("DominantContent", "")).strip()
+        range_match = BIBLIOGRAPHY_DOMINANT_RANGE_RE.fullmatch(dominant)
+        continuation_only = BIBLIOGRAPHY_DOMINANT_CONTINUATION_ONLY_RE.fullmatch(
+            dominant
+        )
+        claimed_range: tuple[int, int] | None = None
+        claimed_carry: int | None = None
+        if range_match is not None:
+            claimed_range = (
+                int(range_match.group("first")), int(range_match.group("last"))
+            )
+            claimed_carry = (
+                int(range_match.group("carry"))
+                if range_match.group("carry") is not None else None
+            )
+        elif continuation_only is not None:
+            claimed_carry = int(continuation_only.group("carry"))
+        else:
+            errors.append(
+                f"{location}: bibliography DominantContent must use the closed "
+                "new-label range/continuation grammar"
+            )
+
+        expected_range = (
+            (min(fact.new_labels), max(fact.new_labels))
+            if fact.new_labels else None
+        )
+        if claimed_range != expected_range:
+            errors.append(
+                f"{location}: bibliography DominantContent new-label range "
+                f"{claimed_range} != frozen-PDF visible line-start range "
+                f"{expected_range}"
+            )
+        if claimed_carry != fact.carry_in_label:
+            errors.append(
+                f"{location}: bibliography DominantContent carry-in "
+                f"{claimed_carry} != frozen-PDF continuation "
+                f"{fact.carry_in_label}"
+            )
+
+        evidence = str(row.get("Evidence", ""))
+        for match in BIBLIOGRAPHY_ASSERTED_RANGE_RE.finditer(evidence):
+            evidence_range = (int(match.group("first")), int(match.group("last")))
+            if evidence_range != expected_range:
+                errors.append(
+                    f"{location}: Evidence bibliography label range "
+                    f"{evidence_range} != frozen-PDF visible line-start range "
+                    f"{expected_range}"
+                )
+        for match in BIBLIOGRAPHY_ASSERTED_CONTINUATION_RE.finditer(evidence):
+            evidence_carry = int(match.group("carry"))
+            if evidence_carry != fact.carry_in_label:
+                errors.append(
+                    f"{location}: Evidence bibliography continuation "
+                    f"{evidence_carry} != frozen-PDF carry-in "
+                    f"{fact.carry_in_label}"
+                )
 
 
 _CHINESE_DIGITS = {
@@ -3883,28 +6062,7 @@ def validate_pdf_derived_page_regions(
     structural_events.extend((page, "appendix", None) for page in appendix_starts)
     structural_events.extend((page, "back", None) for page in back_starts)
     structural_events.sort(key=lambda item: item[0])
-    furniture_counts: Counter[str] = Counter()
-    for text in page_texts.values():
-        lines = _rendered_top_lines(text, limit=10000)
-        for candidate in {*lines[:2], *lines[-2:]}:
-            if candidate and re.fullmatch(
-                r"(?:\d+|[ivxlcdm]+)", candidate, re.I
-            ) is None:
-                furniture_counts[candidate] += 1
-    repeated_furniture = {
-        candidate for candidate, count in furniture_counts.items()
-        if len(candidate) <= 200
-        and (
-            count >= 3
-            or (
-                count >= 2
-                and re.search(
-                    r"(?i)thesis|dissertation|university|chapter|学位论文|大学",
-                    candidate,
-                ) is not None
-            )
-        )
-    }
+    repeated_furniture = infer_repeated_boundary_furniture(page_texts)
 
     def rendered_separator_page(physical_page: int) -> bool:
         lines = _rendered_top_lines(
@@ -3912,7 +6070,15 @@ def validate_pdf_derived_page_regions(
         )
         substantive = [
             candidate for candidate in lines
-            if candidate not in repeated_furniture
+            if canonical_boundary_furniture_signature(candidate)
+            not in repeated_furniture
+            and (
+                (dynamic := generic_dynamic_boundary_furniture_observation(
+                    candidate
+                ))
+                is None
+                or dynamic[0] not in repeated_furniture
+            )
             and re.fullmatch(r"(?:\d+|[ivxlcdm]+)", candidate, re.I) is None
         ]
         return not substantive
@@ -3987,6 +6153,157 @@ def parse_canonical_physical_page_locator(value: str) -> int | None:
         value,
     )
     return int(match.group(1)) if match is not None else None
+
+
+THESIS_SECTION_ANCHOR_RE = re.compile(
+    r"(?i)(?:"
+    r"\b(?:section|sec\.)[ \t]+(\d{1,3}(?:[.\uff0e]\d{1,3})+)"
+    r"|\u00a7[ \t]*(\d{1,3}(?:[.\uff0e]\d{1,3})+)"
+    r"|\u7b2c[ \t]*(\d{1,3}(?:[.\uff0e]\d{1,3})+)[ \t]*\u8282"
+    r")"
+)
+
+
+def manifest_rendered_section_intervals(
+    manifest_path: Path,
+    page_inventory: Iterable[dict[str, Any]],
+    errors: list[str],
+) -> dict[str, tuple[int, int]]:
+    """Build page-granular section intervals from the validated manifest map."""
+
+    try:
+        text = markdown_visible_text(
+            manifest_path.read_text(encoding="utf-8", errors="replace")
+        )
+    except OSError as exc:
+        errors.append(f"{manifest_path.name}: cannot read section map: {exc}")
+        return {}
+    objective = markdown_section_body_raw(
+        text, "Objective inventories and locations"
+    ) or ""
+    serialized = labeled_value(objective, "Sections")
+    if serialized is None:
+        errors.append(f"{manifest_path.name}: missing canonical Sections map")
+        return {}
+    if serialized == "none detected":
+        return {}
+    locations: list[tuple[str, int]] = []
+    for token in serialized.split("; "):
+        match = re.fullmatch(
+            r"(\d{1,3}(?:\.\d{1,3})+)=physical p\.(\d+)", token
+        )
+        if match is None:
+            errors.append(
+                f"{manifest_path.name}: malformed canonical Sections token {token!r}"
+            )
+            return {}
+        locations.append((match.group(1), int(match.group(2))))
+    body_pages: list[int] = []
+    for row in page_inventory:
+        kind, _number = _inventory_region_semantics(str(row.get("Region", "")))
+        if kind != "chapter":
+            continue
+        try:
+            body_pages.append(int(row.get("PhysicalPage", "")))
+        except (TypeError, ValueError):
+            continue
+    body_end = max(body_pages, default=max(page for _, page in locations))
+    result: dict[str, tuple[int, int]] = {}
+    for index, (label, start) in enumerate(locations):
+        depth = len(label.split("."))
+        next_boundary = next(
+            (
+                later_page
+                for later_label, later_page in locations[index + 1:]
+                if len(later_label.split(".")) <= depth
+            ),
+            body_end + 1,
+        )
+        result[label] = (start, max(start, next_boundary - 1))
+    return result
+
+
+def validate_pdf_section_anchor_value(
+    value: str,
+    section_intervals: dict[str, tuple[int, int]],
+    filename: str,
+    item_label: str,
+    errors: list[str],
+) -> None:
+    """Bind every explicitly named thesis section to its physical-page span."""
+
+    section_labels = [
+        next(group for group in match.groups() if group is not None).replace("\uff0e", ".")
+        for match in THESIS_SECTION_ANCHOR_RE.finditer(value or "")
+    ]
+    if not section_labels:
+        return
+    physical_page = parse_canonical_physical_page_locator(value or "")
+    if physical_page is None:
+        errors.append(
+            f"{filename}: {item_label} explicitly names thesis section(s) "
+            f"{section_labels} without a canonical physical p.<n> anchor"
+        )
+        return
+    for label in section_labels:
+        interval = section_intervals.get(label)
+        if interval is None:
+            errors.append(
+                f"{filename}: {item_label} names Section {label}, which is absent "
+                "from the PDF-derived manifest section map"
+            )
+            continue
+        if not (interval[0] <= physical_page <= interval[1]):
+            errors.append(
+                f"{filename}: {item_label} anchors Section {label} at physical "
+                f"p.{physical_page}, outside its rendered interval physical "
+                f"p.{interval[0]}-{interval[1]}"
+            )
+
+
+def validate_reviewer_pdf_section_anchors(
+    report_text: str,
+    reviewer_index: int,
+    physical_page_count: int,
+    section_intervals: dict[str, tuple[int, int]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Check only the canonical Gate/finding/question anchor fields."""
+
+    local_errors: list[str] = []
+    findings = parse_reviewer_findings(
+        report_text, reviewer_index, filename, physical_page_count, local_errors
+    )
+    questions = parse_reviewer_questions(
+        report_text, reviewer_index, filename, physical_page_count, local_errors
+    )
+    assessment = markdown_section_body_raw(
+        report_text, "Whole-thesis assessment"
+    ) or ""
+    gate_rows = parse_markdown_table_by_exact_headers(
+        assessment,
+        REVIEWER_ASSESSMENT_HEADERS,
+        filename,
+        local_errors,
+        case_sensitive=True,
+    ) or []
+    for row in gate_rows:
+        if len(row) == len(REVIEWER_ASSESSMENT_HEADERS):
+            validate_pdf_section_anchor_value(
+                row[3], section_intervals, filename,
+                f"Gate {row[0]} evidence", errors,
+            )
+    for finding_id, fields in findings.items():
+        validate_pdf_section_anchor_value(
+            fields.get("Location", ""), section_intervals, filename,
+            f"{finding_id} Location", errors,
+        )
+    for question_id, row in questions.items():
+        validate_pdf_section_anchor_value(
+            row[1], section_intervals, filename,
+            f"{question_id} Exact PDF anchor", errors,
+        )
 
 
 def contains_persona_signal(value: str, signal: str) -> bool:
@@ -5013,7 +7330,8 @@ def canonical_stage_opened_inputs(
             "04-citation-claim-audit-ledger.md",
             "04-citation-claim-audit-ledger.csv",
             *(f"R{index}-comprehensive-review.md" for index in range(1, reviewer_count + 1)),
-            "05-ai-style-assessment.md", *helper_inputs,
+            "05-ai-style-assessment.md", SEMANTIC_ACCEPTANCE_GATE_FILE,
+            *helper_inputs,
         ]
     if actor_id == "S":
         return [
@@ -5601,6 +7919,10 @@ def parse_reviewer_findings(
                     f"{filename}: {finding_id} missing or duplicated field {label!r}"
                 )
         normalized_fields = {key: (value or "").strip() for key, value in fields.items()}
+        # The heading is substantive report text.  Retain it for downstream
+        # reconciliation so a citation defect cannot hide exclusively in the
+        # title while every labeled field stays generic.
+        normalized_fields["Heading title"] = match.group(2).strip()
         findings[finding_id] = normalized_fields
         ordered_numbers.append(int(re.search(r"(\d+)$", finding_id).group(1)))
         primary_gate = normalized_fields["Primary gate"].upper()
@@ -5704,6 +8026,371 @@ def parse_reviewer_questions(
     if numbers != list(range(1, len(numbers) + 1)):
         errors.append(f"{filename}: reviewer question IDs must be continuous from Q01")
     return result
+
+
+CITATION_OWNER_FINDING_RE = re.compile(
+    r"(?:\b(?:citations?|cited(?:\s+sources?)?|bibliograph(?:y|ic)|doi|arxiv|"
+    r"persistent\s+(?:identit(?:y|ies)|identifiers?|source\s+identit(?:y|ies))|"
+    r"source\s+(?:identit(?:y|ies)|support)|"
+    r"sources?\s+(?:\[\d+(?:\s*[-\u2013\u2014,]\s*\d+)*\]\s*)?"
+    r"(?:(?:(?:do(?:es)?|did)\s+not|cannot|"
+    r"fail(?:s|ed)?\s+to)\s+)?(?:support|substantiate|justify|contradict|"
+    r"mismatch|lack\s+(?:stable\s+)?identit(?:y|ies))|"
+    r"rendered\s+(?:references?|records?)|references?(?:\s*\[\d+)?)\b|"
+    r"引用|参考文献|书目|文献条目|持久标识符|来源身份|"
+    r"(?:DOI|URL)\s*(?:缺失|错误|不一致))",
+    re.IGNORECASE,
+)
+
+
+OWNED_RECONCILIATION_HEADERS = [
+    "Report item ID", "Owned-ledger selectors",
+]
+
+
+def validate_owned_ledger_report_reconciliation(
+    report_text: str,
+    findings: dict[str, dict[str, str]],
+    questions: dict[str, list[str]],
+    owner_id: str,
+    degree_level: str,
+    page_ledger: Iterable[dict[str, Any]],
+    bibliography_ledger: Iterable[dict[str, Any]],
+    citation_ledger: Iterable[dict[str, Any]],
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Require an exact bidirectional report-item/owned-row join.
+
+    Report prose is not an authority for owned audit defects.  The dedicated
+    selector table must expand to exactly the 02/03/04 rows whose closed
+    disposition names that same current report item, and every such row must be
+    selected back.  Free-form evidence text never contributes a disposition.
+    """
+
+    normalized_degree = str(degree_level or "").casefold()
+    allowed_ledgers = (
+        {"04"}
+        if normalized_degree == "doctorate" and owner_id == "R4"
+        else {"02", "03"}
+        if normalized_degree == "doctorate" and owner_id == "R5"
+        else {"02", "03", "04"}
+        if normalized_degree == "masters" and owner_id == "R3"
+        else set()
+    )
+    if not allowed_ledgers:
+        return
+
+    require_unique_level2_headings(
+        report_text,
+        ("Owned-ledger finding/question reconciliation",),
+        filename,
+        errors,
+    )
+    section = markdown_section_body_raw(
+        report_text, "Owned-ledger finding/question reconciliation"
+    ) or ""
+    if count_complete_markdown_pipe_tables(section) != 1:
+        errors.append(
+            f"{filename}: Owned-ledger finding/question reconciliation must "
+            "contain exactly one complete canonical table"
+        )
+    parsed_rows = parse_markdown_table_by_exact_headers(
+        section,
+        OWNED_RECONCILIATION_HEADERS,
+        filename,
+        errors,
+        case_sensitive=True,
+    )
+    rows = parsed_rows or []
+    expected_items = [*findings, *questions]
+    observed_items = [row[0] for row in rows if len(row) == 2]
+    if observed_items != expected_items:
+        errors.append(
+            f"{filename}: owned-ledger reconciliation item order/set must equal "
+            f"the current Findings then Questions order; expected={expected_items}, "
+            f"observed={observed_items}"
+        )
+
+    owner_item_re = re.compile(
+        rf"^{re.escape(owner_id)}-(?:F|Q)\d{{2,4}}$"
+    )
+    owner_token_re = re.compile(
+        rf"(?<![A-Za-z0-9]){re.escape(owner_id)}-(?:F|Q)\d{{2,4}}"
+        rf"(?![A-Za-z0-9])"
+    )
+    authoritative: dict[tuple[str, str], str | None] = {}
+    order: dict[tuple[str, str], tuple[int, int]] = {}
+    reference_pairs: dict[str, list[tuple[str, str]]] = defaultdict(list)
+
+    page_rows = list(page_ledger)
+    bib_rows = list(bibliography_ledger)
+    citation_rows = list(citation_ledger)
+    for index, row in enumerate(page_rows):
+        page_id = str(row.get("PageID", ""))
+        key = ("02", page_id)
+        disposition = str(row.get("Disposition", "")).strip()
+        match = re.fullmatch(
+            rf"finding[ \t]+({re.escape(owner_id)}-F\d{{2,4}})",
+            disposition,
+            re.I,
+        )
+        authoritative[key] = match.group(1) if match else None
+        order[key] = (0, index)
+    for index, row in enumerate(bib_rows):
+        reference_id = str(row.get("ReferenceID", ""))
+        field = str(row.get("Field", ""))
+        key = ("03", f"{reference_id}/{field}")
+        disposition = str(row.get("FindingDisposition", "")).strip()
+        verdict = str(row.get("Verdict", "")).strip().casefold()
+        disposition_item = disposition if owner_item_re.fullmatch(disposition) else None
+        if verdict in {"exact", "legitimate n/a"} and disposition != "none":
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{index + 2}: verdict={verdict} "
+                "requires FindingDisposition=none"
+            )
+        elif verdict == "mismatch" and disposition_item is None:
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{index + 2}: mismatch requires "
+                f"one exact current {owner_id} finding/question disposition"
+            )
+        elif verdict == "unverifiable" and disposition != "none" and disposition_item is None:
+            errors.append(
+                f"03-bibliography-audit-ledger.csv:{index + 2}: unverifiable "
+                f"FindingDisposition must be none or one exact {owner_id} item"
+            )
+        authoritative[key] = disposition_item
+        order[key] = (1, index)
+    for index, row in enumerate(citation_rows):
+        pair_id = str(row.get("PairID", ""))
+        key = ("04", pair_id)
+        severity = str(row.get("SeverityFinding", "")).strip()
+        evidence = str(row.get("DispositionEvidence", ""))
+        disposition_item = severity if owner_item_re.fullmatch(severity) else None
+        evidence_links = owner_token_re.findall(evidence)
+        if evidence_links:
+            errors.append(
+                f"04-citation-claim-audit-ledger.csv:{index + 2}: owning report "
+                "IDs are permitted only in SeverityFinding, never in "
+                "DispositionEvidence"
+            )
+        if severity not in {"", "none"} and disposition_item is None:
+            errors.append(
+                f"04-citation-claim-audit-ledger.csv:{index + 2}: "
+                f"SeverityFinding must be none or one exact {owner_id} item"
+            )
+        if disposition_item and re.search(
+            r"(?i)\breasoned[ -]non-finding\s*:", evidence
+        ):
+            errors.append(
+                f"04-citation-claim-audit-ledger.csv:{index + 2}: one row cannot "
+                "simultaneously name an owning report item and declare a "
+                "reasoned non-finding"
+            )
+        authoritative[key] = disposition_item
+        order[key] = (2, index)
+        reference_pairs[str(row.get("ReferenceID", ""))].append(key)
+
+    selector_re = re.compile(
+        r"(?:02:page=(P\d{4})|"
+        r"03:field=(REF\d{4})/([a-z0-9_]+)|"
+        r"04:pair=(C\d{4}-S\d{2,4})|"
+        r"04:reference=(REF\d{4}))"
+    )
+    selected_by_item: dict[str, set[tuple[str, str]]] = {}
+    selected_global: dict[tuple[str, str], str] = {}
+    for row_index, row in enumerate(rows, start=1):
+        if len(row) != 2:
+            continue
+        item_id, serialized = (cell.strip() for cell in row)
+        if item_id not in expected_items or not owner_item_re.fullmatch(item_id):
+            continue
+        if serialized == "none":
+            selected_by_item[item_id] = set()
+            continue
+        tokens = serialized.split(", ")
+        if not tokens or ", ".join(tokens) != serialized or len(tokens) != len(set(tokens)):
+            errors.append(
+                f"{filename}: reconciliation row {item_id} selectors must be a "
+                "duplicate-free comma-space list"
+            )
+            selected_by_item[item_id] = set()
+            continue
+        expanded: list[tuple[str, str]] = []
+        selector_order: list[tuple[int, int]] = []
+        explicit_pairs: set[tuple[str, str]] = set()
+        referenced_refs: set[str] = set()
+        valid = True
+        for token in tokens:
+            match = selector_re.fullmatch(token)
+            if match is None:
+                errors.append(
+                    f"{filename}: reconciliation row {item_id} has invalid "
+                    f"selector {token!r}"
+                )
+                valid = False
+                continue
+            if match.group(1):
+                ledger, unit = "02", match.group(1)
+                units = [(ledger, unit)]
+            elif match.group(2):
+                ledger, unit = "03", f"{match.group(2)}/{match.group(3)}"
+                units = [(ledger, unit)]
+            elif match.group(4):
+                ledger, unit = "04", match.group(4)
+                units = [(ledger, unit)]
+                explicit_pairs.add((ledger, unit))
+            else:
+                ledger = "04"
+                reference_id = match.group(5) or ""
+                units = list(reference_pairs.get(reference_id, []))
+                referenced_refs.add(reference_id)
+                if not units:
+                    errors.append(
+                        f"{filename}: reconciliation row {item_id} selects "
+                        f"unknown/empty citation reference {reference_id}"
+                    )
+                    valid = False
+                    continue
+            if ledger not in allowed_ledgers:
+                errors.append(
+                    f"{filename}: reconciliation row {item_id} cannot select "
+                    f"ledger {ledger} for {owner_id}"
+                )
+                valid = False
+                continue
+            for unit_key in units:
+                if unit_key not in authoritative:
+                    errors.append(
+                        f"{filename}: reconciliation row {item_id} selects "
+                        f"unknown owned row {token!r}"
+                    )
+                    valid = False
+                    continue
+                expanded.append(unit_key)
+            if units:
+                selector_order.append(min(order[unit_key] for unit_key in units))
+        if selector_order != sorted(selector_order):
+            errors.append(
+                f"{filename}: reconciliation row {item_id} selectors are not in "
+                "02/03/04 authoritative row order"
+            )
+        for reference_id in referenced_refs:
+            overlap = explicit_pairs & set(reference_pairs.get(reference_id, []))
+            if overlap:
+                errors.append(
+                    f"{filename}: reconciliation row {item_id} mixes "
+                    f"04:reference={reference_id} with its pair selector(s)"
+                )
+                valid = False
+        if len(expanded) != len(set(expanded)):
+            errors.append(
+                f"{filename}: reconciliation row {item_id} expands duplicate "
+                "owned rows"
+            )
+            valid = False
+        selected_by_item[item_id] = set(expanded) if valid else set(expanded)
+        for unit_key in set(expanded):
+            previous = selected_global.get(unit_key)
+            if previous is not None and previous != item_id:
+                errors.append(
+                    f"{filename}: owned row {unit_key} is selected by both "
+                    f"{previous} and {item_id}"
+                )
+            selected_global[unit_key] = item_id
+
+    for item_id in expected_items:
+        expected_units = {
+            key for key, disposition in authoritative.items()
+            if disposition == item_id and key[0] in allowed_ledgers
+        }
+        observed_units = selected_by_item.get(item_id, set())
+        if observed_units != expected_units:
+            errors.append(
+                f"{filename}: reconciliation for {item_id} does not exactly "
+                f"match authoritative owned rows; missing={sorted(expected_units - observed_units)}, "
+                f"extra={sorted(observed_units - expected_units)}"
+            )
+
+    for key, disposition in authoritative.items():
+        if key[0] not in allowed_ledgers or disposition is None:
+            continue
+        if disposition not in expected_items:
+            errors.append(
+                f"{filename}: authoritative owned row {key} names unknown current "
+                f"report item {disposition}"
+            )
+        elif selected_global.get(key) != disposition:
+            errors.append(
+                f"{filename}: authoritative owned row {key} is not selected back "
+                f"by {disposition}"
+            )
+
+
+def validate_citation_owner_report_ledger_consistency(
+    findings: dict[str, dict[str, str]],
+    questions: dict[str, list[str]],
+    citation_ledger: Iterable[dict[str, Any]],
+    owner_index: int,
+    filename: str,
+    errors: list[str],
+) -> None:
+    """Reject citation findings that disappear from the authoritative 04 rows.
+
+    The ledger may contain reasoned non-findings, but the frozen report cannot
+    elevate those same citation records into a required defect without linking
+    the owning current finding/question from at least one affected Pair row.
+    Non-citation findings discovered by the holistic owner remain valid and do
+    not need an artificial 04 link.
+    """
+
+    owner_token_re = re.compile(
+        rf"(?<![A-Za-z0-9])R{owner_index}-(?:F|Q)\d{{2,4}}(?![A-Za-z0-9])"
+    )
+    linked_pairs: dict[str, set[str]] = defaultdict(set)
+    for line, row in enumerate(citation_ledger, start=2):
+        severity = str(row.get("SeverityFinding", ""))
+        evidence = str(row.get("DispositionEvidence", ""))
+        links = set(owner_token_re.findall(severity))
+        for link in links:
+            linked_pairs[link].add(str(row.get("PairID", "")))
+        if owner_token_re.search(evidence):
+            errors.append(
+                f"04-citation-claim-audit-ledger.csv:{line}: owning report IDs "
+                "are permitted only in SeverityFinding, never in "
+                "DispositionEvidence"
+            )
+        if links and re.search(
+            r"(?i)\breasoned[ -]non-finding\s*:",
+            evidence,
+        ):
+            errors.append(
+                f"04-citation-claim-audit-ledger.csv:{line}: one row cannot "
+                "simultaneously link an owning finding/question and declare a "
+                "reasoned non-finding"
+            )
+
+    for finding_id, fields in findings.items():
+        finding_text = " ".join(fields.values())
+        if (
+            CITATION_OWNER_FINDING_RE.search(finding_text)
+            and not linked_pairs.get(finding_id)
+        ):
+            errors.append(
+                f"{filename}: citation/bibliography-specific finding "
+                f"{finding_id} is not linked from any authoritative 04 Pair row; "
+                "a report cannot elevate rows signed as reasoned non-findings"
+            )
+    for question_id, cells in questions.items():
+        question_text = " ".join(cells)
+        if (
+            CITATION_OWNER_FINDING_RE.search(question_text)
+            and not linked_pairs.get(question_id)
+        ):
+            errors.append(
+                f"{filename}: citation/bibliography-specific question "
+                f"{question_id} is not linked from any authoritative 04 Pair row"
+            )
 
 
 def parse_count_integer_vector(value: str) -> tuple[int, ...] | None:
@@ -9450,9 +12137,21 @@ def validate_process(
 ) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
     if process_override is None:
         process_path = root / "00-process-parameters.json"
+        def reject_duplicate_keys(
+            pairs: list[tuple[str, Any]],
+        ) -> dict[str, Any]:
+            value: dict[str, Any] = {}
+            for key, item in pairs:
+                if key in value:
+                    raise ValueError(f"duplicate JSON key {key!r}")
+                value[key] = item
+            return value
         try:
-            process = json.loads(process_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            process = json.loads(
+                process_path.read_text(encoding="utf-8"),
+                object_pairs_hook=reject_duplicate_keys,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"cannot read 00-process-parameters.json: {exc}")
             return {}, root / "__missing__.pdf", "", 0, 0, []
     else:
@@ -9676,8 +12375,9 @@ def validate_process(
         reviewer_count = 5 if degree == "doctorate" else 3
     prompt_map = process.get("actor_prompt_sha256")
     expected_prompt_actors = {
-        "P", "AI", "C", "S",
+        "P", "AI", "SA-AI", "C", "S",
         *(f"R{index}" for index in range(1, reviewer_count + 1)),
+        *(f"SA-R{index}" for index in range(1, reviewer_count + 1)),
     }
     if not isinstance(prompt_map, dict):
         errors.append("actor_prompt_sha256 must be an object")
@@ -9961,7 +12661,8 @@ def main(argv: list[str] | None = None) -> int:
         "03-bibliography-audit-ledger.csv",
         "04-citation-claim-audit-ledger.md",
         "04-citation-claim-audit-ledger.csv",
-        "05-ai-style-assessment.md", "90-chair-synthesis.md",
+        "05-ai-style-assessment.md", SEMANTIC_ACCEPTANCE_GATE_FILE,
+        "90-chair-synthesis.md",
         "91-revision-ledger.md", "91-revision-ledger.csv",
         "91-ai-actionable-ledger.csv", "92-new-evidence-or-experiments.md",
         "92-new-evidence-or-experiments.csv",
@@ -9992,6 +12693,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args.pre_stage_s and (root / optional_stage_v).is_file():
         allowed_root_files.add(optional_stage_v)
     allowed_root_directories = {"page-renders", "helpers"}
+    if not args.pre_stage_s:
+        allowed_root_directories.add(SEMANTIC_ACCEPTANCE_DIRECTORY)
     if not args.pre_stage_s and (root / optional_stage_v).is_file():
         allowed_root_directories.add("stage-v-inputs")
     unexpected_root_files: list[str] = []
@@ -10025,6 +12728,12 @@ def main(argv: list[str] | None = None) -> int:
         errors.append(
             "closed current-round root contains symlink/special entries: "
             f"{sorted(invalid_root_entries)}"
+        )
+
+    semantic_acceptance_module: Any | None = None
+    if args.pre_stage_s:
+        semantic_acceptance_module = validate_semantic_acceptance_gate_projection(
+            root, process, errors
         )
 
     page_inventory = read_csv(
@@ -10304,12 +13013,22 @@ def main(argv: list[str] | None = None) -> int:
                 reference_pages.add(int(row["PhysicalPage"]))
             except (TypeError, ValueError):
                 pass
-    reference_pages = derive_and_validate_reference_pages(
+    rendered_bibliography_run = derive_and_validate_reference_run(
         frozen_path,
         reference_pages,
         bib_inventory,
         errors,
-    ) if frozen_path.is_file() else set()
+    ) if frozen_path.is_file() else None
+    reference_pages = (
+        set(rendered_bibliography_run.reference_pages)
+        if rendered_bibliography_run is not None else set()
+    )
+    validate_bibliography_page_content_claims(
+        page_ledger,
+        rendered_bibliography_run,
+        "02-page-layout-ledger.csv",
+        errors,
+    )
     if frozen_path.is_file():
         validate_pdf_derived_page_regions(
             frozen_path, page_inventory, reference_pages, errors
@@ -10561,12 +13280,14 @@ def main(argv: list[str] | None = None) -> int:
         bib_inv_by_id,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     validate_bibliography_field_semantics(
         bib_ledger,
         bib_inv_by_id,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     validate_bibliography_evidence_specificity(
         bib_ledger,
@@ -10748,9 +13469,13 @@ def main(argv: list[str] | None = None) -> int:
         citation_ledger, "PairID",
         "04-citation-claim-audit-ledger.csv", errors,
     )
-    validate_citation_claim_semantic_specificity(
+    citation_occurrence_anchors = build_citation_occurrence_anchors(
+        citation_candidates, extracted_candidates
+    )
+    validate_citation_claim_mechanical_semantics(
         citation_ledger,
         citation_inv_by_pair,
+        citation_occurrence_anchors,
         "04-citation-claim-audit-ledger.csv",
         errors,
     )
@@ -11449,6 +14174,9 @@ def main(argv: list[str] | None = None) -> int:
             reviewer_count,
             errors,
         )
+        section_intervals = manifest_rendered_section_intervals(
+            root / "00-manifest.md", page_inventory, errors
+        )
         validate_declarations(
             root / "01-policy-basis.md", expected_hash, errors,
             process=process, actor_id="P", reviewer_count=reviewer_count,
@@ -11532,6 +14260,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         current_reviewer_findings: dict[str, dict[str, str]] = {}
         current_reviewer_questions: dict[str, list[str]] = {}
+        current_reviewer_texts: dict[str, str] = {}
         persona_emphases: dict[str, str] = {}
         for index in range(1, reviewer_count + 1):
             report_path = root / f"R{index}-comprehensive-review.md"
@@ -11539,6 +14268,15 @@ def main(argv: list[str] | None = None) -> int:
                 continue
             report_text = markdown_visible_text(
                 report_path.read_text(encoding="utf-8", errors="replace")
+            )
+            current_reviewer_texts[f"R{index}"] = report_text
+            validate_reviewer_pdf_section_anchors(
+                report_text,
+                index,
+                page_count,
+                section_intervals,
+                report_path.name,
+                errors,
             )
             current_reviewer_findings.update(
                 parse_reviewer_findings(
@@ -11564,6 +14302,50 @@ def main(argv: list[str] | None = None) -> int:
             )
         current_reviewer_finding_ids = set(current_reviewer_findings)
         current_reviewer_question_ids = set(current_reviewer_questions)
+        citation_owner_index = 4 if reviewer_count == 5 else 3
+        validate_citation_owner_report_ledger_consistency(
+            {
+                finding_id: fields
+                for finding_id, fields in current_reviewer_findings.items()
+                if finding_id.startswith(f"R{citation_owner_index}-")
+            },
+            {
+                question_id: cells
+                for question_id, cells in current_reviewer_questions.items()
+                if question_id.startswith(f"R{citation_owner_index}-")
+            },
+            citation_ledger,
+            citation_owner_index,
+            f"R{citation_owner_index}-comprehensive-review.md",
+            errors,
+        )
+        owner_ids = (
+            ("R4", "R5")
+            if reviewer_count == 5
+            else ("R3",)
+        )
+        for owner_id in owner_ids:
+            owner_index = int(owner_id[1:])
+            validate_owned_ledger_report_reconciliation(
+                current_reviewer_texts.get(owner_id, ""),
+                {
+                    finding_id: fields
+                    for finding_id, fields in current_reviewer_findings.items()
+                    if finding_id.startswith(f"{owner_id}-")
+                },
+                {
+                    question_id: cells
+                    for question_id, cells in current_reviewer_questions.items()
+                    if question_id.startswith(f"{owner_id}-")
+                },
+                owner_id,
+                str(process.get("degree_level", "")),
+                page_ledger,
+                bib_ledger,
+                citation_ledger,
+                f"R{owner_index}-comprehensive-review.md",
+                errors,
+            )
         audit_link_ids = {
             match
             for row in bib_ledger
@@ -11831,6 +14613,11 @@ def main(argv: list[str] | None = None) -> int:
             )
         validate_helper_bundle(
             root, expected_hash, process, reviewer_count, errors
+        )
+
+    if not args.pre_stage_s:
+        validate_complete_semantic_acceptance_set(
+            root, errors, semantic_acceptance_module
         )
 
     if validation_report_path is not None:

@@ -30,6 +30,15 @@ thesis-review-round-YYYYMMDD/
   R3-comprehensive-review.md
   R4-comprehensive-review.md      # doctorate only
   R5-comprehensive-review.md      # doctorate only
+  06-semantic-acceptance/         # mandatory fresh semantic acceptors; never Chair inputs
+    SA-R1.md
+    SA-R1.csv
+    ...
+    SA-R5.md                      # doctorate only
+    SA-R5.csv                     # doctorate only
+    SA-AI.md
+    SA-AI.csv
+  06-semantic-acceptance-gate.json # deterministic hash-only PASS gate visible to Chair
   90-chair-synthesis.md
   91-revision-ledger.md
   91-revision-ledger.csv
@@ -53,7 +62,7 @@ Both citation ledgers are mandatory. For a doctorate, R5 owns `03-bibliography-a
 
 `05-ai-style-assessment.md` is mandatory for both degree levels but is not an R-numbered reviewer report. Its assessor freezes independently from the reviewer panel and follows `ai-style-audit.md`.
 
-Every new bundle follows `clean-room-orchestration.md`. `00`--`05`, every R report, `90`--`93`, and optional `94` are stage-owned artifacts; a conversation-aware orchestrator may not draft their substantive content. CSV files are the machine-readable master row sets and Markdown files are signed human-readable summaries/views. Preserve deterministic IDs, quote multiline CSV fields, and never let a Markdown row exist without the matching CSV row. `95` records mechanical completeness only and cannot cure semantic defects.
+Every new bundle follows `clean-room-orchestration.md`. `00`--`06`, every R report, `90`--`93`, and optional `94` are stage-owned artifacts; a conversation-aware orchestrator may not draft their substantive content. CSV files are the machine-readable master row sets and Markdown files are signed human-readable summaries/views. Preserve deterministic IDs, quote multiline CSV fields, and never let a Markdown row exist without the matching CSV row. `95` records mechanical completeness only and cannot cure semantic defects.
 
 ## Neutral process parameters
 
@@ -79,11 +88,16 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
   "governing_rule_urls": [],
   "governing_local_files": [{"neutral_file": "rule-01.pdf", "official_title": "...", "sha256": "..."}],
   "decision_regime_status": "verified-institutional|skill-default|undetermined",
-  "actor_prompt_sha256": {"P": "...", "R1": "...", "R2": "...", "R3": "...", "AI": "...", "C": "...", "S": "..."}
+  "actor_prompt_sha256": {"P": "...", "R1": "...", "R2": "...", "R3": "...", "R4": "...", "R5": "...", "AI": "...", "SA-R1": "...", "SA-R2": "...", "SA-R3": "...", "SA-R4": "...", "SA-R5": "...", "SA-AI": "...", "C": "...", "S": "..."}
 }
 ```
 
-`actor_prompt_sha256` is a closed mechanical launch plan. It contains `P`, every degree-appropriate `R` actor (`R1`--`R5` for a doctorate or `R1`--`R3` for a master's thesis), `AI`, `C`, and `S`, with one distinct 64-hex prompt hash per actor; `V` is present if and only if optional `94-post-freeze-prior-issue-closure.md` is actually launched. The hash is computed from the exact operational-prompt bytes before the fresh actor starts, and Stage O dispatches those same bytes. It does not contain thesis assertions. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and filesystem aliases are invalid. Governing-file and frozen-PDF basenames are mutually distinct and do not reuse any skill-reference, generated-artifact (including `P####.png`), or closed-root-directory basename.
+`actor_prompt_sha256` is a closed mechanical launch plan. It contains `P`, every degree-appropriate `R` actor (`R1`--`R5` for a doctorate or `R1`--`R3` for a master's thesis), `AI`, one matching fresh semantic acceptor for every such actor (`SA-R1`--`SA-R5` or `SA-R1`--`SA-R3`, plus `SA-AI`), `C`, and `S`, with one distinct 64-hex prompt hash per actor; `V` is present if and only if optional `94-post-freeze-prior-issue-closure.md` is actually launched. The doctorate-shaped JSON above is illustrative; omit `R4`, `R5`, `SA-R4`, and `SA-R5` for a master's thesis. The hash is computed from the exact operational-prompt bytes before the fresh actor starts, and Stage O dispatches those same bytes. It does not contain thesis assertions. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and filesystem aliases are invalid. Governing-file and frozen-PDF basenames are mutually distinct and do not reuse any skill-reference, generated-artifact (including `P####.png`), or closed-root-directory basename.
+
+The process envelope is strict JSON: duplicate keys are forbidden at every
+nesting level. Full validation and every scoped mode, including the Chair's
+`--pre-stage-s` path, use the same fail-closed duplicate-key rule as Stage SA;
+ordinary JSON last-key-wins behavior is never an authorization rule.
 
 ## Manifest
 
@@ -143,7 +157,7 @@ For every R actor, immediately after `ai-style-audit.md`, insert exactly one rol
 - doctoral R4: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_r4_output.py`;
 - doctoral R5: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py`;
 - master's R3: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_master_r3_output.py`;
-- Chair C: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_chair_output.py`;
+- Chair C: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py`;
 - Stage S: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_summary_output.py`.
 
 `materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
@@ -251,6 +265,16 @@ Explain the additional scrutiny performed because of this reviewer's expertise. 
 
 Every Gate A--I row, every finding block, and every nonempty question row contains at least one physical-page anchor within `1..physical_page_count`; new artifacts emit that anchor as `physical p.<n>`. A logical page, section, table, figure, or equation locator may follow but never replaces the physical anchor. Finding headings use continuous `Rn-F01...` IDs in report order, with no gap or duplicate. Nonempty question rows use continuous `Rn-Q01...` IDs in report order; the header-only canonical question table is the explicit no-question result.
 
+When an anchor additionally names an explicit thesis section using `Section
+2.2.3`, `Sec. 2.2.3`, `§2.2.3`, or `第2.2.3节`, that section must exist in the
+PDF-derived Stage-P section map and the physical page must fall within its
+rendered interval. The interval starts at the heading page and ends immediately
+before the next heading of equal or shallower depth (or at the rendered body
+boundary for the final section). Bare decimals and `Table`/`Figure`/`Equation`
+numbers, DOI components, metric values, and model versions are not section
+anchors. A page-only anchor remains valid; this check applies only when the
+report chooses to state an explicit section.
+
 `Required action` and `Needed clarification/evidence` are constrained by the thesis submission obligation. They may request a PDF-visible edit, genuinely necessary new evidence whose result will be reported in the revised thesis, or a verified formal submission attachment. They must not request hidden code/commit identifiers, environment locks, full command files, checkpoint/model-file hashes, sample/member hashes, immutable manifests, controlled audit packages, internal logs, table scripts, or confidential raw data merely because such materials are absent. That absence is not preserved as a reviewer question. If a verified governing rule or an exact public-artifact claim creates an exception, name the rule or PDF claim and ask only for the least disclosure needed in the revised submission.
 
 The page-layout-owning reviewer (doctoral R5 or master's R3) must additionally report the following audit-duty section after completing the same whole-thesis report as every other reviewer. This section cannot substitute for the Gate A--I matrix or persona-weighted analysis:
@@ -317,13 +341,55 @@ column. `ContentSourceOpened` is the complete identity-bound source-content
 endpoint itself; a complete URL recorded only as an auxiliary `accessed
 endpoint:` does not cure a truncated main endpoint. Locators and evidence are
 occurrence-specific rather than a bulk template with only URLs, identifiers,
-numbers, Pair IDs, or proposition quotations changed.
+numbers, Pair IDs, source titles, or proposition quotations changed. The
+proposition is an atomic source-responsibility span: it contains neither another
+Stage-P occurrence marker nor running page furniture/detached page number, is no
+longer than 300 marker-stripped normalized non-whitespace characters, and does
+not attribute a
+thesis-local method/result/table value directly to an external source. Split
+multi-source sentences by supported clause. Above 200 characters, any genuine
+internal sentence or clause boundary is fatal and the proposition must be split;
+ordinary abbreviations such as `e.g.` and `et al.` do not create that boundary.
+`Abstract` alone is insufficient
+for a detailed equation, theorem, metric definition, algorithm step, or table
+value.
+
+The evidence text after the binding marker uses the closed four-clause sequence
+from `citation-audit.md`: `pair role`, `source-stated claim`, `source anchor`,
+and `support boundary`. A bare locator or title-similarity sentence cannot stand
+in for these clauses. In a multi-source occurrence, inspect each Pair's assigned
+and actual responsibility; for a thesis-produced baseline table, separate the
+externally sourced method identity from thesis-local evaluated values.
 
 Every numeric vector in the three owner sections is derived from the authoritative CSV, not estimated in prose. Page totals and suspect/resolved/unresolved counts reconcile to `02`, while `Actionable layout findings` equals the distinct current-owner finding IDs referenced by exact final `02` dispositions; unrelated Gate-I findings do not inflate it. Bibliography field groups reconcile verdict-by-verdict to all `03` rows (so the master-row total is `17 × rendered references`); and citation occurrence/pair/reference/support counts reconcile to `00-citation-inventory.csv` and `04`. `Semantically verified pairs` is the sum of `direct` and explicitly justified `not-needed`; every other support class is reported separately. Each machine-readable-master line ends with exact duplicate/missing/extra counts, which must all be zero in a complete bundle.
 
 Questions are not counted as defects until evidence supports them. Every question is later dispositioned exactly once in the Chair disagreement/decision table so it cannot disappear from Stage S.
 
 A question still has to be within the thesis-review obligation. A reviewer may not use the question table to retain an external-artifact wishlist that would be invalid as a finding.
+
+Every ledger-owning reviewer adds the following actor-authored section after the
+base `Coverage and limitations` section and before its full-audit duty sections.
+It is a semantic declaration and is not generated by the materializer:
+
+```markdown
+## Owned-ledger finding/question reconciliation
+
+| Report item ID | Owned-ledger selectors |
+|---|---|
+| Rn-F01 | none |
+```
+
+The table contains every current finding and question exactly once in report
+order; an empty canonical table is required when the report has none. A holistic
+item with no basis in an owned ledger uses exactly `none`. Otherwise use the
+closed selectors `02:page=Pnnnn`, `03:field=REFnnnn/<field>`,
+`04:pair=Cnnnn-Snn`, or `04:reference=REFnnnn`, separated by comma-space and
+ordered by ledger then authoritative row order. Doctoral R4 may use only `04`;
+doctoral R5 only `02`/`03`; master's R3 may use all three. A reference selector
+expands to every current `04` Pair row for that `ReferenceID`; do not mix it with
+any of its expanded Pair selectors. The expanded selector set must equal—not
+merely overlap—the authoritative ledger rows that name the report item. A row
+signed as `none`/`reasoned non-finding` cannot be claimed by this table.
 
 Before freezing an R-numbered report, verify that the decision regime, category, recommendation, severity profile, and required revision path are consistent with `grading-and-verdicts.md`.
 
@@ -387,9 +453,143 @@ renamed colon-labeled bullet field anywhere in this artifact; write
 signal-family discussion, counter-evidence, limitations, and sealed out-of-scope
 observations as paragraphs, tables, or bullets without colon-style field labels.
 
+## Independent semantic acceptance
+
+Stage SA starts only after every R report, its owner ledgers/renders, and the
+standalone AI report are frozen. Launch one new, mutually isolated acceptor for
+each target actor. An acceptor is neither another reviewer nor a Chair: it may
+not add, delete, rewrite, merge, grade, or adjudicate a finding. It decides only
+whether the target's already-frozen semantic work is sufficiently supported,
+complete for its mandatory scope, and safe to admit to Chair synthesis. It may
+write only `SA-<target>.md` and matching CSV at the root of its private,
+target-specific view; it never writes directly into the closed round's
+`06-semantic-acceptance/` directory. After the scoped validator exits `0` with
+`PASS`, Stage O byte-copies those two frozen files into
+`06-semantic-acceptance/` without rewriting them. A single failed row makes
+that acceptor `FAIL` and invalidates the entire retry; the target artifact is
+never reopened or patched.
+
+Each acceptor receives only its exact operational prompt, frozen PDF identity
+and bytes, the governing rules needed for that target, the neutral Stage-P
+navigation packet needed for that target, and that target's frozen report and
+owned artifacts. It does not receive another R/AI report, another semantic
+acceptance, Chair/Stage-S output, conversation history, author explanations,
+old rounds, thesis source, `.bib`, Git state, sibling repositories, or private
+experiment/provenance material. Public endpoints are restricted to those
+already authorized for the target. Run the staged validator inside the isolated
+view before freezing:
+
+```text
+python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>
+```
+
+The Markdown file has this exact closed H1/H2 sequence and fields:
+
+```markdown
+# Semantic acceptance — <target>
+
+## Identity and access
+- Actor ID: SA-<target>
+- Target actor ID: <target>
+- Review round ID: <exact process round_id>
+- Review retry ID: <exact process retry_id>
+- Operational prompt SHA-256: <exact process actor_prompt_sha256.SA-<target>>
+- Frozen PDF SHA-256 at start and end: <selected_pdf_sha256>; <selected_pdf_sha256>
+- Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
+- Input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered SA-<target> allowlist]; public_endpoints=[the exact duplicate-free subset actually opened, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Semantic-acceptance boundary: this actor did not create, modify, merge, grade, or adjudicate thesis findings; it evaluated only whether the frozen target actor outputs were semantically supported, complete for their mandatory scope, and admissible to the Chair.
+
+## Target hash binding and coverage
+- Target artifact hashes: <relative-target-file>@<SHA-256>; ...
+- Coverage row count: <exact matching CSV row count>
+
+## Acceptance result
+- Overall semantic acceptance: PASS / FAIL
+- Acceptance failure count: <exact number of failed CSV rows>
+- Limitations: <concrete limits of this acceptance, without creating thesis findings>
+```
+
+The matching CSV is the semantic master and has this exact schema:
+
+```text
+AcceptanceRowID,TargetUnitType,TargetUnitID,TargetArtifact,TargetArtifactSHA256,CheckClass,AcceptanceDisposition,EvidenceAnchor,SemanticBasis
+```
+
+`AcceptanceRowID` is continuous `SA000001...`; disposition is exactly `pass`
+or `fail`. The row universe is closed and ordered:
+
+- every ordinary reviewer covers Gate A--I, every rendered numbered body
+  chapter, every current `Rn-Fxx`, every current `Rn-Qxx`, and its verdict;
+- the citation-ledger owner additionally covers every authoritative `PairID`;
+- the page/bibliography owner additionally covers every physical `PageID` and
+  every authoritative `(ReferenceID,Field)` row;
+- the AI acceptor covers every Stage-P-authored-prose page, every current
+  `AI-Fxx`, and the overall non-attribution style judgment.
+
+The target-artifact binding is equally closed: report units (including chapter
+units) point to that target's report, citation pairs to
+`04-citation-claim-audit-ledger.csv`, page
+units to their exact `page-renders/Pnnnn.png`, bibliography fields to
+`03-bibliography-audit-ledger.csv`, and AI units to
+`05-ai-style-assessment.md`. Each row names the target artifact's current hash.
+R4 pair rows require the exact proposition responsibility and exact singleton
+physical occurrence page from `00-citation-inventory.csv`. Ordinary sourced
+states additionally require the pair's independently opened source URL and
+exact source locator; an abstract-only locator cannot accept a detailed
+formula, definition, algorithm step, or table value. A documented non-dangling
+`Support=unverifiable` row with blank authoritative `04` source and locator must
+not fabricate either field: its `SemanticBasis` instead binds the exact audited
+support, metadata status, and concrete `04` access/content limitation. A
+dangling row contains no source URL/locator and binds the exact PDF-visible
+location, displayed marker, missing `REF` entry, sentinel,
+`Support=unverifiable`, `MetadataStatus=mismatch`, and authoritative `04`
+disposition; generic dangling/unavailable prose fails. Passing
+finding/question/AI-finding rows name the exact singleton physical page in the
+target item's canonical location, while failed rows may cite a corrected page
+to explain rejection. Verdict and AI-judgment rows still require concrete
+physical-PDF anchors. R5 page rows are
+based on the rendered PNG and check actual page numbering, float attachment,
+clipping/overflow, blank-page behavior, and bibliography carry-in/new-label
+ranges. R5 bibliography rows independently compare the rendered field with its
+public authority, including cross-page URLs. Each bibliography row uses the
+exact semicolon-delimited closed cues `rendered cue: <exact 03 value>;`,
+`authority cue: <exact 03 value>;`, and
+`audited verdict: <exact 03 verdict>;`; it binds
+the exact `03` rendered/canonical values and a physical page belonging to that
+reference's rendered entry (all contributing entry pages for a cross-page
+URL). AI rows judge only recurring
+authored-prose signals and counter-evidence, never authorship or misconduct.
+Ordinary report rows independently test PDF support, whole-thesis search,
+severity, and verdict proportionality. A generic template, unchecked row,
+identity-only source match, or copied target rationale is a failure.
+Neither `EvidenceAnchor` nor `SemanticBasis` may assign a grade, direct the
+Chair or defense decision, or create/add/invent a thesis finding.
+
+After all target acceptors freeze, Stage O runs:
+
+```text
+python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set
+python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>
+python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set --require-gate
+```
+
+The materializer may write only `06-semantic-acceptance-gate.json`. Its v2
+schema contains round/retry/PDF identity, the exact process-file SHA-256, the
+closed current `SA-*` prompt-hash map, exact hashes and row counts for every
+required acceptance pair, exact hashes of every frozen target artifact,
+per-target `PASS`, and overall `PASS`; it contains no finding text, rationale,
+anchor, source URL, grade, or acceptance reason. The Chair opens this hash-only
+gate but never the individual SA Markdown/CSV files. It recomputes the current
+process hash, SA prompt projection, target hashes, and coverage. Because the
+private acceptance files are intentionally absent, their two hashes per target
+remain Stage-O transport commitments whose 64-hex form—but not bytes—the Chair
+can check. Stage O's final full validator must later open the private set and
+recompute those hashes/content before delivery. Stage S opens neither the gate
+nor individual SA files.
+
 ## Chair synthesis
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and forbids `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, process/rule input, or PDF returns control to Stage O for a global retry.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and the hash-only semantic-acceptance gate, while forbidding individual semantic-acceptance reports and `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, semantic-acceptance closure, process/rule input, or PDF returns control to Stage O for a global retry.
 
 ```markdown
 # Chair synthesis
@@ -399,7 +599,7 @@ Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-rou
 - Review round ID: <exact process round_id>
 - Review retry ID: <exact process retry_id>
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 06-semantic-acceptance-gate.json; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis; never open `06-semantic-acceptance/`)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Chair input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded allowlist above in the same order]; public_endpoints=[a duplicate-free subset of current process-rule URLs and current 03/04 evidence/content endpoints, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
@@ -418,7 +618,7 @@ Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-rou
 | Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 
-Validate this table before substantive synthesis. Because every reviewer report is already frozen before Stage C starts, a missing gate row invalidates the current retry and returns control to Stage O for a new global retry; the Chair must not reopen or patch that reviewer artifact.
+Validate this table before substantive synthesis. Because every reviewer report and its independent semantic acceptance are already frozen before Stage C starts, a missing gate row or failed hash closure invalidates the current retry and returns control to Stage O for a new global retry; the Chair must not reopen or patch that reviewer artifact.
 
 Each Gate cell exactly copies that reviewer's frozen Gate disposition. `Whole-thesis rationale` is the literal status `complete`. `Audit duty complete` is `yes` only for the assigned owner (doctoral R4/R5, or master's R3) and `not assigned` for every other reviewer; it is not a generic quality score. `Eligible for adjudication` must be `yes` for every included reviewer.
 
@@ -546,7 +746,7 @@ Within the no-new-experiment table, `E` means existing evidence whose necessary 
 
 Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. They never open the PDF, Stage-P packet, `02`--`04`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. They never open the PDF, Stage-P packet, `02`--`04`, individual semantic-acceptance files, `06-semantic-acceptance-gate.json`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
 
 The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
 

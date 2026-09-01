@@ -46,7 +46,8 @@ An independent blind-review or fresh independent re-review round evaluates exact
 
 PDF-only also constrains what the review may demand. The default object of judgment and correction is the rendered thesis itself: its method description, experimental protocol, internal consistency, claim--evidence relation, citations, and presentation. The absence of author-side code, commits, environment locks, full command lines, checkpoint/model-file hashes, sample/member IDs or hashes, immutable manifests, controlled audit packages, internal logs, table-generation scripts, or raw confidential data is not by itself a finding, an unresolved question, a reproducibility defect, or a reason to lower the grade. Do not request such material unless a verified governing rule makes it a formal submission component, or the PDF explicitly claims an exact public artifact/replay whose identity is necessary to decide a central claim. Even then, require the least disclosure that can appear in the revised PDF or a verified formal submission attachment. Ordinary scientific concerns about private data, duplication, leakage, configuration, or result credibility must be decided from PDF-visible definitions, protocols, numbers, and contradictions; resolve them through natural clarification, claim narrowing, or genuinely needed new evidence rather than a forensic artifact package.
 
-The packet builder, panel reviewers, AI-style assessor, and chair must not receive, recall, open, or search:
+The packet builder, panel reviewers, AI-style assessor, independent semantic
+acceptors, and chair must not receive, recall, open, or search:
 
 - conversation or thread history beyond a minimal operational prompt, including hidden memory or compaction summaries inherited from before the clean actor launch, prior assistant reasoning, previous answers, status reports, or problem tables; system-owned tool/environment metadata and same-clean-turn compaction are governed by the narrow exceptions in `references/clean-room-orchestration.md`, never permit inherited thesis assertions or old-task content, and permit current-round thesis assertions only when the actor newly derives them from allowlisted inputs during that same clean turn;
 - user explanations, corrections, rebuttals, desired interpretations, claimed implementation facts, or statements about companion materials that are not visible in the frozen PDF;
@@ -58,7 +59,7 @@ The packet builder, panel reviewers, AI-style assessor, and chair must not recei
 
 The orchestration process may compile the author's source to produce the requested PDF before freezing the round, then perform only Stage O mechanics: copy/hash the PDF into an identity-neutral round path, create empty paths, launch clean actors, check required files mechanically, and relay the clean Stage-S summary. Substantive actors receive the neutral frozen path, not an original workspace/repository path that may disclose identity. If the orchestrator has access to conversation history or author-side knowledge, it must not author the packet, reports, chair decision, revision ledger, or user-facing issue summary. Source paths, source lines, Git facts, and author-side comparisons must not appear in an independent reviewer finding or grade. A separately requested source-sync, provenance, implementation, or revision audit is a different task outside the blind-review round and must never be presented as reviewer evidence.
 
-Every substantive actor must include exact `Actor ID`, `Review round ID`, and `Review retry ID`; a fresh-context declaration; and one mechanically structured input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, and a permitted `public_endpoints=[...]` list, plus the three no-unlisted/no-prohibited/no-neighbor-enumeration confirmations inside that receipt field itself. `00-process-parameters.json` binds a distinct operational-prompt SHA-256 for P, every R actor, AI, C, and S, and contains V if and only if Stage V is run; each artifact's prompt hash must equal its actor entry. Stage O computes the hash from the exact prompt bytes before dispatch and launches those same bytes; artifact validation cannot independently observe task transport. Use a new empty-context process for Stage P, each helper, each reviewer, the AI assessor, the chair, the final summarizer, and optional Stage V; in Codex multi-agent execution this means `fork_turns: "none"`. Apply the contamination, retry, and quarantine rules in `references/clean-room-orchestration.md`. Labeling prohibited knowledge “author-side,” “already known,” or “only used in the summary” does not rescue the affected stage.
+Every substantive actor must include exact `Actor ID`, `Review round ID`, and `Review retry ID`; a fresh-context declaration; and one mechanically structured input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, and a permitted `public_endpoints=[...]` list, plus the three no-unlisted/no-prohibited/no-neighbor-enumeration confirmations inside that receipt field itself. `00-process-parameters.json` binds a distinct operational-prompt SHA-256 for P, every R actor, AI, every corresponding `SA-Rn` plus `SA-AI`, C, and S, and contains V if and only if Stage V is run; each artifact's prompt hash must equal its actor entry. Stage O computes the hash from the exact prompt bytes before dispatch and launches those same bytes; artifact validation cannot independently observe task transport. Use a new empty-context process for Stage P, each helper, each reviewer, the AI assessor, each target-specific semantic acceptor, the chair, the final summarizer, and optional Stage V; in Codex multi-agent execution this means `fork_turns: "none"`. Apply the contamination, retry, and quarantine rules in `references/clean-room-orchestration.md`. Labeling prohibited knowledge “author-side,” “already known,” or “only used in the summary” does not rescue the affected stage.
 
 Absence of a training detail is not affirmative evidence of the opposite. In particular, a row reported as mean/standard-deviation does not prove that rows reported as point estimates were trained once. Unless the PDF explicitly states the repetition count for a configuration, write `the PDF does not state the repetition count for this configuration`; do not call it single-seed, single-run, or one training result, do not turn that unknown into a defect by itself, and do not use it to lower a grade.
 
@@ -176,11 +177,23 @@ environment-level waiver. A failed route records its concrete source-specific
 failure, while an opened source records a real content locator. The scoped and
 full validators reject entry-string replication, truncated or non-source-
 specific content endpoints, truncated explicit DOI/arXiv identities, vague
-access-attempt locators, adjacent-window proposition drift, and dominant
-locator/disposition templates even when only REF/Pair IDs, URLs, DOI/arXiv
-identifiers, numeric coordinates, exact proposition quotations, or quoted work
-titles change. Every substantive R4 verdict carries the closed PairID plus
+access-attempt locators, adjacent-window proposition drift, propositions that
+absorb another citation occurrence or page furniture, external `direct` support
+for thesis-local results, Abstract-only proof of detailed equations/definitions,
+and dominant locator/disposition templates even when only REF/Pair IDs, URLs,
+DOI/arXiv identifiers, numeric coordinates, exact proposition quotations, or
+quoted work titles change. Every source in a cluster is assigned only the
+smallest clause for which that source is responsible; a whole multi-source
+sentence is not repeated mechanically across all Pair rows. Every substantive
+R4 verdict carries the closed PairID plus
 normalized-proposition-digest binding defined in `references/citation-audit.md`;
+a `direct`/`partial`/`context-only`/`mismatch` row then records the closed
+per-source tuple `pair role`, `source-stated claim`, short exact `source anchor`,
+and `support boundary` in that order. A bare `Abstract`/`Table N` locator or a
+sentence varied only by title/URL/PairID/hash is not a completed source audit.
+For multi-source markers, R4 assigns and verifies each source's responsibility
+separately, and distinguishes externally sourced method/dataset identity from
+numbers produced or re-evaluated under the thesis's own protocol.
 a complete auxiliary route cannot repair an invalid primary content endpoint.
 A schema-shaped ledger that triggers any of these checks is discarded and
 retried in a fresh actor context.
@@ -212,6 +225,16 @@ Withdrawn and retracted remain different statuses, `unpublished` never matches
 field.
 
 The R4/R5 ledger split is an exhaustive-work assignment, not a division of academic judgment. R4 must still assess contribution, methods, experiments, narrative, writing, and presentation; R5 must still assess significance, method intelligibility, evidential sufficiency, experimental interpretation, and thesis coherence. The same principle applies to every other persona. Mechanical helpers may create checksum-bound extraction/render/count sidecars under Stage H, but they never decide citation support, bibliography fields, page dispositions, findings, or grades; the owning reviewer independently signs every semantic and visual verdict.
+
+Every ledger owner also authors the closed `Owned-ledger finding/question
+reconciliation` table defined in `references/report-template.md`. Its selectors
+expand to the exact `02`/`03`/`04` rows whose authoritative dispositions name
+each current report item, and the join is enforced in both directions. A
+holistic item outside the owned ledgers uses `none`; a citation, bibliography, or
+layout item cannot be made consistent by linking only one convenient row, and a
+row signed as a reasoned non-finding cannot simultaneously support a report
+finding. This table is semantic reviewer work and is not generated by the
+materializer.
 
 ### 4. Classify every finding
 
@@ -305,9 +328,46 @@ Treat the ordinary author copy and the submitted blind-review copy as different 
 
 The conservative format reviewer must be able to understand the thesis without relying on frontier-specific tacit knowledge. If a term or contribution is clear only to the original paper's specialist audience, treat that as a self-contained exposition problem.
 
-### 7. Adjudicate in a clean chair context only after all reports are frozen
+### 7. Run independent semantic acceptance before Chair
 
-Launch the chair as a new Stage-C actor with no inherited conversation and no role in packet building or reviewing. The chair receives only the exact current-round allowlist in `references/clean-room-orchestration.md`, reads all frozen independent reports and the reviewer-visible PDF packet, and must not enumerate the parent review directory. The chair then:
+After every reviewer and the AI assessor has passed its own scoped gate and
+frozen, launch a different fresh `SA-Rn`/`SA-AI` actor for each target under the
+closed protocol in `references/clean-room-orchestration.md`. The acceptor works
+in a target-only neutral view, receives no peer report or old context, and writes
+the target's Markdown/CSV acceptance pair. It does not become another reviewer,
+does not give A/B/C/D, and cannot create, edit, merge, reject, or adjudicate any
+thesis finding.
+
+Every acceptance CSV exhausts the target's mandatory semantic units. In
+particular, `SA-R4` checks every citation Pair; `SA-R5` independently inspects
+every retained page PNG and every bibliography field row; `SA-AI` covers every
+authored-prose page/span; ordinary reviewer acceptors cover Gate A--I, all
+finding/question/verdict items, and all body chapters. A target's own mechanical
+`PASS`, row count, or repeated completion phrase is never acceptance evidence.
+The acceptor supplies its own non-template basis and verifies target anchors,
+claims, dispositions, and grade consistency directly from its permitted current
+PDF/source evidence.
+
+Before freezing, each acceptor runs
+`python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>`
+to `PASS`. After all pairs are copied into the closed round, Stage O runs
+`python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set`,
+then `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>`
+to `MATERIALIZED`, and finally reruns the set gate with `--require-gate` to
+`PASS`. The materializer is Stage-O mechanics and is never run by the Chair.
+
+Any semantic `FAIL`, missing/duplicate unit, contamination, target-hash drift, or
+scoped SA failure invalidates the entire retry after target freeze. The acceptor
+must not patch the target and Stage O must not rerun only that reviewer. Encode
+any general rule repair in the canonical skill/tests, quarantine the retry, and
+rerun the complete chain in a new clean root. Only after all acceptors pass may
+Stage O materialize and validate the hash-only
+`06-semantic-acceptance-gate.json`. The Chair opens that gate but not the
+acceptance reasons; Stage S opens neither.
+
+### 8. Adjudicate in a clean chair context only after all reports are frozen
+
+Launch the chair as a new Stage-C actor with no inherited conversation and no role in packet building or reviewing, and only after the complete semantic-acceptance set and hash gate pass. The chair receives only the exact current-round allowlist in `references/clean-room-orchestration.md`, reads all frozen independent reports, the reviewer-visible PDF packet, and the hash-only gate, and must not enumerate the parent review directory or open individual acceptance reasons. The chair then:
 
 1. preserves every reviewer's frozen category, defense recommendation, decision regime, and rationale, then deduplicates findings without erasing disagreement;
 2. verifies each `S0`/`S1` finding against the thesis and governing source;
@@ -329,7 +389,7 @@ Before issuing the combined decision, the chair must join the frozen bibliograph
 
 Under the skill-default regime, do not average A/B/C/D grades, convert them to points, or let a majority mechanically erase a decisive minority finding. Under an institutional regime, follow its verified aggregation rule. If the institution supplies a mandatory numeric scoring form, preserve each score and its rule-based conclusion rather than substituting an ungrounded mean.
 
-### 8. Produce the clean user-facing summary
+### 9. Produce the clean user-facing summary
 
 After the chair freezes `90-chair-synthesis.md`, `91-revision-ledger.md`, `91-revision-ledger.csv`, `91-ai-actionable-ledger.csv`, `92-new-evidence-or-experiments.md`, and `92-new-evidence-or-experiments.csv`, launch a new Stage-S summarizer with no inherited conversation. Stage S is part of this skill, not a later conversation-side summarization step. It receives only the exact current-round basename allowlist in `references/clean-room-orchestration.md` and writes `93-user-facing-summary.md` plus both lossless machine-readable current-action projections using `references/report-template.md`.
 
@@ -339,7 +399,7 @@ Before Stage S freezes or exits, the same fresh summarizer runs `python rules/sc
 
 For questions about the current PDF's independent blind review, relay the frozen current-round `93-user-facing-summary.md` rather than reconstructing an answer from conversation memory. For a longitudinal question such as whether prior items remain open or whether an iterative loop is finished, present current `93` and, if run, `94-post-freeze-prior-issue-closure.md` in two separate blocks without merging or re-adjudicating them. A conversation-aware orchestrator may add only a minimal operational wrapper and artifact links.
 
-### 9. Direct-edit mode
+### 10. Direct-edit mode
 
 Only enter this mode when the user asks for modification.
 
@@ -356,9 +416,9 @@ Only enter this mode when the user asks for modification.
 - Do not weaken accurate contributions merely to make the thesis sound cautious.
 - Do not add fabricated experiments, data, citations, or institutional claims.
 
-### 10. Independent re-review
+### 11. Independent re-review
 
-For a revised thesis, freeze a new PDF-only packet through a fresh Stage-P builder and run a **fresh independent re-review pass**. Reviewers inspect the revised PDF in new empty contexts without reading the conversation, author response, prior issue ledger, source tree, Git diff, old reports, or earlier summaries; they complete a fresh Gate A--I matrix and whole-thesis synthesis and record defects visible in the current PDF and findings newly discovered in this round. They must not call a defect a revision regression or say it was introduced by revision because they have no comparison baseline. Only after every fresh report, the clean chair decision, and the clean current-round summary are frozen may separately labeled Stage V compare the new PDF against specifically allowlisted prior artifacts. With only a prior issue ledger/author response, Stage V performs prior-finding closure and cannot infer global regression. A full longitudinal regression audit additionally requires the prior frozen PDF and prior page/bibliography/citation inventories and ledgers with hashes; a longitudinal style comparison additionally requires the specifically identified prior AI report. Stage V is not part of the independent re-review evidence packet and cannot retroactively alter its findings, grades, chair decision, ledgers, or clean current-round summary. It classifies prior items as:
+For a revised thesis, freeze a new PDF-only packet through a fresh Stage-P builder and run a **fresh independent re-review pass**. Reviewers inspect the revised PDF in new empty contexts without reading the conversation, author response, prior issue ledger, source tree, Git diff, old reports, or earlier summaries; they complete a fresh Gate A--I matrix and whole-thesis synthesis and record defects visible in the current PDF and findings newly discovered in this round. They must not call a defect a revision regression or say it was introduced by revision because they have no comparison baseline. Every fresh R/AI output must pass its own different semantic acceptor and the hash-only gate before the clean Chair begins. Only after every fresh report/assessment, acceptance gate, clean chair decision, and clean current-round summary are frozen may separately labeled Stage V compare the new PDF against specifically allowlisted prior artifacts. With only a prior issue ledger/author response, Stage V performs prior-finding closure and cannot infer global regression. A full longitudinal regression audit additionally requires the prior frozen PDF and prior page/bibliography/citation inventories and ledgers with hashes; a longitudinal style comparison additionally requires the specifically identified prior AI report. Stage V is not part of the independent re-review evidence packet and cannot retroactively alter its findings, grades, chair decision, ledgers, or clean current-round summary. It classifies prior items as:
 
 - `resolved`;
 - `unresolved`;
@@ -370,7 +430,7 @@ The clean chair reports current-round defects and current-round newly discovered
 
 Each reviewer and the chair must issue a fresh category and defense recommendation for the newly frozen artifact under the round's decision regime. Do not mechanically carry forward or edit the previous round's conclusion.
 
-When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, both the bibliography and citation-claim ledgers have 100 percent coverage and no unresolved actionable mismatch, no `AI-Fxx` with `material` or `local` impact remains, and the post-freeze Stage-V check leaves no tracked prior finding `unresolved` or `not verifiable`. Claim that no longitudinal regression was introduced only when Stage V ran against the complete prior baseline; otherwise state that global regression was not assessed. `S4` and AI-optional suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
+When the user requests an iterative review--revision loop, start a newly frozen round after every revision batch. Stop only when all required independent reviewers return no actionable `S0`--`S3` finding, the page-layout ledger has no unresolved signal, both the bibliography and citation-claim ledgers have 100 percent coverage and no unresolved actionable mismatch, no `AI-Fxx` with `material` or `local` impact remains, every current target-specific semantic acceptance and the hash-only gate pass, and the post-freeze Stage-V check leaves no tracked prior finding `unresolved` or `not verifiable`. Claim that no longitudinal regression was introduced only when Stage V ran against the complete prior baseline; otherwise state that global regression was not assessed. `S4` and AI-optional suggestions may remain explicitly optional and must not be described as defects. Never claim literal perfection; state the artifacts, checks, and limitations that bound the zero-actionable-finding result.
 
 Run a fresh isolated AI-style assessment on every revised frozen artifact. Do not show the assessor the previous report before it freezes its new judgment. Any unresolved `AI-Fxx` with `material` or `local` impact prevents a claim that final prose-polish review is complete, regardless of the overall signal label, but does not by itself alter the academic or integrity verdict.
 
@@ -385,6 +445,9 @@ A review is complete only when it includes:
 - a complete Gate A--I whole-thesis matrix, whole-thesis synthesis, and persona-weighted deep review in every R-numbered report; ledger ownership cannot substitute for any of them;
 - one internally consistent category, exact defense recommendation, decision regime/source, confidence, and whole-thesis rationale in every R-numbered report; use A/B/C/D under the skill-default regime;
 - the standalone `05-ai-style-assessment.md`, reported separately from R1--R5 and containing the non-attribution disclaimer;
+- one fresh target-specific semantic-acceptance Markdown/CSV pair for every
+  reviewer and the AI assessor, with exhaustive target-unit coverage and no
+  `fail`, plus the hash-only passing `06-semantic-acceptance-gate.json`;
 - a chair synthesis with agreements and disagreements;
 - a chair table preserving every independent category/recommendation and a separately reasoned overall category/recommendation, with no ungrounded averaging;
 - a precise, prioritized academic revision ledger and a separate AI-actionable ledger, each with machine-readable sidecars;
@@ -392,7 +455,7 @@ A review is complete only when it includes:
 - a statement of review limitations;
 - an explicit statement that the reviewer-visible local artifact was exactly one frozen PDF, plus a list of permitted public citation-verification sources;
 - a clean `93-user-facing-summary.md` that exactly reconciles with the current chair ledger and adds no finding or contextual claim;
-- a fresh-context and input-receipt/access declaration from the packet builder, every helper, reviewer, assessor, chair, final summarizer, and the Stage-V verifier when Stage V is run, confirming that no prohibited context or artifact was used;
+- a fresh-context and input-receipt/access declaration from the packet builder, every helper, reviewer, assessor, independent semantic acceptor, chair, final summarizer, and the Stage-V verifier when Stage V is run, confirming that no prohibited context or artifact was used;
 - a passing `95-bundle-validation.md` generated from `scripts/validate_review_bundle.py`, while preserving manual semantic sign-off;
 - for direct edits, compilation/render verification and a re-review result.
 

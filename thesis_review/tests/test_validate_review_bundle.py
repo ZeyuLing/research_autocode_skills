@@ -7,6 +7,7 @@ import importlib.util
 import json
 import os
 import re
+import shutil
 import struct
 import subprocess
 import sys
@@ -29,6 +30,16 @@ VALIDATOR_SPEC = importlib.util.spec_from_file_location(
 assert VALIDATOR_SPEC and VALIDATOR_SPEC.loader
 VALIDATOR_MODULE = importlib.util.module_from_spec(VALIDATOR_SPEC)
 VALIDATOR_SPEC.loader.exec_module(VALIDATOR_MODULE)
+SEMANTIC_VALIDATOR = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
+SEMANTIC_SPEC = importlib.util.spec_from_file_location(
+    "thesis_review_semantic_validator_fixture", SEMANTIC_VALIDATOR
+)
+assert SEMANTIC_SPEC and SEMANTIC_SPEC.loader
+SEMANTIC_MODULE = importlib.util.module_from_spec(SEMANTIC_SPEC)
+SEMANTIC_SPEC.loader.exec_module(SEMANTIC_MODULE)
+SEMANTIC_MATERIALIZER = (
+    SKILL_ROOT / "scripts" / "materialize_semantic_acceptance_gate.py"
+)
 ACTOR_PROMPT_HASHES = {
     "P": "1" * 64,
     "R1": "2" * 64,
@@ -40,6 +51,12 @@ ACTOR_PROMPT_HASHES = {
     "C": "8" * 64,
     "S": "9" * 64,
     "V": "A" * 64,
+    "SA-R1": "B" * 64,
+    "SA-R2": "C" * 64,
+    "SA-R3": "D" * 64,
+    "SA-R4": "E" * 64,
+    "SA-R5": "F" * 64,
+    "SA-AI": "0" * 64,
 }
 PROMPT_HASH = ACTOR_PROMPT_HASHES["P"]
 BIB_ENDPOINT = "https://doi.org/10.1145/3442188.3445922"
@@ -652,11 +669,25 @@ class ValidateReviewBundleTests(unittest.TestCase):
         """Turn the complete fixture into one valid, fully adjudicated REF gap."""
 
         body = (
-            "fixture proposition [2]; quantization levels are [3, 8]; "
-            "scale interval [0.85, 1]."
+            "CHINESE ABSTRACT\n"
+            "This synthetic Chinese abstract explains the research task, method, "
+            "and principal result. It supplies sustained authored prose for "
+            "independent semantic inspection. The fixture proposition [2]; "
+            "quantization levels are [3, 8]; scale interval [0.85, 1]."
         )
         digest = self.rewrite_pdf_and_rehash(
-            root, [body, "References\n[1] Fixture reference."]
+            root,
+            [
+                body,
+                "ABSTRACT\nThis synthetic English abstract explains the research "
+                "task, method, and principal result. It contains sustained "
+                "explanatory prose for an independent semantic inspection. The "
+                "evidence is deliberately long enough to constitute authored "
+                "abstract text.",
+                "CHAPTER 1\nFixture Method\n1.1 Introduction\n"
+                "This rendered body chapter explains the fixture method and result.",
+                "References\n[1] Fixture reference.",
+            ],
         )
         process_path = root / "00-process-parameters.json"
         process = json.loads(process_path.read_text(encoding="utf-8"))
@@ -674,7 +705,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
 
         extraction_errors: list[str] = []
         extracted, unmatched = VALIDATOR_MODULE.extract_numeric_bracket_candidates(
-            root / "frozen-thesis.pdf", {2}, extraction_errors
+            root / "frozen-thesis.pdf", {4}, extraction_errors
         )
         self.assertEqual([], extraction_errors)
         self.assertEqual([], unmatched)
@@ -748,7 +779,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "MetadataStatus": "mismatch",
             "SeverityFinding": "R3-F01",
             "DispositionEvidence": (
-                "R3-F01: displayed citation has no rendered bibliography entry"
+                "displayed citation has no rendered bibliography entry"
             ),
             "PDFSHA256": digest,
         })
@@ -807,6 +838,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ).replace(
                     "- Inaccessible/unverifiable pairs: 0",
                     "- Inaccessible/unverifiable pairs: 1",
+                    1,
+                ).replace(
+                    "| R3-F01 | none |",
+                    "| R3-F01 | 04:pair=C0001-S01 |",
                     1,
                 )
             report.write_text(text, encoding="utf-8")
@@ -898,6 +933,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
         ):
             chair_text = chair_text.replace(old, new, 1)
         chair.write_text(chair_text, encoding="utf-8")
+        self.write_semantic_acceptance_fixture(root, process)
 
     def declaration(
         self,
@@ -945,7 +981,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "actor_id": "H01",
             "round_id": "fixture",
             "retry_id": "r1",
-            "prompt_sha256": "B" * 64,
+                "prompt_sha256": "AB" * 32,
             "fresh_context_declaration": (
                 "no inherited user/thread/task turns beyond system/developer "
                 "instructions and the exact operational prompt"
@@ -1021,7 +1057,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Degree-level contribution judgment: The bounded contribution is sufficient for this synthetic validation fixture.\n"
             + "- Strongest claim--evidence chain: The visible proposition and cited source form the strongest bounded chain.\n"
             + "- Weakest claim--evidence chain: The wording defect is the weakest local link and requires correction.\n"
-            + "- Cross-chapter coherence: The two-page fixture has a consistent beginning-to-end narrative for validation.\n"
+            + "- Cross-chapter coherence: The frozen fixture has a consistent beginning-to-end narrative for validation.\n"
             + "- Overall integrity and submission fitness: No integrity blocker is visible; one minor revision remains.\n"
             + "- Most consequential conclusion outside the persona emphasis, or evidence that no material concern was found there: The complete Gate A--I pass found no additional material concern outside the assigned emphasis.\n\n"
             + "## Whole-thesis assessment\n\n"
@@ -1050,13 +1086,21 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "## Questions, not findings\n\n"
             + "| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |\n"
             + "|---|---|---|---|---|\n\n"
-            + "## Coverage and limitations\n\nThe synthetic two-page fixture limits semantic depth.\n"
+            + "## Coverage and limitations\n\nThe compact synthetic fixture limits semantic depth.\n"
+            + (
+                "\n## Owned-ledger finding/question reconciliation\n\n"
+                "| Report item ID | Owned-ledger selectors |\n"
+                "|---|---|\n"
+                "| R3-F01 | none |\n"
+                if process["degree_level"] == "masters" and index == 3
+                else ""
+            )
             + (
                 "\n## Full rendered-page audit\n"
-                "- Physical pages / unchecked pages: 2 / 0\n\n"
+                f"- Physical pages / unchecked pages: {process['physical_page_count']} / 0\n\n"
                 "- Suspect-page signals / resolved / unresolved: 0 / 0 / 0\n"
                 "- Actionable layout findings: 0\n"
-                "- Neighbor-page verification status: all 2 pages checked\n"
+                f"- Neighbor-page verification status: all {process['physical_page_count']} pages checked\n"
                 "- Machine-readable master: 02-page-layout-ledger.csv; duplicate/missing/extra page IDs: 0 / 0 / 0\n"
                 "- Source-forcing cause: not verifiable from the PDF\n\n"
                 "## Full bibliography-integrity audit\n"
@@ -1194,7 +1238,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Rationale: The short fixture contains one formulaic transition, "
             + "but the limited corpus prevents any stronger stylistic inference.\n\n"
             + "## Coverage and mechanical checks\n"
-            + "- Physical pages inspected: 2 / 2\n"
+            + f"- Physical pages inspected: {process['physical_page_count']} / {process['physical_page_count']}\n"
             + "- Authored sections inspected: all authored fixture prose outside the bibliography\n"
             + "- Recurrent-pattern queries/statistics: transitions and repeated sentence frames were checked\n"
             + "- Corpus exclusions: bibliography strings and page furniture were excluded\n\n"
@@ -1206,7 +1250,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Reader impact: The repeated transition makes the local prose mechanical.\n"
             + "- Minimum safe editing strategy: replace the transition\n"
             + "- Closure test: reread paragraph after the targeted revision\n\n"
-            + "## Limitations\n\nThe synthetic two-page corpus limits the strength and breadth of any style inference.\n\n"
+            + "## Limitations\n\nThe compact synthetic corpus limits the strength and breadth of any style inference.\n\n"
             + "## Out-of-scope observations for chair verification\n\nnone\n"
         )
 
@@ -1299,6 +1343,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
             text,
         ).replace("review_mode=initial", "review_mode=fresh-rereview")
         manifest.write_text(text, encoding="utf-8")
+        # Gate v2 commits to the exact process bytes.  A fresh-rereview fixture
+        # must therefore rematerialize its independent acceptance set after
+        # adding the V actor and changing review_mode.
+        self.write_semantic_acceptance_fixture(root, process)
         return process
 
     def write_prior_issues_input(self, root: Path) -> str:
@@ -1409,12 +1457,357 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Iterative-loop completion gate: fail\n"
         )
 
-    def build_bundle(self, root: Path, page_count: int = 2) -> str:
+    def semantic_acceptance_rows(
+        self,
+        root: Path,
+        process: dict[str, object],
+        target: str,
+        derived_cache: dict[str, object],
+    ) -> list[dict[str, str]]:
+        errors: list[str] = []
+        report_units, report_anchors = SEMANTIC_MODULE.authoritative_report_units(
+            root, process, target, VALIDATOR_MODULE, errors
+        )
+        units = SEMANTIC_MODULE.expected_units(
+            root,
+            process,
+            target,
+            errors,
+            shared=VALIDATOR_MODULE,
+            report_units=report_units,
+            derived_cache=derived_cache,
+        )
+        if errors:
+            raise AssertionError(errors)
+        citation_rows = {
+            row["PairID"]: row
+            for row in read_csv(root / "04-citation-claim-audit-ledger.csv")[1]
+        }
+        citation_inventory = {
+            row["PairID"]: row
+            for row in read_csv(root / "00-citation-inventory.csv")[1]
+        }
+        rendered_reference_ids = {
+            row["ReferenceID"]
+            for row in read_csv(root / "00-bibliography-inventory.csv")[1]
+        }
+        bibliography_rows = {
+            f"{row['ReferenceID']}/{row['Field']}": row
+            for row in read_csv(root / "03-bibliography-audit-ledger.csv")[1]
+        }
+        bibliography_basis = {
+            "type": "The publisher metadata identifies the document category independently from the remaining fields.",
+            "title": "The authoritative record displays the complete work title and permits a word-order comparison.",
+            "ordered_authors": "The opened record supplies the creator sequence, which is checked without reordering names.",
+            "year": "The authority exposes the publication year as a separate scalar for exact comparison.",
+            "venue": "The proceedings metadata names the venue and distinguishes it from publisher or series text.",
+            "publication_status": "The official record establishes the publication state rather than inferring acceptance from prose.",
+            "volume": "Volume metadata is inspected independently, including a style-permitted absence.",
+            "issue": "Issue information is checked separately instead of being inferred from the volume field.",
+            "pages_or_article_number": "Pagination or article identity is reconciled with the exact rendered locator field.",
+            "doi": "The persistent DOI is compared as a complete work identity against the official record.",
+            "arxiv_id": "A preprint identity is accepted only when the authority explicitly supplies that identifier.",
+            "arxiv_version": "Version state is assessed separately from the base preprint identifier.",
+            "url": "The complete governing URL field is checked without truncating its path or query identity.",
+            "access_date": "The access-date disposition follows the rendered entry and binding bibliography style.",
+            "isbn_or_other_persistent_id": "An alternate persistent identifier is used only when the authority provides it.",
+            "existence": "The opened publication record demonstrates existence of the identified scholarly work.",
+            "retraction_withdrawal_correction_superseding": "Current publisher status is inspected for retraction, correction, withdrawal, or superseding notices.",
+        }
+        chapter_intervals = {
+            chapter_id: (start, end)
+            for chapter_id, start, end in SEMANTIC_MODULE.rendered_chapter_intervals(
+                root,
+                process,
+                VALIDATOR_MODULE,
+                [],
+                derived_cache=derived_cache,
+            )
+        }
+        rows: list[dict[str, str]] = []
+        for index, (unit_type, unit_id) in enumerate(units, start=1):
+            artifact = SEMANTIC_MODULE.required_artifact_for_unit(
+                target, unit_type, unit_id
+            )
+            if unit_type == "page":
+                page = int(unit_id[1:])
+                anchor = f"physical p.{page}, visible page-specific rendered content"
+                basis = (
+                    f"Independent page inspection for {unit_id} checks the visible "
+                    "text, figures, tables, spacing, and the target actor's corresponding conclusion."
+                )
+            elif unit_type == "bibliography-field":
+                target_row = bibliography_rows[unit_id]
+                field = target_row["Field"]
+                endpoint = target_row["EvidenceEndpoint"]
+                anchor = f"physical p.{process['physical_page_count']}, {endpoint}, official record: {field}"
+                verdict = target_row["Verdict"].casefold()
+                if verdict in {"exact", "mismatch"}:
+                    basis = (
+                        f"rendered cue: {target_row['RenderedValue']}; authority cue: "
+                        f"{target_row['CanonicalValue']}; audited verdict: {verdict}; "
+                        f"{bibliography_basis[field]}"
+                    )
+                elif verdict == "legitimate n/a":
+                    basis = (
+                        f"rendered cue: {target_row['RenderedValue']}; authority cue: "
+                        f"{target_row['CanonicalValue']}; audited verdict: legitimate N/A; "
+                        f"rendered absence is visible "
+                        f"for {field}, and the authority/style makes that field not applicable; "
+                        f"{bibliography_basis[field]}"
+                    )
+                else:
+                    basis = (
+                        f"rendered cue: {target_row['RenderedValue']}; authority cue: "
+                        f"{target_row['CanonicalValue']}; audited verdict: unverifiable; "
+                        f"authority access limitation: {target_row['EvidenceNote']}; "
+                        f"{bibliography_basis[field]}"
+                    )
+            elif unit_type == "citation-pair":
+                target_row = citation_rows[unit_id]
+                inventory_row = citation_inventory[unit_id]
+                reference_id = target_row["ReferenceID"]
+                support = target_row["Support"].casefold()
+                metadata_status = target_row["MetadataStatus"].casefold()
+                disposition_evidence = target_row["DispositionEvidence"]
+                if reference_id not in rendered_reference_ids:
+                    marker_match = re.fullmatch(r"REF(\d+)", reference_id)
+                    marker = (
+                        f"[{int(marker_match.group(1))}]"
+                        if marker_match is not None else reference_id
+                    )
+                    gap = (
+                        f"{reference_id} has "
+                        f"{VALIDATOR_MODULE.DANGLING_REFERENCE_SENTINEL}"
+                    )
+                    anchor = (
+                        f"{inventory_row['PDFLocation']}, displayed marker "
+                        f"{marker} and rendered bibliography gap"
+                    )
+                    basis = (
+                        f"PDF-visible location: {inventory_row['PDFLocation']}; "
+                        f"displayed marker: {marker}; rendered reference gap: "
+                        f"{gap}; audited support: {support}; audited metadata "
+                        f"status: {metadata_status}; authoritative 04 disposition: "
+                        f"{disposition_evidence}; the exact thesis proposition "
+                        f"{target_row['ExactAttachedProposition']} is attached to "
+                        "this unresolved marker."
+                    )
+                elif (
+                    support == "unverifiable"
+                    and not target_row["ContentSourceOpened"]
+                    and not target_row["ExactSourceLocator"]
+                ):
+                    anchor = (
+                        f"{inventory_row['PDFLocation']}, exact citation "
+                        "occurrence with no opened content source"
+                    )
+                    basis = (
+                        f"audited support: {support}; audited metadata status: "
+                        f"{metadata_status}; authority access limitation: "
+                        f"{disposition_evidence}; the exact thesis proposition "
+                        f"{target_row['ExactAttachedProposition']} remains bound "
+                        f"to {unit_id}, while this acceptance claims only the "
+                        "documented access limitation and no source-content support."
+                    )
+                else:
+                    anchor = (
+                        f"{target_row['ContentSourceOpened']}, "
+                        f"{target_row['ExactSourceLocator']}, "
+                        f"{inventory_row['PDFLocation']}"
+                    )
+                    basis = (
+                        f"The opened source at {target_row['ExactSourceLocator']} "
+                        f"supports the exact thesis proposition "
+                        f"{target_row['ExactAttachedProposition']} bound to {unit_id}; "
+                        f"the audited support verdict is {target_row['Support']}."
+                    )
+            elif unit_type == "chapter":
+                start, end = chapter_intervals[unit_id]
+                anchor = (
+                    f"physical p.{start}-{end}, exact chapter-wide passages"
+                    if start != end else f"physical p.{start}, exact chapter-wide passages"
+                )
+                basis = (
+                    f"Chapter-wide PDF reading for {unit_id} traces its problem, "
+                    "method, evidence, limitations, and the target review's treatment."
+                )
+            elif (unit_type, unit_id) in report_anchors:
+                page = report_anchors[(unit_type, unit_id)]
+                anchor = f"physical p.{page}, exact target-unit passage"
+                basis = (
+                    f"Item-level frozen-PDF verification for {unit_id} checks the "
+                    f"bounded {unit_type} conclusion against its cited passage."
+                )
+            elif unit_type == "gate":
+                anchor = "physical p.1-3, gate-specific thesis evidence"
+                basis = (
+                    f"Independent inspection for {unit_id} compares that exact "
+                    "criterion with concrete thesis passages and the target disposition."
+                )
+            elif unit_type == "verdict":
+                anchor = "physical p.1-3, target verdict and decisive thesis evidence"
+                basis = (
+                    f"The complete target conclusion {unit_id} is checked against "
+                    "all gate dispositions, findings, and the frozen thesis evidence."
+                )
+            elif unit_type == "ai-judgment":
+                anchor = "physical p.1-3, standalone AI-style judgment and sampled prose"
+                basis = (
+                    "The standalone AI-style judgment is reconciled with all authored-prose "
+                    "page checks and the target assessment without affecting academic grading."
+                )
+            else:
+                anchor = "physical p.1-3, exact target-unit passage"
+                basis = (
+                    f"Frozen-PDF verification for {unit_id} confirms the bounded "
+                    f"{unit_type} conclusion against the authoritative target item."
+                )
+            rows.append({
+                "AcceptanceRowID": f"SA{index:06d}",
+                "TargetUnitType": unit_type,
+                "TargetUnitID": unit_id,
+                "TargetArtifact": artifact,
+                "TargetArtifactSHA256": hashlib.sha256(
+                    (root / artifact).read_bytes()
+                ).hexdigest().upper(),
+                "CheckClass": SEMANTIC_MODULE.CHECK_CLASS_BY_UNIT_TYPE[unit_type],
+                "AcceptanceDisposition": "pass",
+                "EvidenceAnchor": anchor,
+                "SemanticBasis": basis,
+            })
+        return rows
+
+    def write_semantic_acceptance_fixture(
+        self, root: Path, process: dict[str, object]
+    ) -> None:
+        acceptance_dir = root / VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+        if acceptance_dir.exists():
+            shutil.rmtree(acceptance_dir)
+        acceptance_dir.mkdir()
+        gate_path = root / VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_GATE_FILE
+        gate_path.unlink(missing_ok=True)
+        targets = [
+            *(f"R{index}" for index in range(
+                1, 6 if process["degree_level"] == "doctorate" else 4
+            )),
+            "AI",
+        ]
+        derived_cache: dict[str, object] = {}
+        results: list[dict[str, object]] = []
+        for target in targets:
+            errors: list[str] = []
+            rows = self.semantic_acceptance_rows(
+                root, process, target, derived_cache
+            )
+            opened = SEMANTIC_MODULE.canonical_sa_opened_inputs(
+                root, process, target, errors
+            )
+            artifacts = SEMANTIC_MODULE.target_artifacts(
+                root, process, target, errors
+            )
+            public_endpoints = SEMANTIC_MODULE.target_public_endpoints(
+                root, process, target, VALIDATOR_MODULE, errors
+            )
+            if errors:
+                raise AssertionError(errors)
+            public = (
+                "; ".join(sorted(public_endpoints))
+                if public_endpoints else "none"
+            )
+            hashes = ";".join(
+                f"{name}@{hashlib.sha256((root / name).read_bytes()).hexdigest().upper()}"
+                for name in artifacts
+            )
+            receipt = (
+                "received=[operational prompt]; opened=["
+                + "; ".join(opened)
+                + f"]; public_endpoints=[{public}]; "
+                "no unlisted substantive assertion was received; "
+                "no prohibited context/artifact was used; neighboring paths were not enumerated"
+            )
+            markdown = f"""# Semantic acceptance — {target}
+
+## Identity and access
+
+- Actor ID: SA-{target}
+- Target actor ID: {target}
+- Review round ID: {process['round_id']}
+- Review retry ID: {process['retry_id']}
+- Operational prompt SHA-256: {process['actor_prompt_sha256'][f'SA-{target}']}
+- Frozen PDF SHA-256 at start and end: {process['selected_pdf_sha256']}; {process['selected_pdf_sha256']}
+- Fresh-context declaration: {SEMANTIC_MODULE.FRESH_CONTEXT_SENTENCE}
+- Input-receipt/access declaration: {receipt}
+- Semantic-acceptance boundary: {SEMANTIC_MODULE.BOUNDARY_SENTENCE}
+
+## Target hash binding and coverage
+
+- Target artifact hashes: {hashes}
+- Coverage row count: {len(rows)}
+
+## Acceptance result
+
+- Overall semantic acceptance: PASS
+- Acceptance failure count: 0
+- Limitations: Semantic acceptance is bounded to the frozen PDF, target outputs, and declared public authority.
+"""
+            acceptance_md = acceptance_dir / f"SA-{target}.md"
+            acceptance_csv = acceptance_dir / f"SA-{target}.csv"
+            acceptance_md.write_text(markdown, encoding="utf-8")
+            write_csv(acceptance_csv, SEMANTIC_MODULE.CSV_COLUMNS, rows)
+            results.append({
+                "target": target,
+                "status": "PASS",
+                "target_artifacts": {
+                    name: hashlib.sha256((root / name).read_bytes()).hexdigest().upper()
+                    for name in artifacts
+                },
+                "acceptance_md": acceptance_md,
+                "acceptance_csv": acceptance_csv,
+                "coverage_rows": len(rows),
+            })
+        gate = SEMANTIC_MODULE.expected_gate(root, process, results)
+        gate_path.write_text(
+            json.dumps(gate, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def build_bundle(self, root: Path, page_count: int = 4) -> str:
         pdf = root / "frozen-thesis.pdf"
         writer = PdfWriter()
         for physical_page in range(1, page_count + 1):
             page = writer.add_blank_page(width=595.28, height=841.89)
-            if physical_page == 1:
+            if page_count >= 4 and physical_page == 1:
+                add_ascii_text(
+                    writer,
+                    page,
+                    "CHINESE ABSTRACT\n"
+                    "This synthetic Chinese abstract explains the research task, "
+                    "method, and principal result. It supplies sustained authored "
+                    "prose for independent semantic inspection. The fixture "
+                    "proposition [1]; quantization levels are [3, 8]; scale interval "
+                    "[0.85, 1].",
+                )
+            elif page_count >= 4 and physical_page == 2:
+                add_ascii_text(
+                    writer,
+                    page,
+                    "ABSTRACT\n"
+                    "This synthetic English abstract explains the research task, "
+                    "method, and principal result. It contains sustained explanatory "
+                    "prose for an independent semantic inspection. The evidence is "
+                    "deliberately long enough to constitute authored abstract text.",
+                )
+            elif page_count >= 4 and physical_page == 3:
+                add_ascii_text(
+                    writer,
+                    page,
+                    "CHAPTER 1\nFixture Method\n1.1 Introduction\n"
+                    "This rendered body chapter explains the fixture method and result.",
+                )
+            elif physical_page == page_count:
+                add_ascii_text(writer, page, "References\n[1] Fixture reference.")
+            elif physical_page == 1:
                 add_ascii_text(
                     writer,
                     page,
@@ -1430,11 +1823,18 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     "4.1 Introduction\n"
                     "This page begins the fourth rendered chapter.",
                 )
-            elif physical_page == page_count:
-                add_ascii_text(writer, page, "References\n[1] Fixture reference.")
         with pdf.open("wb") as handle:
             writer.write(handle)
         digest = hashlib.sha256(pdf.read_bytes()).hexdigest().upper()
+        candidate_errors: list[str] = []
+        extracted_candidates, _ = VALIDATOR_MODULE.extract_numeric_bracket_candidates(
+            pdf, {page_count}, candidate_errors
+        )
+        if candidate_errors:
+            raise AssertionError(candidate_errors)
+        adjacent_by_marker = {
+            item["Marker"]: item["Adjacent"] for item in extracted_candidates
+        }
         render_dir = root / "page-renders"
         render_dir.mkdir()
         render_digests: dict[str, str] = {}
@@ -1454,11 +1854,17 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 if physical_page == page_count
                 else (
                     "front matter"
-                    if page_count >= 3 and physical_page == 1
+                    if (
+                        (page_count >= 4 and physical_page in {1, 2})
+                        or (page_count == 3 and physical_page == 1)
+                    )
                     else "chapter"
                 )
             ),
-            "DominantContent": "text",
+            "DominantContent": (
+                "bibliography entries [1]-[1]"
+                if physical_page == page_count else "text"
+            ),
             "Signals": "none",
             "InspectionModeScale": "individual 100%",
             "RenderDPI": "200",
@@ -1514,7 +1920,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "EndpointType": "official publisher record",
             "CheckedAt": "2026-08-29",
             "EvidenceNote": f"field={field}; fixture official record checked",
-            "FindingDisposition": "no finding",
+            "FindingDisposition": "none",
             "PDFSHA256": digest,
         } for field in BIB_FIELDS]
         citation_ledger_rows = [{
@@ -1561,14 +1967,23 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "decision_regime_status": "skill-default",
             "actor_prompt_sha256": {
                 actor: ACTOR_PROMPT_HASHES[actor]
-                for actor in ("P", "R1", "R2", "R3", "AI", "C", "S")
+                for actor in (
+                    "P", "R1", "R2", "R3", "AI",
+                    "SA-R1", "SA-R2", "SA-R3", "SA-AI", "C", "S",
+                )
             },
         }
         process_path = root / "00-process-parameters.json"
         process_path.write_text(json.dumps(process), encoding="utf-8")
         process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
         rendered_sections = (
-            "4.1=physical p.2" if page_count >= 3 else "none detected"
+            "1.1=physical p.3"
+            if page_count >= 4
+            else ("4.1=physical p.2" if page_count >= 3 else "none detected")
+        )
+        authored_pages = (
+            f"physical p.1-{page_count - 1}"
+            if page_count >= 4 else "physical p.1"
         )
         packet_opened = "; ".join(
             VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "P")
@@ -1593,11 +2008,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "- Permitted public citation-verification sources: authoritative publisher, DOI, proceedings, and official full-text http(s) endpoints only\n"
             + "- Prohibited context and artifacts: conversation/memory summaries, user explanations, earlier assistant outputs, other actors' messages, thesis source, .bib, build/auxiliary files, Git history, sibling repositories, local papers, code/config/logs, old rounds, source/provenance audits, and author-side records\n"
             + "- Items explicitly out of scope: source-side implementation assertions and any prior-round material not visible in the frozen PDF\n\n"
-            + "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n"
+            + f"## Thesis structure\n\nThe fixture contains two abstract pages at physical p.1-2, a rendered body chapter beginning at physical p.3, and a terminal bibliography at physical p.{page_count}.\n\n"
             + "## Thesis-stated questions and contributions — neutral navigation only\n\nThe fixture proposition appears on physical p.1; this line records its location without evaluating the claim.\n\n"
             + "## Objective inventories and locations\n\nThe closed inventories are 00-page-inventory.csv, 00-bibliography-inventory.csv, 00-citation-candidate-ledger.csv, 00-citation-inventory.csv, and 00-unmatched-bracket-ledger.csv.\n\n"
             + f"- Sections: {rendered_sections}\n"
-            + "- Authored-prose navigation pages: physical p.1\n"
+            + f"- Authored-prose navigation pages: {authored_pages}\n"
             + "- Numeric-bracket candidate rows: 3\n"
             + "- Citation-classified candidate rows: 1\n"
             + "- Non-citation-classified candidate rows: 2\n"
@@ -1691,7 +2106,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     if physical_page == page_count
                     else (
                         "front matter"
-                        if page_count >= 3 and physical_page == 1
+                        if (
+                            (page_count >= 4 and physical_page in {1, 2})
+                            or (page_count == 3 and physical_page == 1)
+                        )
                         else "chapter"
                     )
                 ),
@@ -1723,8 +2141,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 "MappedOccurrenceID": "C0001",
                 "AdjacentPDFText": (
-                    "fixture proposition [1]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1]."
+                    adjacent_by_marker["[1]"]
                 ),
                 "PDFSHA256": digest,
             }, {
@@ -1738,8 +2155,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 "MappedOccurrenceID": "N/A",
                 "AdjacentPDFText": (
-                    "fixture proposition [1]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1]."
+                    adjacent_by_marker["[3,8]"]
                 ),
                 "PDFSHA256": digest,
             }, {
@@ -1751,8 +2167,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "ClassificationEvidence": "non-citation-role:non-integer-expression",
                 "MappedOccurrenceID": "N/A",
                 "AdjacentPDFText": (
-                    "fixture proposition [1]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1]."
+                    adjacent_by_marker["[0.85,1]"]
                 ),
                 "PDFSHA256": digest,
             }],
@@ -1775,10 +2190,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "OccurrenceID": "C0001",
                 "PDFLocation": "physical p.1",
                 "DisplayedReferenceID": "REF0001",
-                "AdjacentPDFText": (
-                    "fixture proposition [1]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1]."
-                ),
+                "AdjacentPDFText": adjacent_by_marker["[1]"],
                 "PDFSHA256": digest,
             }],
         )
@@ -1860,6 +2272,8 @@ class ValidateReviewBundleTests(unittest.TestCase):
             EVIDENCE_ITEM_COLUMNS,
             [],
         )
+        if page_count >= 4:
+            self.write_semantic_acceptance_fixture(root, process)
         return digest
 
     def convert_bundle_to_doctorate(self, root: Path) -> None:
@@ -1874,6 +2288,8 @@ class ValidateReviewBundleTests(unittest.TestCase):
         process["degree_level"] = "doctorate"
         process["actor_prompt_sha256"]["R4"] = ACTOR_PROMPT_HASHES["R4"]
         process["actor_prompt_sha256"]["R5"] = ACTOR_PROMPT_HASHES["R5"]
+        process["actor_prompt_sha256"]["SA-R4"] = ACTOR_PROMPT_HASHES["SA-R4"]
+        process["actor_prompt_sha256"]["SA-R5"] = ACTOR_PROMPT_HASHES["SA-R5"]
         process_path.write_text(json.dumps(process), encoding="utf-8")
         doctoral_opened = {
             actor_id: "; ".join(
@@ -1987,6 +2403,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 f"opened=[{doctoral_opened['R4']}]",
             )
             + "\n\n"
+            + "## Owned-ledger finding/question reconciliation\n\n"
+            + "| Report item ID | Owned-ledger selectors |\n"
+            + "|---|---|\n"
+            + "| R4-F01 | none |\n\n"
             + (citation_section.group(0).strip() if citation_section else "")
             + "\n"
         )
@@ -2003,6 +2423,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 f"opened=[{doctoral_opened['R5']}]",
             )
             + "\n\n"
+            + "## Owned-ledger finding/question reconciliation\n\n"
+            + "| Report item ID | Owned-ledger selectors |\n"
+            + "|---|---|\n"
+            + "| R5-F01 | none |\n\n"
             + (page_section.group(0).strip() if page_section else "")
             + "\n\n"
             + (bib_section.group(0).strip() if bib_section else "")
@@ -2111,10 +2535,20 @@ class ValidateReviewBundleTests(unittest.TestCase):
             1,
         )
         summary.write_text(summary_text, encoding="utf-8")
+        self.write_semantic_acceptance_fixture(root, process)
 
     def run_validator(
-        self, root: Path, report: Path | None = None
+        self,
+        root: Path,
+        report: Path | None = None,
+        *,
+        refresh_semantic: bool = False,
     ) -> subprocess.CompletedProcess[str]:
+        if refresh_semantic:
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            self.write_semantic_acceptance_fixture(root, process)
         command = [sys.executable, "-B", str(VALIDATOR), str(root)]
         if report:
             command.extend(["--write-report", str(report)])
@@ -2168,6 +2602,16 @@ class ValidateReviewBundleTests(unittest.TestCase):
             ),
             encoding="utf-8",
         )
+        if finding_disposition == "R3-F01":
+            reviewer.write_text(
+                reviewer.read_text(encoding="utf-8").replace(
+                    "| R3-F01 | none |",
+                    "| R3-F01 | "
+                    "03:field=REF0001/retraction_withdrawal_correction_superseding |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
 
     def assert_fails(self, root: Path, needle: str) -> None:
         result = self.run_validator(root)
@@ -2293,7 +2737,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             process = json.loads(process_path.read_text(encoding="utf-8"))
             process["physical_page_count"] = 3
             process_path.write_text(json.dumps(process), encoding="utf-8")
-            self.assert_fails(root, "parsed page count 2")
+            self.assert_fails(root, "parsed page count 4")
 
     def test_frozen_at_requires_iso_datetime_with_timezone(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2333,7 +2777,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_markdown_master_shell_and_missing_ids_fail(self) -> None:
@@ -2691,6 +3135,246 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 for error in errors
             ),
             errors,
+        )
+
+    def test_endpoint_completion_relations_and_cvf_shape_are_closed(self) -> None:
+        fragment_primary = (
+            "https://openaccess.thecvf.com/content/CVPR2026/html/X"
+            "#u_Fixture_CVPR_2026_paper.html"
+        )
+        complete = (
+            "https://openaccess.thecvf.com/content/CVPR2026/html/"
+            "Xu_Fixture_CVPR_2026_paper.html"
+        )
+        cases = (
+            (fragment_primary, complete, "fragment-to-path"),
+            (
+                "https://example.org/html/X?suffix=u_paper.html",
+                "https://example.org/html/Xu_paper.html",
+                "query-to-path",
+            ),
+            (
+                "https://example.org/html/X",
+                "https://example.org/html/Xu_paper.html",
+                "truncated-path-prefix",
+            ),
+            (
+                "https://example.org/forum?id=abc",
+                "https://example.org/forum?id=abcdefgh",
+                "truncated-query-value",
+            ),
+        )
+        for primary, auxiliary, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    expected,
+                    VALIDATOR_MODULE.endpoint_completion_relation(
+                        primary, auxiliary
+                    ),
+                )
+        self.assertIsNotNone(
+            VALIDATOR_MODULE.complete_content_endpoint_error(fragment_primary)
+        )
+        self.assertIsNone(
+            VALIDATOR_MODULE.complete_content_endpoint_error(
+                complete + "#abstract"
+            )
+        )
+        for primary, auxiliary in (
+            (
+                "https://example.org/paper.html#abstract",
+                "https://example.org/paper.html",
+            ),
+            (
+                "https://example.org/paper.html",
+                "https://example.org/paper.html/supplement",
+            ),
+        ):
+            with self.subTest(legitimate=(primary, auxiliary)):
+                self.assertIsNone(
+                    VALIDATOR_MODULE.endpoint_completion_relation(
+                        primary, auxiliary
+                    )
+                )
+
+    def test_cross_page_bibliography_facts_recover_url_and_true_carry_in(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pdf = Path(directory) / "cross-page-bibliography.pdf"
+            writer = PdfWriter()
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            add_ascii_text(writer, page, "body proposition [1]")
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            add_ascii_text(
+                writer,
+                page,
+                "THESIS REFERENCES\nReferences\n"
+                "[1] First record.\n"
+                "[2] Cross-page record. https://example.org/papers/cross_",
+            )
+            page = writer.add_blank_page(width=595.28, height=841.89)
+            add_ascii_text(
+                writer,
+                page,
+                "THESIS REFERENCES\npage.html.\n[3] Third record.",
+            )
+            with pdf.open("wb") as handle:
+                writer.write(handle)
+
+            inventory = [
+                {
+                    "ReferenceID": f"REF{number:04d}",
+                    "DisplayedLabel": f"[{number}]",
+                    "RenderedEntry": "",
+                }
+                for number in range(1, 4)
+            ]
+            initial_errors: list[str] = []
+            initial = VALIDATOR_MODULE.extract_rendered_bibliography_run(
+                pdf, inventory, initial_errors
+            )
+            self.assertIsNotNone(initial)
+            assert initial is not None
+            for row in inventory:
+                row["RenderedEntry"] = initial.entry_facts[
+                    row["ReferenceID"]
+                ].normalized_entry
+            errors: list[str] = []
+            run = VALIDATOR_MODULE.extract_rendered_bibliography_run(
+                pdf, inventory, errors
+            )
+            self.assertEqual([], errors)
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual((1, 2), run.page_facts[2].new_labels)
+            self.assertIsNone(run.page_facts[2].carry_in_label)
+            self.assertEqual((3,), run.page_facts[3].new_labels)
+            self.assertEqual(2, run.page_facts[3].carry_in_label)
+            self.assertEqual("page.html.", run.page_facts[3].carry_in_text)
+
+            complete_url = "https://example.org/papers/cross_page.html"
+            recovered = VALIDATOR_MODULE.recover_rendered_bibliography_urls(
+                run.entry_facts["REF0002"], [complete_url]
+            )
+            self.assertEqual({complete_url}, recovered)
+
+            page_rows = [
+                {
+                    "PhysicalPage": "2",
+                    "DominantContent": "bibliography entries [1]-[2]",
+                    "Evidence": "visible bibliography entries [1]-[2]",
+                },
+                {
+                    "PhysicalPage": "3",
+                    "DominantContent": (
+                        "continuation of [2]; bibliography entries [3]-[3]"
+                    ),
+                    "Evidence": (
+                        "continuation of [2]; visible bibliography entries "
+                        "[3]-[3]"
+                    ),
+                },
+            ]
+            page_errors: list[str] = []
+            VALIDATOR_MODULE.validate_bibliography_page_content_claims(
+                page_rows, run, "02.csv", page_errors
+            )
+            self.assertEqual([], page_errors)
+            page_rows[1]["DominantContent"] = "bibliography entries [2]-[3]"
+            page_errors = []
+            VALIDATOR_MODULE.validate_bibliography_page_content_claims(
+                page_rows, run, "02.csv", page_errors
+            )
+            self.assertTrue(
+                any("carry-in None" in error for error in page_errors),
+                page_errors,
+            )
+            self.assertTrue(
+                any("new-label range (2, 3)" in error for error in page_errors),
+                page_errors,
+            )
+
+            url_row = {
+                "ReferenceID": "REF0002",
+                "Field": "url",
+                "RenderedValue": "no URL rendered",
+                "CanonicalValue": complete_url,
+                "Verdict": "unverifiable",
+                "EvidenceEndpoint": complete_url,
+                "EvidenceNote": "authoritative record insufficient",
+            }
+            field_errors: list[str] = []
+            VALIDATOR_MODULE.validate_bibliography_field_semantics(
+                [url_row],
+                {row["ReferenceID"]: row for row in inventory},
+                "03.csv",
+                field_errors,
+                run,
+            )
+            self.assertTrue(
+                any("furniture-clean cross-page" in error for error in field_errors),
+                field_errors,
+            )
+
+            source_row = {
+                **url_row,
+                "RenderedValue": complete_url,
+                "CanonicalValue": complete_url,
+                "Verdict": "unverifiable",
+                "EvidenceEndpoint": "https://example.org/papers/cross_",
+            }
+            source_errors: list[str] = []
+            VALIDATOR_MODULE.validate_bibliography_source_identity(
+                [source_row],
+                {row["ReferenceID"]: row for row in inventory},
+                "03.csv",
+                source_errors,
+                run,
+            )
+            self.assertTrue(
+                any(
+                    "does not equal an official URL rendered for and governing"
+                    in error
+                    for error in source_errors
+                ),
+                source_errors,
+            )
+
+    def test_canonical_wrap_artifacts_fail_but_rendered_dehyphenation_passes(
+        self,
+    ) -> None:
+        inventory = {
+            "REF0001": {
+                "RenderedEntry": (
+                    "Fixture paper. International Con- ference on Testing."
+                )
+            }
+        }
+        clean_row = {
+            "ReferenceID": "REF0001",
+            "Field": "venue",
+            "RenderedValue": "International Con- ference on Testing",
+            "CanonicalValue": "International Conference on Testing",
+            "Verdict": "exact",
+        }
+        errors: list[str] = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            [clean_row], inventory, "03.csv", errors
+        )
+        self.assertFalse(any("equivalence" in error for error in errors), errors)
+        self.assertFalse(any("line-wrap artifact" in error for error in errors), errors)
+
+        broken = {**clean_row, "CanonicalValue": "International Con- ference on Testing"}
+        errors = []
+        VALIDATOR_MODULE.validate_bibliography_field_semantics(
+            [broken], inventory, "03.csv", errors
+        )
+        self.assertTrue(any("line-wrap artifact" in error for error in errors), errors)
+        self.assertIsNone(
+            VALIDATOR_MODULE.canonical_bibliography_prose_shape_error(
+                "title", "Text-to-Motion with diffusion-based control"
+            )
         )
 
     def test_bibliography_field_audit_rejects_entry_string_replication(
@@ -3919,7 +4603,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root = Path(directory)
             self.build_bundle(root)
             self.convert_bundle_to_dangling_reference(root)
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_malformed_dangling_citation_contract_fails_full_gate(self) -> None:
@@ -4225,6 +4909,30 @@ class ValidateReviewBundleTests(unittest.TestCase):
             write_csv(root / "02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS, ledger)
             self.assert_fails(root, "reference Region pages do not equal")
 
+    def test_full_gate_rejects_bibliography_page_off_by_one_range(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            _, rows = read_csv(root / "02-page-layout-ledger.csv")
+            rows[-1]["DominantContent"] = "bibliography entries [1]-[2]"
+            write_csv(
+                root / "02-page-layout-ledger.csv", PAGE_LEDGER_COLUMNS, rows
+            )
+            markdown = root / "02-page-layout-ledger.md"
+            markdown.write_text(
+                markdown.read_text(encoding="utf-8").replace(
+                    "bibliography entries [1]-[1]",
+                    "bibliography entries [1]-[2]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "bibliography DominantContent new-label range (1, 2) != "
+                "frozen-PDF visible line-start range (1, 1)",
+            )
+
     def test_line_start_numeric_run_without_references_heading_is_not_bibliography(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             pdf = Path(directory) / "fake-boundary.pdf"
@@ -4279,7 +4987,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 CITATION_LEDGER_COLUMNS,
                 ledger,
             )
-            self.assert_fails(root, "outside 1..2")
+            self.assert_fails(root, "outside 1..4")
 
     def test_positive_unmatched_count_cannot_claim_none_found(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -4448,7 +5156,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "- Identity-agreement count: 1", "- Identity-agreement count: 0"
             )
             chair.write_text(chair_text, encoding="utf-8")
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_verified_rows_require_endpoint_and_content_locator(self) -> None:
@@ -4611,6 +5319,42 @@ class ValidateReviewBundleTests(unittest.TestCase):
             )
             self.assert_fails(root, "Frozen at must exactly equal")
 
+    def test_full_process_json_rejects_duplicate_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process_text = process_path.read_text(encoding="utf-8")
+            process_path.write_text(
+                process_text.replace(
+                    '"degree_level": "masters",',
+                    '"degree_level": "masters",\n  '
+                    '"degree_level": "doctorate",',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("duplicate JSON key 'degree_level'", result.stdout)
+
+    def test_full_gate_recomputes_private_acceptance_hash_commitments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            gate_path = root / "06-semantic-acceptance-gate.json"
+            gate = json.loads(gate_path.read_text(encoding="utf-8"))
+            original = gate["targets"]["R1"]["acceptance_md_sha256"]
+            replacement = "F" * 64 if original != "F" * 64 else "E" * 64
+            gate["targets"]["R1"]["acceptance_md_sha256"] = replacement
+            gate_path.write_text(
+                json.dumps(gate, indent=2, sort_keys=True) + "\n",
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("gate content/hash closure mismatch", result.stdout)
+
     def test_manifest_must_bind_process_hash_and_complete_neutral_structure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -4624,7 +5368,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 + " # ",
                 1,
             ).replace(
-                "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n",
+                "## Thesis structure\n\nThe fixture contains two abstract pages "
+                "at physical p.1-2, a rendered body chapter beginning at physical "
+                "p.3, and a terminal bibliography at physical p.4.\n\n",
                 "",
                 1,
             )
@@ -4664,7 +5410,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             report = root / "R3-comprehensive-review.md"
             text = report.read_text(encoding="utf-8").replace(
-                "- Physical pages / unchecked pages: 2 / 0",
+                "- Physical pages / unchecked pages: 4 / 0",
                 "- Physical pages / unchecked pages: 999 / 777",
                 1,
             ).replace(
@@ -4696,7 +5442,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
 
@@ -4727,7 +5473,16 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "| R3-F01 | none |",
+                    "| R3-F01 | 02:page=P0001, 02:page=P0002, "
+                    "02:page=P0003, 02:page=P0004 |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
 
@@ -4886,8 +5641,8 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.build_bundle(root)
             path = root / "90-chair-synthesis.md"
             text = path.read_text(encoding="utf-8").replace(
-                "05-ai-style-assessment.md]",
-                "05-ai-style-assessment.md; old-chair-summary.md]",
+                "06-semantic-acceptance-gate.json]",
+                "06-semantic-acceptance-gate.json; old-chair-summary.md]",
                 1,
             ).replace(
                 "public_endpoints=[none]",
@@ -5144,13 +5899,13 @@ class ValidateReviewBundleTests(unittest.TestCase):
             ),
             (
                 "R2-comprehensive-review.md",
-                "- Cross-chapter coherence: The two-page fixture has a consistent beginning-to-end narrative for validation.\n",
+                "- Cross-chapter coherence: The frozen fixture has a consistent beginning-to-end narrative for validation.\n",
                 "",
                 "Whole-thesis synthesis field 'Cross-chapter coherence'",
             ),
             (
                 "05-ai-style-assessment.md",
-                "- Physical pages inspected: 2 / 2\n",
+                "- Physical pages inspected: 4 / 4\n",
                 "",
                 "Physical pages inspected must exactly equal",
             ),
@@ -5193,7 +5948,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         with tempfile.TemporaryDirectory() as directory:
@@ -5386,7 +6141,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "| Institutional-B | 允许答辩前小修 | institutional / https://example.edu/official-rule | high |",
             )
             summary.write_text(summary_text, encoding="utf-8")
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             r1 = root / "R1-comprehensive-review.md"
             r1_text = r1.read_text(encoding="utf-8")
@@ -5513,7 +6268,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root = Path(directory)
             self.build_bundle(root)
             self.add_external_artifact_finding_and_chair_decision(root)
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn(
                 "| D01 | R1-F02 | external author-side artifact demand |",
@@ -5991,7 +6746,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "actor_id": "H01",
                 "round_id": "fixture",
                 "retry_id": "r1",
-                "prompt_sha256": "B" * 64,
+                "prompt_sha256": "AB" * 32,
                 "fresh_context_declaration": (
                     "no inherited user/thread/task turns beyond system/developer "
                     "instructions and the exact operational prompt"
@@ -6038,7 +6793,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_helper_receipt_must_exactly_project_structured_arrays(self) -> None:
@@ -6239,7 +6994,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             root = Path(directory)
             self.build_bundle(root)
             self.set_bibliography_mismatch(root, "R3-F01")
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertIn("**PASS**", result.stdout)
 
@@ -6760,7 +7515,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         for replacement in (
@@ -6854,7 +7609,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_gate_related_findings_are_closed_and_current_actor_bound(self) -> None:
@@ -6872,7 +7627,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         invalid_values = (
@@ -6919,7 +7674,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
-                result = self.run_validator(root)
+                result = self.run_validator(root, refresh_semantic=True)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
         for invalid in ("J", "B / B", "none / B", "B because related", "None", "A-I"):
@@ -7100,7 +7855,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 text, "Full citation-claim audit", "Full rendered-page audit"
             )
             report.write_text(text, encoding="utf-8")
-            result = self.run_validator(root)
+            result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_hardening_closed_round_root_rejects_old_review_file(self) -> None:
@@ -7310,6 +8065,25 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "Location: canonical `physical p.<n>` within `1..physical_page_count`",
             report_template,
         )
+
+    def test_chair_rule_script_documentation_matches_canonical_constant(self) -> None:
+        skill_root = Path(__file__).resolve().parents[1]
+        report_template = (skill_root / "references" / "report-template.md").read_text(
+            encoding="utf-8"
+        )
+        clean_room = (
+            skill_root / "references" / "clean-room-orchestration.md"
+        ).read_text(encoding="utf-8")
+        canonical = "; ".join(VALIDATOR_MODULE.CHAIR_VALIDATOR_RULE_INPUTS)
+        insertion = re.search(
+            r"(?m)^- Chair C: `([^`]+)`;$",
+            report_template,
+        )
+        self.assertIsNotNone(insertion)
+        self.assertEqual(canonical, insertion.group(1))
+        self.assertIn(canonical, report_template)
+        for script in VALIDATOR_MODULE.CHAIR_VALIDATOR_RULE_INPUTS:
+            self.assertGreaterEqual(clean_room.count(f"`{script}`"), 2)
 
     def test_dependency_ledger_ids_are_validated_as_closed_foreign_keys(self) -> None:
         rows = [

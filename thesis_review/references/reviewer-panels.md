@@ -21,6 +21,17 @@ Use separate output files and private scratch directories. If reviewers share a 
 
 Before freezing or exiting, every reviewer first performs the whole-PDF resolution search required by `review-rubric.md` for every proposed finding and verifies that no required action merely asks for a definition, qualification, or disclosure already present in the frozen thesis. The reviewer then runs the exact role-scoped gate in `ledger-validation.md`: ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware gates; master's R3 uses the combined owner gate. The actor may correct only its own current report and assigned ledgers/renders before freeze. A failure attributable to the packet, process envelope, PDF, governing rules, staged validators, or another actor's artifact stops the actor and triggers Stage O's global retry; no reviewer may patch an upstream or peer artifact. A mechanical `PASS` is mandatory but never substitutes for the whole-thesis semantic and visual judgment.
 
+After all R/AI actors freeze, Stage SA launches one independent semantic
+acceptor per target. These acceptors are not additional reviewers, do not join
+the five-reviewer conclusion distribution, and cannot change findings or
+grades. They independently test the frozen target's complete mandatory unit
+set against the PDF, renders, and permitted public sources. A failed acceptance
+invalidates the entire retry before the Chair starts; the Chair sees only the
+resulting hash-only all-pass gate, never individual acceptance rationales. The
+Chair can recompute that gate's process hash, SA prompt-map projection, current
+target hashes, and coverage, but the private SA-file hashes are Stage-O
+transport commitments until final full validation reopens and rehashes them.
+
 Do not infer an unreported run count from result formatting. If one row reports `mean ± dispersion` and another reports a point estimate, state only what each row visibly reports. Unless the PDF explicitly gives the repeat count, the latter is `not stated in the PDF`, not single-run or single-seed.
 
 Each reviewer reads the whole thesis. The persona changes priority, depth, skepticism, and professional viewpoint; it never narrows the reviewer to one topic.
@@ -157,8 +168,22 @@ Behavior:
 - verifies before alleging misconduct or leakage;
 - does not substitute BibTeX key closure, citation-count statistics, keyword matching, or spot checks for claim--source verification;
 - verifies each claim--source pair from the cited primary source or official full record rather than inferring support from title, abstract keywords, venue, or citation count;
+- assigns each Pair row the smallest clause that its own displayed source is
+  responsible for; it rejects compound propositions that absorb another
+  occurrence marker, page furniture, or thesis-local results and does not give
+  a source `direct` credit merely for defining a nearby baseline, dataset, or
+  metric;
+- records the closed per-source responsibility tuple—pair role, source-stated
+  claim, short exact source anchor, and what the source does/does not support—
+  instead of varying a generic evidence sentence by title, URL, PairID, or hash;
+- uses a locator that can establish the proposition's actual granularity:
+  `Abstract` may support a bounded high-level claim but not a detailed equation,
+  theorem, algorithm step, definition, or thesis table value;
 - produces `04-citation-claim-audit-ledger.md` with 100 percent disposition of citation--source pairs and explicitly records every inaccessible, partially supporting, context-only, or mismatched source use;
 - completes the authoritative `04` CSV first, records every auxiliary opened route with the closed endpoint marker, runs the staged owner materializer, inspects its exact Markdown/receipt projection, and only then runs the read-only R4 gate;
+- authors the closed owned-ledger reconciliation table and verifies the expanded
+  selectors exactly equal all reciprocal `04` dispositions; one linked Pair is
+  not enough when a report item claims a reference-wide or multi-Pair defect;
 - distinguishes unavailable confidential detail from scientifically necessary disclosure;
 - never substitutes forensic artifact reconstruction for thesis-level reproducibility and never requests hidden hashes, logs, manifests, or replay packages as a default remedy;
 - labels inference and uncertainty explicitly.
@@ -188,6 +213,8 @@ Behavior:
 - do not trust imported BibTeX, search snippets, generated citation sites, or aggregate metadata matches; open authoritative records and give every required field a separate verdict;
 - produce the one-row-per-entry Markdown summary plus long-form `03-bibliography-audit-ledger.csv` with every mandatory field row and no pending field; treat a substantiated fabricated/nonexistent citation as an `S0` integrity blocker while distinguishing it from an inaccessible source or a local metadata typo;
 - complete the authoritative `02`/`03` CSVs first, use only current PageIDs for explicit neighbor/evidence cross-references, record every auxiliary opened bibliography route with the closed endpoint marker, run the staged owner materializer, inspect its exact Markdown/receipt projections, and only then run the read-only R5 gate;
+- author the closed owned-ledger reconciliation table and require exact two-way
+  agreement between every report item and its selected `02`/`03` rows;
 - do not mistake legitimate identity fields in an ordinary author copy for defects in a separately prepared blind-review submission;
 - do not reject sound frontier work merely because it is unfamiliar; assess whether the thesis teaches the necessary context.
 

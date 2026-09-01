@@ -80,9 +80,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     print("PASS")
     print(
-        "All current upstream, reviewer, AI, citation/bibliography/layout, "
-        "Chair, 91, and 92 artifacts passed the read-only pre-Stage-S gate; "
-        "only the intentionally absent Stage-S outputs were waived."
+        "All Chair-visible current upstream, reviewer, AI, citation/"
+        "bibliography/layout, Chair, 91, and 92 artifacts passed the read-only "
+        "pre-Stage-S gate. Private SA-file hashes remain Stage-O transport "
+        "commitments for final full revalidation; only the intentionally "
+        "absent Stage-S outputs were waived."
     )
     return 0
 

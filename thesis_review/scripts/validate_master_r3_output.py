@@ -197,6 +197,7 @@ def validate_page_outputs(
     pdf_page_sizes: list[tuple[float, float]],
     page_inventory: list[dict[str, str]],
     page_ledger: list[dict[str, str]],
+    rendered_bibliography_run: Any,
     errors: list[str],
 ) -> None:
     module.validate_rows_mandatory(
@@ -399,6 +400,12 @@ def validate_page_outputs(
         "02-page-layout-ledger.csv",
         errors,
     )
+    module.validate_bibliography_page_content_claims(
+        page_ledger,
+        rendered_bibliography_run,
+        "02-page-layout-ledger.csv",
+        errors,
+    )
     module.validate_markdown_id_projection(
         root / "02-page-layout-ledger.md",
         set(inventory_by_id),
@@ -426,6 +433,7 @@ def validate_bibliography_outputs(
     bibliography_inventory: list[dict[str, str]],
     bibliography_ledger: list[dict[str, str]],
     citation_inventory: list[dict[str, str]],
+    rendered_bibliography_run: Any,
     errors: list[str],
 ) -> None:
     module.validate_rows_mandatory(
@@ -469,12 +477,14 @@ def validate_bibliography_outputs(
         inventory_by_reference,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     module.validate_bibliography_field_semantics(
         bibliography_ledger,
         inventory_by_reference,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     module.validate_bibliography_evidence_specificity(
         bibliography_ledger,
@@ -612,6 +622,7 @@ def validate_citation_outputs(
     root: Path,
     expected_hash: str,
     citation_inventory: list[dict[str, str]],
+    citation_occurrence_anchors: dict[str, dict[str, Any]],
     bibliography_inventory: list[dict[str, str]],
     citation_ledger: list[dict[str, str]],
     errors: list[str],
@@ -650,9 +661,10 @@ def validate_citation_outputs(
         "00-bibliography-inventory.csv",
         errors,
     )
-    module.validate_citation_claim_semantic_specificity(
+    module.validate_citation_claim_mechanical_semantics(
         citation_ledger,
         inventory_by_pair,
+        citation_occurrence_anchors,
         "04-citation-claim-audit-ledger.csv",
         errors,
     )
@@ -791,6 +803,7 @@ def validate_report_links(
     page_ledger: list[dict[str, str]],
     bibliography_ledger: list[dict[str, str]],
     citation_ledger: list[dict[str, str]],
+    section_intervals: dict[str, tuple[int, int]],
     errors: list[str],
 ) -> None:
     visible = module.markdown_visible_text(
@@ -801,6 +814,34 @@ def validate_report_links(
     )
     questions = module.parse_reviewer_questions(
         visible, REVIEWER_INDEX, report_path.name, page_count, []
+    )
+    module.validate_reviewer_pdf_section_anchors(
+        visible,
+        REVIEWER_INDEX,
+        page_count,
+        section_intervals,
+        report_path.name,
+        errors,
+    )
+    module.validate_citation_owner_report_ledger_consistency(
+        findings,
+        questions,
+        citation_ledger,
+        REVIEWER_INDEX,
+        report_path.name,
+        errors,
+    )
+    module.validate_owned_ledger_report_reconciliation(
+        visible,
+        findings,
+        questions,
+        ACTOR_ID,
+        DEGREE_LEVEL,
+        page_ledger,
+        bibliography_ledger,
+        citation_ledger,
+        report_path.name,
+        errors,
     )
     page_links = module.page_layout_finding_ids(page_ledger)
     foreign_page_links = sorted(
@@ -936,7 +977,11 @@ def validate_master_r3(
         errors,
         require_rows=True,
     )
-    citation_inventory = packet_module.validate_packet_inputs(
+    (
+        citation_inventory,
+        citation_occurrence_anchors,
+        rendered_bibliography_run,
+    ) = packet_module.validate_packet_inputs(
         module,
         root,
         process,
@@ -963,6 +1008,7 @@ def validate_master_r3(
         pdf_sizes,
         page_inventory,
         page_ledger,
+        rendered_bibliography_run,
         errors,
     )
     validate_bibliography_outputs(
@@ -972,6 +1018,7 @@ def validate_master_r3(
         bibliography_inventory,
         bibliography_ledger,
         citation_inventory,
+        rendered_bibliography_run,
         errors,
     )
     validate_citation_outputs(
@@ -979,6 +1026,7 @@ def validate_master_r3(
         root,
         expected_hash,
         citation_inventory,
+        citation_occurrence_anchors,
         bibliography_inventory,
         citation_ledger,
         errors,
@@ -1065,6 +1113,9 @@ def validate_master_r3(
         page_count,
         errors,
     )
+    section_intervals = module.manifest_rendered_section_intervals(
+        root / "00-manifest.md", page_inventory, errors
+    )
     validate_report_links(
         module,
         report_path,
@@ -1072,6 +1123,7 @@ def validate_master_r3(
         page_ledger,
         bibliography_ledger,
         citation_ledger,
+        section_intervals,
         errors,
     )
     return errors

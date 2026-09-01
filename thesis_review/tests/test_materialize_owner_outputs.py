@@ -6,6 +6,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -84,6 +85,9 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
         harness.convert_bundle_to_doctorate(root)
         for filename in PEER_AND_DOWNSTREAM_FILES:
             (root / filename).unlink(missing_ok=True)
+        shutil.rmtree(
+            root / fixture_module.VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+        )
 
     def run_materializer(
         self, root: Path, actor_id: str = "R5"
@@ -215,6 +219,10 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
         process = json.loads(
             (root / "00-process-parameters.json").read_text(encoding="utf-8")
         )
+        # The adversarial fixture mutates the AI target report after the base
+        # bundle is built, so rebind the independent semantic-acceptance set to
+        # those exact target bytes before testing downstream materialization.
+        harness.write_semantic_acceptance_fixture(root, process)
         return process, academic_rows, ai_rows, evidence_rows
 
     def parsed_table(self, path: Path, headers: list[str]) -> list[list[str]]:
@@ -408,6 +416,11 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
             )
             for filename in STAGE_S_FILES:
                 (root / filename).unlink(missing_ok=True)
+            # A Chair view receives the hash-only semantic gate, never the
+            # private semantic-review directory itself.
+            shutil.rmtree(
+                root / fixture_module.VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+            )
 
             before = file_hashes(root)
             first = self.run_materializer(root, "C")

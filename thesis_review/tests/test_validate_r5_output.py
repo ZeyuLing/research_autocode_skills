@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import subprocess
+import shutil
 import sys
 import tempfile
 import unittest
@@ -38,6 +39,7 @@ PEER_AND_DOWNSTREAM_FILES = {
     "04-citation-claim-audit-ledger.md",
     "04-citation-claim-audit-ledger.csv",
     "05-ai-style-assessment.md",
+    "06-semantic-acceptance-gate.json",
     "90-chair-synthesis.md",
     "91-revision-ledger.md",
     "91-revision-ledger.csv",
@@ -87,6 +89,9 @@ class ValidateR5OutputTests(unittest.TestCase):
         harness.convert_bundle_to_doctorate(root)
         for filename in PEER_AND_DOWNSTREAM_FILES:
             (root / filename).unlink(missing_ok=True)
+        shutil.rmtree(
+            root / fixture_module.VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+        )
 
     def run_r5(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -204,6 +209,65 @@ class ValidateR5OutputTests(unittest.TestCase):
             self.assert_r5_fails(
                 root,
                 "EvidenceEndpoint is not bound to the complete rendered DOI",
+            )
+
+    def test_r5_rejects_pdf_inconsistent_bibliography_range(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            path = root / "02-page-layout-ledger.csv"
+            headers, rows = read_rows(path)
+            rows[-1]["DominantContent"] = "bibliography entries [1]-[2]"
+            write_rows(path, headers, rows)
+            markdown = root / "02-page-layout-ledger.md"
+            markdown.write_text(
+                markdown.read_text(encoding="utf-8").replace(
+                    "bibliography entries [1]-[1]",
+                    "bibliography entries [1]-[2]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_r5_fails(
+                root,
+                "bibliography DominantContent new-label range (1, 2) != "
+                "frozen-PDF visible line-start range (1, 1)",
+            )
+
+    def test_r5_rejects_fragment_to_path_endpoint_laundering(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            primary = (
+                "https://openaccess.thecvf.com/content/CVPR2026/html/X"
+                "#u_Fixture_CVPR_2026_paper.html"
+            )
+            auxiliary = (
+                "https://openaccess.thecvf.com/content/CVPR2026/html/"
+                "Xu_Fixture_CVPR_2026_paper.html"
+            )
+            path = root / "03-bibliography-audit-ledger.csv"
+            headers, rows = read_rows(path)
+            rows[0]["EvidenceEndpoint"] = primary
+            rows[0]["EvidenceNote"] = (
+                f"accessed endpoint: {auxiliary}; fixture official record checked"
+            )
+            write_rows(path, headers, rows)
+            self.assert_r5_fails(root, "via fragment-to-path")
+
+    def test_r5_rejects_canonical_pdf_wrap_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            path = root / "03-bibliography-audit-ledger.csv"
+            headers, rows = read_rows(path)
+            venue = next(row for row in rows if row["Field"] == "venue")
+            venue["CanonicalValue"] = "Fixture Pro- ceedings"
+            write_rows(path, headers, rows)
+            self.assert_r5_fails(
+                root,
+                "CanonicalValue for 'venue' contains an ASCII "
+                "letter-hyphen-whitespace-letter PDF line-wrap artifact",
             )
 
     def test_scoped_gate_rejects_entry_string_reused_as_metadata_fields(self) -> None:
@@ -396,9 +460,18 @@ class ValidateR5OutputTests(unittest.TestCase):
             )
             report = root / "R5-comprehensive-review.md"
             report.write_text(
-                report.read_text(encoding="utf-8").replace(
+                report.read_text(encoding="utf-8")
+                .replace(
                     "- Actionable layout findings: 0",
                     "- Actionable layout findings: 1",
+                    1,
+                )
+                .replace(
+                    "| R5-F01 | none |",
+                    (
+                        "| R5-F01 | 02:page=P0001, 02:page=P0002, "
+                        "02:page=P0003, 02:page=P0004 |"
+                    ),
                     1,
                 ),
                 encoding="utf-8",
@@ -476,6 +549,25 @@ class ValidateR5OutputTests(unittest.TestCase):
             self.assert_r5_fails(
                 root,
                 "blank mandatory field ClassificationEvidence",
+            )
+
+    def test_packet_gate_requires_exact_non_citation_role_token(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            path = root / "00-citation-candidate-ledger.csv"
+            headers, rows = read_rows(path)
+            non_citation = next(
+                row for row in rows
+                if row["Classification"].strip().casefold() == "non-citation"
+            )
+            non_citation["ClassificationEvidence"] = (
+                "visible numeric array with contextual non-source semantics"
+            )
+            write_rows(path, headers, rows)
+            self.assert_r5_fails(
+                root,
+                "lacks a canonical predicate or the exact derived role token",
             )
 
     def test_r5_contract_forbids_mutating_stage_p_or_other_inputs(self) -> None:

@@ -164,7 +164,11 @@ def validate_packet_inputs(
     page_inventory: list[dict[str, str]],
     bibliography_inventory: list[dict[str, str]],
     errors: list[str],
-) -> list[dict[str, str]]:
+) -> tuple[
+    list[dict[str, str]],
+    dict[str, dict[str, Any]],
+    Any,
+]:
     """Reconcile the complete Stage-P citation packet to the frozen PDF."""
 
     candidates = module.read_csv(
@@ -194,8 +198,12 @@ def validate_packet_inputs(
                     f"00-page-inventory.csv:{line}: bibliography Region has an "
                     "invalid PhysicalPage"
                 )
-    reference_pages = module.derive_and_validate_reference_pages(
+    rendered_bibliography_run = module.derive_and_validate_reference_run(
         frozen_path, declared_reference_pages, bibliography_inventory, errors
+    )
+    reference_pages = (
+        set(rendered_bibliography_run.reference_pages)
+        if rendered_bibliography_run is not None else set()
     )
     extracted_candidates, extracted_unmatched = module.extract_numeric_bracket_candidates(
         frozen_path, reference_pages, errors
@@ -344,6 +352,16 @@ def validate_packet_inputs(
                 f"00-citation-candidate-ledger.csv:{line}: obvious non-citation "
                 f"classified as citation ({obvious_reason})"
             )
+        if index <= len(extracted_candidates):
+            deterministic_reason = module.deterministic_non_citation_reason(
+                extracted_candidates[index - 1], evidence
+            )
+            if classification == "non-citation" and deterministic_reason is None:
+                errors.append(
+                    f"00-citation-candidate-ledger.csv:{line}: non-citation "
+                    "candidate lacks a canonical predicate or the exact "
+                    "derived role token"
+                )
         mapped = row.get("MappedOccurrenceID", "").strip()
         if classification == "citation":
             citation_number += 1
@@ -501,7 +519,11 @@ def validate_packet_inputs(
         reviewer_count,
         errors,
     )
-    return citation_inventory
+    return (
+        citation_inventory,
+        module.build_citation_occurrence_anchors(candidates, extracted_candidates),
+        rendered_bibliography_run,
+    )
 
 
 def validate_page_outputs(
@@ -512,6 +534,7 @@ def validate_page_outputs(
     pdf_page_sizes: list[tuple[float, float]],
     page_inventory: list[dict[str, str]],
     page_ledger: list[dict[str, str]],
+    rendered_bibliography_run: Any,
     errors: list[str],
 ) -> None:
     """Mirror every current full-validator contract for R5's 02 output."""
@@ -711,6 +734,12 @@ def validate_page_outputs(
         "02-page-layout-ledger.csv",
         errors,
     )
+    module.validate_bibliography_page_content_claims(
+        page_ledger,
+        rendered_bibliography_run,
+        "02-page-layout-ledger.csv",
+        errors,
+    )
     module.validate_markdown_id_projection(
         root / "02-page-layout-ledger.md",
         set(inventory_by_id),
@@ -738,6 +767,7 @@ def validate_bibliography_outputs(
     bibliography_inventory: list[dict[str, str]],
     bibliography_ledger: list[dict[str, str]],
     citation_inventory: list[dict[str, str]],
+    rendered_bibliography_run: Any,
     errors: list[str],
 ) -> None:
     """Mirror every current full-validator contract for R5's 03 output."""
@@ -783,12 +813,14 @@ def validate_bibliography_outputs(
         inventory_by_reference,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     module.validate_bibliography_field_semantics(
         bibliography_ledger,
         inventory_by_reference,
         "03-bibliography-audit-ledger.csv",
         errors,
+        rendered_bibliography_run,
     )
     module.validate_bibliography_evidence_specificity(
         bibliography_ledger,
@@ -927,6 +959,7 @@ def validate_report_links(
     page_count: int,
     page_ledger: list[dict[str, str]],
     bibliography_ledger: list[dict[str, str]],
+    section_intervals: dict[str, tuple[int, int]],
     errors: list[str],
 ) -> None:
     text = module.markdown_visible_text(
@@ -937,6 +970,21 @@ def validate_report_links(
     )
     questions = module.parse_reviewer_questions(
         text, 5, report_path.name, page_count, []
+    )
+    module.validate_reviewer_pdf_section_anchors(
+        text, 5, page_count, section_intervals, report_path.name, errors
+    )
+    module.validate_owned_ledger_report_reconciliation(
+        text,
+        findings,
+        questions,
+        "R5",
+        "doctorate",
+        page_ledger,
+        bibliography_ledger,
+        [],
+        report_path.name,
+        errors,
     )
     page_links = module.page_layout_finding_ids(page_ledger)
     unknown_page_links = sorted(page_links - set(findings))
@@ -1033,7 +1081,11 @@ def validate_r5(root: Path, module: Any) -> list[str]:
         errors,
         require_rows=True,
     )
-    citation_inventory = validate_packet_inputs(
+    (
+        citation_inventory,
+        _citation_occurrence_anchors,
+        rendered_bibliography_run,
+    ) = validate_packet_inputs(
         module,
         root,
         process,
@@ -1053,6 +1105,7 @@ def validate_r5(root: Path, module: Any) -> list[str]:
         pdf_sizes,
         page_inventory,
         page_ledger,
+        rendered_bibliography_run,
         errors,
     )
     validate_bibliography_outputs(
@@ -1062,6 +1115,7 @@ def validate_r5(root: Path, module: Any) -> list[str]:
         bibliography_inventory,
         bibliography_ledger,
         citation_inventory,
+        rendered_bibliography_run,
         errors,
     )
 
@@ -1130,8 +1184,17 @@ def validate_r5(root: Path, module: Any) -> list[str]:
         page_count,
         errors,
     )
+    section_intervals = module.manifest_rendered_section_intervals(
+        root / "00-manifest.md", page_inventory, errors
+    )
     validate_report_links(
-        module, report_path, page_count, page_ledger, bibliography_ledger, errors
+        module,
+        report_path,
+        page_count,
+        page_ledger,
+        bibliography_ledger,
+        section_intervals,
+        errors,
     )
     return errors
 

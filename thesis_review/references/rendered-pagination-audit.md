@@ -40,6 +40,14 @@ blank/separator page additionally states the structural reason it is expected.
 Whole-thesis template filling with one identical signal/evidence sentence is an
 invalid audit even when every PNG and hash is genuine.
 
+On a bibliography page, any entry-number range asserted in `DominantContent` or
+`Evidence` must equal the line-start labels actually visible on that physical
+page. A carried-over entry from the preceding page is described explicitly as a
+continuation; it is not silently counted as a new line-start label. The owner
+compares the claim with both the retained PNG and the frozen PDF extraction.
+Invented ranges, off-by-one boundaries, or a cue that contradicts its own range
+invalidate the row even when the page image itself is clean.
+
 The validator also normalizes away Page IDs/numbers, copied dominant-content
 titles, neighbor-page values, scale/DPI, hashes, and numeric interpolation
 before measuring evidence diversity. Rotating a small bank of checklist
@@ -98,6 +106,18 @@ For a cropped, split, rotated, or continued artifact visible in the PDF:
 5. inspect the page before the first part, every continuation page, and the first page after the artifact.
 
 Do not trade a blank-page defect for unreadably small embedded text. Prefer semantic continuation, reordered explanatory prose, or an aspect-ratio-aware layout over indiscriminate scaling.
+
+After the page/bibliography owner freezes, a fresh semantic acceptor inspects
+every retained `page-renders/Pnnnn.png` at legible scale and every authoritative
+`(ReferenceID,Field)` row. Its page coverage is exact, not a sample: it checks
+printed/body numbering, float and caption attachment, clipping/overflow,
+blank-page behavior, continuation seams, neighbor dependence, and each
+bibliography page's actual carry-in plus newly started labels. Field acceptance
+uses the rendered entry, including text or URLs split across physical pages,
+and the authoritative public record. The acceptor records only pass/fail
+coverage under the Stage-SA contract; it does not revise the ledger or create a
+second format review. Any failed or unchecked unit invalidates the retry before
+Chair synthesis.
 
 ## 6. Post-edit regression gate
 

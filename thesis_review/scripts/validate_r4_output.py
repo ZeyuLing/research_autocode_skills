@@ -120,6 +120,7 @@ def validate_citation_outputs(
     process: dict[str, Any],
     expected_hash: str,
     citation_inventory: list[dict[str, str]],
+    citation_occurrence_anchors: dict[str, dict[str, Any]],
     bibliography_inventory: list[dict[str, str]],
     citation_ledger: list[dict[str, str]],
     errors: list[str],
@@ -158,9 +159,10 @@ def validate_citation_outputs(
         "00-bibliography-inventory.csv",
         errors,
     )
-    module.validate_citation_claim_semantic_specificity(
+    module.validate_citation_claim_mechanical_semantics(
         citation_ledger,
         inventory_by_pair,
+        citation_occurrence_anchors,
         "04-citation-claim-audit-ledger.csv",
         errors,
     )
@@ -388,7 +390,11 @@ def validate_r4(root: Path, module: Any, packet_module: Any) -> list[str]:
             rows, filename, columns, errors, blank_allowed=blank_allowed
         )
         module.validate_pdf_hash(rows, filename, expected_hash, errors)
-    citation_inventory = packet_module.validate_packet_inputs(
+    (
+        citation_inventory,
+        citation_occurrence_anchors,
+        _rendered_bibliography_run,
+    ) = packet_module.validate_packet_inputs(
         module,
         root,
         process,
@@ -412,6 +418,7 @@ def validate_r4(root: Path, module: Any, packet_module: Any) -> list[str]:
         process,
         expected_hash,
         citation_inventory,
+        citation_occurrence_anchors,
         bibliography_inventory,
         citation_ledger,
         errors,
@@ -458,6 +465,32 @@ def validate_r4(root: Path, module: Any, packet_module: Any) -> list[str]:
         )
         questions = module.parse_reviewer_questions(
             visible, 4, report_path.name, page_count, []
+        )
+        section_intervals = module.manifest_rendered_section_intervals(
+            root / "00-manifest.md", page_inventory, errors
+        )
+        module.validate_reviewer_pdf_section_anchors(
+            visible, 4, page_count, section_intervals, report_path.name, errors
+        )
+        module.validate_citation_owner_report_ledger_consistency(
+            findings,
+            questions,
+            citation_ledger,
+            4,
+            report_path.name,
+            errors,
+        )
+        module.validate_owned_ledger_report_reconciliation(
+            visible,
+            findings,
+            questions,
+            "R4",
+            "doctorate",
+            [],
+            [],
+            citation_ledger,
+            report_path.name,
+            errors,
         )
         known_ids = set(findings) | set(questions)
         linked_ids = {

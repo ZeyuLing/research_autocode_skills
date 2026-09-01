@@ -287,10 +287,12 @@ class ValidateStagePOutputTests(unittest.TestCase):
         )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            harness.build_bundle(root, page_count=4)
+            # Five pages leave physical p.4 as a genuinely blank separator while
+            # retaining the bilingual abstracts, a body section, and bibliography.
+            harness.build_bundle(root, page_count=5)
             path = root / "00-page-inventory.csv"
             headers, rows = read_rows(path)
-            rows[2]["Region"] = "separator — blank verso"
+            rows[3]["Region"] = "separator — blank verso"
             write_rows(path, headers, rows)
             result = self.run_stage_p(root)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -409,7 +411,7 @@ class ValidateStagePOutputTests(unittest.TestCase):
             manifest = root / "00-manifest.md"
             manifest.write_text(
                 manifest.read_text(encoding="utf-8").replace(
-                    "- Sections: none detected",
+                    "- Sections: 1.1=physical p.3",
                     "- Sections: 0.14=physical p.1",
                 ),
                 encoding="utf-8",
@@ -469,7 +471,7 @@ class ValidateStagePOutputTests(unittest.TestCase):
             with mock.patch.object(
                 FULL_VALIDATOR_MODULE,
                 "detect_rendered_substantive_authored_back_pages",
-                return_value={2},
+                return_value={4},
             ):
                 errors = STAGE_P_MODULE.validate_stage_p(
                     root, FULL_VALIDATOR_MODULE
@@ -799,8 +801,19 @@ class ValidateStagePOutputTests(unittest.TestCase):
             digest = harness.rewrite_pdf_and_rehash(
                 root,
                 [
-                    "fixture proposition [1]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1].",
+                    "CHINESE ABSTRACT\n"
+                    "This synthetic Chinese abstract explains the research task, "
+                    "method, and principal result. It supplies sustained authored "
+                    "prose for independent semantic inspection. The fixture "
+                    "proposition [1]; quantization levels are [3, 8]; scale interval "
+                    "[0.85, 1].",
+                    "ABSTRACT\n"
+                    "This synthetic English abstract explains the research task, "
+                    "method, and principal result. It contains sustained explanatory "
+                    "prose for an independent semantic inspection. The evidence is "
+                    "deliberately long enough to constitute authored abstract text.",
+                    "CHAPTER 1\nFixture Method\n1.1 Introduction\n"
+                    "This rendered body chapter explains the fixture method and result.",
                     "References\n[1] Duplicate reference.\n[2] Duplicate reference.",
                 ],
             )
@@ -838,14 +851,25 @@ class ValidateStagePOutputTests(unittest.TestCase):
             digest = harness.rewrite_pdf_and_rehash(
                 root,
                 [
-                    "fixture proposition [2]; quantization levels are [3, 8]; "
-                    "scale interval [0.85, 1].",
+                    "CHINESE ABSTRACT\n"
+                    "This synthetic Chinese abstract explains the research task, "
+                    "method, and principal result. It supplies sustained authored "
+                    "prose for independent semantic inspection. The fixture "
+                    "proposition [2]; quantization levels are [3, 8]; scale interval "
+                    "[0.85, 1].",
+                    "ABSTRACT\n"
+                    "This synthetic English abstract explains the research task, "
+                    "method, and principal result. It contains sustained explanatory "
+                    "prose for an independent semantic inspection. The evidence is "
+                    "deliberately long enough to constitute authored abstract text.",
+                    "CHAPTER 1\nFixture Method\n1.1 Introduction\n"
+                    "This rendered body chapter explains the fixture method and result.",
                     "References\n[1] Fixture reference.",
                 ],
             )
             extraction_errors: list[str] = []
             extracted, unmatched = FULL_VALIDATOR_MODULE.extract_numeric_bracket_candidates(
-                root / "frozen-thesis.pdf", {2}, extraction_errors
+                root / "frozen-thesis.pdf", {4}, extraction_errors
             )
             self.assertEqual([], extraction_errors)
             self.assertEqual([], unmatched)

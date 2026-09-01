@@ -15,7 +15,7 @@ Do not:
 - penalize required institutional boilerplate, BibTeX output, reference lists, formulae, code, table cells, or standard declarations;
 - assume that common Chinese academic transitions are defective without checking recurrence, context, and reader impact.
 
-If the assessor encounters a factual, citation, integrity, or technical problem, it must not message any reviewer or other actor before reports are frozen. Record the PDF-visible observation, if material, only in a sealed `Out-of-scope observations for chair verification` section of `05-ai-style-assessment.md`, without an AI finding ID, severity, or conclusion. The clean chair may independently verify it after all R reports are frozen. Do not disguise it as an AI-style finding.
+If the assessor encounters a factual, citation, integrity, or technical problem, it must not message any reviewer or other actor before reports are frozen. Record the PDF-visible observation, if material, only in a sealed `Out-of-scope observations for chair verification` section of `05-ai-style-assessment.md`, without an AI finding ID, severity, or conclusion. The clean chair may independently verify it only after all R/AI outputs and the independent semantic-acceptance gate are frozen and passing. Do not disguise it as an AI-style finding.
 
 ## 2. Independence and evidence
 
@@ -125,6 +125,16 @@ field labels. An extra or renamed colon-labeled bullet invalidates the report;
 free prose cannot compensate for or contradict the required disclaimer.
 
 Before freezing or exiting, run `python rules/scripts/validate_ai_output.py <exact-round-root>` until it exits `0` and its first nonempty stdout line is exactly `PASS`. This read-only scoped gate uses only the canonical AI inputs and `05-ai-style-assessment.md`; it does not enumerate the round root or open reviewer/ledger, Chair, Stage-S, old-round, or governing-local-file artifacts. The assessor may correct only its current `05-ai-style-assessment.md` in the same fresh turn. Any failure attributable to the process envelope, frozen PDF, Stage-P manifest/page inventory, governing rules, or staged validators stops the assessor and triggers Stage O's clean global retry. Validator code/stdout is mechanical rule infrastructure, not thesis evidence or a source of style findings.
+
+After the assessor freezes, a separate fresh `SA-AI` actor independently checks
+every Stage-P-authored-prose page, every `AI-Fxx`, and the overall judgment. It
+must test the claimed recurrence against concrete passages and counter-evidence
+across the thesis, and it must preserve the boundary that this is neither an
+authorship, AI-use, plagiarism, nor misconduct determination. It receives no R
+report, Chair output, prior AI assessment, detector artifact, conversation
+context, or author-side material. It records only acceptance rows and an
+overall pass/fail; it cannot edit prose findings, assign an academic grade, or
+create a new style finding. Any failed or unchecked unit invalidates the retry.
 
 The chair copies every unresolved `material` or `local` style remedy into the separate AI-actionable ledger without translating it to `S0--S4` or changing the defense grade. Any such open finding blocks a claim that the thesis has completed final prose-polish review, regardless of the overall signal label. The judgment remains separate from the R1--R5 category/recommendation distribution and does not by itself change the academic, defense, or integrity conclusion.
 

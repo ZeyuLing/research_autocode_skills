@@ -91,6 +91,15 @@ type, existence, or retraction/correction status. The accepted grammar includes
 Reusing one entry-level string across unrelated fields is an invalid audit even
 when every row has an endpoint and the row count is correct.
 
+Field recovery spans bibliography page boundaries. A rendered URL split between
+two physical pages is reconstructed from the complete `RenderedEntry` before it
+can be called absent. The primary `EvidenceEndpoint` must itself be the complete
+resource path: putting a truncated path suffix in a URL fragment/query or only
+in an auxiliary accessed endpoint is endpoint laundering and does not pass.
+Canonical prose metadata must not preserve PDF line-wrap artifacts such as
+`Con- ference` or `diffu- sion`; normalize a genuine rendered line-wrap split
+for comparison while keeping the authoritative title/venue spelling intact.
+
 For `Verdict=exact`, rendered and canonical values must be field-equivalent.
 This includes the complete ordered author sequence and separate venue and
 publication-status fields, not only compact numeric/identifier scalars. Full
@@ -127,6 +136,15 @@ context after an entry delimiter and at a terminal field boundary; title text
 such as `12(3):45-67 ways ...` is not treated as publication metadata.
 
 `EvidenceEndpoint` and `CheckedAt` document what the auditor used; they are not automatically fields that must be printed in the thesis bibliography. Whether the rendered reference itself must contain a URL or access date is controlled by the verified institutional template/citation style and the source type. When no binding rule requires a rendered URL or access date, an absent value is `legitimate N/A`, creates no finding, and does not affect the grade. A wrong printed URL that identifies a different object remains a factual identity mismatch. A repository's current archived/read-only state is a finding only when it contradicts a material availability/status claim made by the PDF; it is otherwise audit context.
+
+The same boundary applies to DOI/arXiv/other convenience identifiers: the
+auditor's difficulty reaching a public verification route is not itself a thesis
+defect when the binding style does not require that field. Escalation requires a
+separate verified basis—such as a binding format obligation, a wrong or
+misidentifying rendered value, an exact public-artifact claim made by the PDF, or
+a source identity/status fact material to a thesis proposition—and the owner
+must link the complete affected row scope through the report reconciliation
+table.
 
 Do not hand-copy any `03` or `04` deterministic Markdown row or any endpoint
 receipt list. Complete the authoritative owned CSV first, run
@@ -224,18 +242,83 @@ or `attached proposition:`, that labeled text must equal
 binding, not evidence: retain a substantive source-content explanation after
 it.
 
+For `direct`, `partial`, `context-only`, and `mismatch`, that explanation is a
+closed per-source responsibility record in this exact clause order after the
+binding marker:
+
+`pair role: <full|subspan|premise|context|metadata|contradiction>; source-stated claim: <source-specific concise paraphrase>; source anchor: <short exact source text>; support boundary: supports=<what this source establishes> || does-not-support=<what remains outside this source or N/A>`
+
+Each label occurs exactly once. The source anchor is short enough to respect
+quotation limits but specific enough to relocate the evidence; a work title,
+abstract keyword, or generic phrase such as “describes the method” is not an
+anchor. The same conventional role word may recur, but the source-stated claim,
+anchor, and support boundary must reflect the actually opened source. An
+`Abstract`, `Section N`, or `Table N` locator is complete only together with
+this source-specific anchor; a table result additionally names the relevant row,
+columns, and controlling protocol/footnote in the locator or support boundary.
+Auxiliary `accessed endpoint:` clauses, when any, follow this closed record.
+
+“Smallest” is an operational responsibility boundary, not a request to copy the
+whole extraction window. After removing only this Pair ID's exact displayed
+numeric marker, the proposition must not retain a marker assigned to another
+`Cnnnn` occurrence in the same overlapping PDF window, a running header/footer,
+or a detached printed-page digit. Its marker-stripped normalized non-whitespace
+length is at most 300 characters. A span above 200 characters is accepted only
+when it remains one continuous proposition: if it crosses a genuine internal
+sentence or clause boundary, it must be split there. Ordinary abbreviation
+periods such as `e.g.` and `et al.` are not such boundaries. A longer compound
+sentence must be split at the clauses
+for which the individual displayed sources are responsible. Bracketed numeric
+data remain part of the proposition when they are genuinely data rather than a
+different Stage-P citation occurrence.
+
+For a multi-source cluster, sign each Pair row separately. Repeating the same
+compound proposition is legitimate only when every displayed source really
+supports that complete proposition; otherwise narrow each row to the source's
+own clause, use `partial`/`context-only`, or open a finding. An external source
+cannot receive `direct` credit for the thesis's own method, table, experiment,
+metric value, or comparative result merely because it defines a baseline,
+dataset, or metric used nearby. Record that source-attributed fact separately
+and treat the thesis-local result as author evidence. Likewise, `Abstract` alone
+does not establish a detailed equation, theorem, metric definition, algorithmic
+step, or table value; use the exact source section/equation/table locator.
+
+Before opening a multi-source cluster, assign the claimed responsibility of
+each displayed source; after opening it, record the actual boundary separately.
+Allowed patterns include independent full support, partitioned subclaims,
+premises combined by an explicitly author-owned synthesis, and mixed
+evidence/context roles. One relevant source never launders an irrelevant cluster
+member. A cited baseline name in a thesis-produced comparison table ordinarily
+receives external support only for its method/dataset identity; values produced,
+normalized, aggregated, or re-evaluated under the thesis protocol remain
+thesis-local unless the PDF explicitly attributes those exact values to the
+source and the opened source contains the matching table, metric, split, and
+protocol. `context-only` is not a waiver for this boundary analysis.
+
 Locators and evidence remain source/occurrence-specific. Do not copy one
 generic locator such as `Abstract; Section 3; Figure 2` or one generic support
 sentence across many different sources or propositions. The gate removes URLs,
-identifiers, numeric coordinates, the occurrence marker, and the exact attached
-proposition before comparing templates, so changing only those interpolations
-does not create distinct evidence. Repeated uses of the same work may share a
-genuinely common locator; a large cross-source/cross-proposition template block
-is aggregated across support classes. A concise locator such as `Abstract` alone
-may legitimately recur and is not generic explanatory filler. For proposition
+identifiers, numeric coordinates, the occurrence marker, source titles, and the
+exact attached proposition before comparing templates, so changing only those
+interpolations does not create distinct evidence. Repeated uses of the same work
+may share a genuinely common locator. At thesis scale, however, one identical
+locator covering at least 85 percent of a support class with at least 24 rows,
+12 distinct references, and 18 distinct propositions is a locator monoculture
+and fails. The evidence body is also checked for repeated 10-word or 24-CJK-
+character shingles across at least 12 `(ReferenceID, proposition)` units, six
+references, and eight propositions; source-title interpolation cannot hide a
+bulk template. These are mechanical lower bounds, not safe harbors: the owner
+still judges smaller suspicious repetitions semantically. For proposition
 projection, remove only the exact numeric citation marker recovered for that
-Stage-P occurrence; bracketed numeric data such as `[1,2]` remains substantive.
-does not pass.
+Stage-P occurrence; bracketed numeric data such as `[1,2]` remain substantive.
+The occurrence offset also defines the co-citation run: comma/list/conjunction
+separators remain one run, including one indented PDF-extraction wrap after such
+a separator, while a semicolon, bare newline, blank line, or sentence boundary
+starts a new responsibility span. A proposition may attach through a bounded
+parenthesis or citation introducer such as `see`, `cf.`, `as shown in`, `见`, or
+`参见`; it may not cross a raw paragraph break. After the true marker is removed,
+the substantive core cannot be empty. Marker-shaped numeric data elsewhere in
+the same clause are retained by offset rather than deleted by textual equality.
 
 ## 3. Static closure checks
 
@@ -375,5 +458,14 @@ The citation-claim gate passes only when:
 - the citation-claim-owning reviewer reports counts and limitations in the independent report.
 
 The combined citation gate passes only when the chair's reference-wise cross-ledger join has no unresolved identity/support contradiction. Record the joined-reference count and conflict count in the chair synthesis or re-review report.
+
+Before that Chair join is permitted, a fresh `SA-R4` (or master's `SA-R3`)
+acceptor independently covers every authoritative `PairID`. For each pair it
+must reopen the recorded source-content endpoint, inspect an exact source
+locator, compare the atomic thesis proposition with what that source actually
+states, and verify the pair-specific support boundary and disposition. Matching
+title/identity, a generic abstract locator, or the owner's own explanation is
+not semantic acceptance. Any failed or unchecked pair invalidates the complete
+retry; the acceptor never edits the citation ledger or writes a new finding.
 
 After citation, claim, related-work, bibliography, status, dataset-source, or attribution edits, freeze the new PDF and regenerate the affected ledger or both ledgers from that PDF. Recheck every changed entry or occurrence and every other occurrence that reuses the affected source. Previous 100 percent ledgers do not carry over to a new frozen PDF.

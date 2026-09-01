@@ -85,6 +85,14 @@ through the whole document. An `intentional` row contains a structural
 rationale for the blank/separator/template page. These are semantic
 completeness conditions, not substitutes for the retained PNG checks.
 
+For every PDF-derived bibliography page, re-extract the line-start entry labels
+from that physical page. If `DominantContent` or `Evidence` asserts a bracketed
+entry range, its endpoints must equal the page's actual minimum/maximum new
+labels; a preceding entry continued from another page is described separately
+and does not change the line-start range. A claimed range on a page with no new
+entry label is invalid. This comparison is performed by both the owner-scoped
+and full gates from the same frozen PDF/runtime.
+
 ### Bibliography audit
 
 - `03-bibliography-audit-ledger.csv`: `ReferenceID,DisplayedLabel,Cited,Field,RenderedValue,CanonicalValue,Verdict,EvidenceEndpoint,EndpointType,CheckedAt,EvidenceNote,FindingDisposition,PDFSHA256`
@@ -111,6 +119,23 @@ field marked `exact` is invalid. When an explicit `DOI:`/`DOI ` or `arXiv:`
 field and a PDF-line-broken URL disagree only because the URL lost a trailing
 character, the complete explicit field binds the work identity and the
 truncated route does not pass.
+
+Field extraction follows the complete cross-page `RenderedEntry`, not one
+physical page in isolation. A URL split at a page boundary is still visibly
+rendered and is reconstructed by removing extraction whitespace between its URL
+tokens before deciding whether `Field=url` is absent. A primary evidence URL
+cannot use its fragment, query, or an auxiliary endpoint to smuggle the missing
+suffix of a visibly truncated path; if concatenating such text yields the
+complete official path, the primary endpoint fails. A correct auxiliary route
+does not repair that failure.
+
+`CanonicalValue` represents the authoritative record, not a copy of PDF
+line-wrap artifacts. For prose fields, an ASCII letter-hyphen-whitespace-letter
+sequence such as `Con- ference` or `diffu- sion` is invalid canonical metadata.
+The rendered scalar may contain such extraction hyphenation; exact comparison
+normalizes a genuine line-wrap split before comparing it with the correctly
+spelled canonical scalar. A real source hyphen remains adjacent to both word
+parts and is preserved.
 
 For exact comparisons, full given names may match their initials, or omit only
 trailing middle-name tokens after a compatible first given name, under an unchanged ordered author count with
@@ -163,15 +188,62 @@ spaces/line breaks. Any explicit `occurrence-specific subject:` or `attached
 proposition:` label in the disposition must normalize to that exact proposition.
 The marker cannot stand alone: substantive evidence remains mandatory.
 
+Immediately after that marker, the substantive evidence contains exactly one
+semicolon-delimited clause sequence in this order: `pair role:`,
+`source-stated claim:`, `source anchor:`, and `support boundary:`. `pair role`
+is one of `full`, `subspan`, `premise`, `context`, `metadata`, or
+`contradiction`. The boundary value contains exactly `supports=<nonempty> ||
+does-not-support=<nonempty or N/A>`. The source claim and anchor are non-shell,
+source-specific content; changing only the source title, URL, identifier, row
+ID, hash, locator coordinate, or attached proposition cannot satisfy them.
+Optional closed `accessed endpoint:` clauses follow the responsibility record.
+Bare `Abstract`/`Section`/`Table` locators are therefore not self-sufficient:
+the source anchor must relocate the actual statement, and a table-supported
+number also identifies row, relevant columns, and any controlling
+protocol/footnote.
+
+That exact substring is also an atomic source-responsibility span. After only
+its own displayed marker is removed, it cannot contain a marker mapped to a
+different occurrence in an overlapping same-page Stage-P window, a running
+header/footer, a detached printed-page digit, or more than 300 normalized
+non-whitespace characters. For `Support=direct`, it cannot combine an external
+source with the thesis's own method/table/experiment/result claim; the source-
+attributed premise must be separated. An `Abstract`-only locator is invalid for
+a detailed equation, theorem, metric definition, algorithmic step, or table
+value.
+
+The true Stage-P offsets, not marker text alone, define attachment and removal.
+A comma/list/conjunction co-citation run may contain one indented extraction
+line wrap; a semicolon, bare line break, blank line, or sentence boundary splits
+the run. Bounded left/right introducers (`see`, `cf.`, `as shown in`, `见`,
+`参见`, and their documented equivalents) may connect the smallest claim to the
+marker. A marker-only or punctuation-only span fails. For spans above 200 and
+at most 300 marker-stripped non-whitespace characters, crossing a genuine
+sentence or strong-clause boundary is also a failure and the row must be split;
+periods in ordinary abbreviations such as `e.g.` and `et al.` are not such
+boundaries. The raw-offset check rejects blank-paragraph crossings and dynamic
+running furniture such as decorated Roman/Arabic page counters or repeated
+headers whose page number changes.
+
 For those four support classes, identity-stripped `ExactSourceLocator` and
 `DispositionEvidence` signatures are checked separately. The signature removes
 URLs, DOI/arXiv/work/row IDs, numeric coordinates, binding markers, labeled
-subjects, and the row's complete attached proposition. A signature repeated
+subjects, source-title interpolation, and the row's complete attached
+proposition. A signature repeated
 across at least 12 distinct `(ReferenceID, proposition)` units fails when it
 spans at least six distinct references or eight distinct propositions. The
 diagnostic reports the support class, distinct-reference count, unit count, and
 threshold. Repeated occurrences of one work below that cross-source/
 cross-proposition boundary remain available for reviewer judgment.
+
+A concise structured locator is not exempt from thesis-scale repetition. One
+identical locator covering at least 85 percent of one support class fails when
+that class has at least 24 rows and the dominant locator spans at least 12
+references and 18 propositions. Evidence bodies are additionally compared by
+10-word and 24-CJK-character shingles; a shingle reused across at least 12
+reference/proposition units, six references, and eight propositions fails even
+when every row prepends a different title. These thresholds are minimum
+mechanical alarms and do not replace semantic review of smaller repetitions.
 
 An `unverifiable` row records a concrete source-specific failure or
 content-insufficiency result. “Source-content access attempt” is not a locator,
@@ -181,6 +253,153 @@ occurrences of the same work but rejects a dominant identical waiver reused
 across many distinct references.
 
 The owning audit artifact and owning review report must list in their `public_endpoints=[...]` receipt every authoritative endpoint that their bibliography or citation master says was opened, including every valid marked auxiliary route. Each exact endpoint occurs once in the receipt. Declaring `[none]` while `EvidenceEndpoint`, `ContentSourceOpened`, or a valid `accessed endpoint:` marker contains a source is an invalid access record. A receipt-only endpoint is equally invalid. An `unverifiable` bibliography row still retains its complete attempted authoritative endpoint and contributes it to the receipt; it never invents a route or leaves `EvidenceEndpoint` blank.
+
+### Owned-ledger report reconciliation
+
+Every ledger owner report contains exactly one `Owned-ledger
+finding/question reconciliation` table with headers `Report item ID` and
+`Owned-ledger selectors`. It lists every current report finding/question exactly
+once in report order, or is header-only when there are no items. The selector
+cell is exactly `none` or a duplicate-free comma-space list drawn from:
+
+- `02:page=Pnnnn` for one page row;
+- `03:field=REFnnnn/<mandatory-field>` for one bibliography-field row;
+- `04:pair=Cnnnn-Snn` for one citation Pair row;
+- `04:reference=REFnnnn` for all current `04` rows of one reference.
+
+Doctoral R4 may use only `04`, doctoral R5 only `02`/`03`, and master's R3 all
+three. Mixed selector lists are ordered `02`, `03`, `04`, then by authoritative
+CSV order. A `04:reference` selector cannot coexist with one of its expanded
+`04:pair` selectors. The dedicated selector cell is the only additional place
+where canonical Page/Reference/Pair IDs may appear outside their ordinary ledger
+columns.
+
+Normalize each owned ledger to its authoritative disposition: `02.Disposition`,
+`03.FindingDisposition`, and `04.SeverityFinding`. Expand every report selector
+and require exact set equality with the rows whose authoritative disposition is
+that report item. Enforce the reverse join as well. Missing, extra, duplicate,
+unknown, wrong-owner, wrong-ledger, or one-row/multiple-item links fail. A
+`none`/`reasoned non-finding` row has no reciprocal report item and cannot be
+selected. In `04`, an owner ID occurs only in `SeverityFinding`, never solely in
+free-form `DispositionEvidence`, and it is mutually exclusive with `reasoned
+non-finding:`. In `03`, `exact` and `legitimate N/A` require
+`FindingDisposition=none`; `mismatch` requires one current owner finding/question;
+`unverifiable` may be `none` or one owner item.
+
+### Reviewer PDF-section anchors
+
+The already validated `00-manifest.md` section map is the authority for explicit
+thesis-section suffixes in reviewer Gate evidence, finding `Location`, and
+question `Exact PDF anchor`. Recognize only `Section N.N[.N...]`, `Sec.
+N.N[.N...]`, `§N.N[.N...]`, and `第N.N[.N...]节` (including fullwidth dots).
+Do not interpret bare decimals or numbers labeled Table/Figure/Equation, DOI,
+metric, or model version as sections. Build each section interval from its
+heading page through the page immediately before the next equal-or-shallower
+heading, bounded by the rendered thesis body. When an explicit section and a
+canonical `physical p.<n>` appear in the same anchor segment, require the page
+inside that interval; an explicitly named section must exist even when no page
+can be paired. This rule never applies to `04.ExactSourceLocator`, whose section
+belongs to an external cited source.
+
+### Independent semantic-acceptance contract
+
+Every frozen R/AI target has one fresh acceptance pair under
+`06-semantic-acceptance/`: `SA-<target>.md` and `SA-<target>.csv`. The CSV is
+authoritative and has the exact schema:
+
+`AcceptanceRowID,TargetUnitType,TargetUnitID,TargetArtifact,TargetArtifactSHA256,CheckClass,AcceptanceDisposition,EvidenceAnchor,SemanticBasis`
+
+IDs are continuous `SA000001...` within each file. Target-unit type, check class,
+and complete ordered row universe are closed as follows:
+
+| Target unit type | Check class | Required units |
+|---|---|---|
+| `gate` | `semantic-coverage` | Gate A through Gate I for every R target |
+| `chapter` | `whole-chapter` | every rendered numbered body chapter for every R target |
+| `finding` | `evidence-support` | every current target `Rn-Fxx` |
+| `question` | `scope-validity` | every current target `Rn-Qxx` |
+| `verdict` | `grade-consistency` | exactly one `<target>-VERDICT` |
+| `citation-pair` | `citation-claim` | every authoritative `04.PairID` for the citation owner |
+| `page` | `rendered-page` | every authoritative `PageID` for the page owner; every Stage-P-authored-prose PageID for AI |
+| `bibliography-field` | `bibliography-field` | every authoritative `REFnnnn/<field>` key for the bibliography owner |
+| `ai-finding` | `style-evidence` | every current `AI-Fxx` |
+| `ai-judgment` | `non-attribution` | exactly `AI-JUDGMENT` |
+
+No row may be omitted, added, duplicated, reordered, left unchecked, or marked
+with any disposition other than `pass`/`fail`. `PASS` is valid only when the
+file is nonempty and contains no failed row. Every `TargetArtifactSHA256`
+equals the current bytes. Unit-to-artifact binding is exact: report
+gate/chapter/finding/question/verdict rows name the target report; citation pairs name
+`04-citation-claim-audit-ledger.csv`; page-owner rows name the matching
+`page-renders/Pnnnn.png`; bibliography rows name
+`03-bibliography-audit-ledger.csv`; and AI rows name
+`05-ai-style-assessment.md`.
+
+`EvidenceAnchor` and `SemanticBasis` are row-specific evidence, not ceremonial
+sign-off. Physical-page units name an actual `physical p.<n>`; page-owner rows
+are grounded in the corresponding PNG. Citation-pair rows for `direct`,
+`partial`, `context-only`, `mismatch`, and every other ordinary sourced state
+contain the pair's opened authoritative URL, exact source locator, exact
+attached proposition, and exact singleton occurrence page from
+`00-citation-inventory.csv`, and distinguish the source-stated claim from
+thesis-local results. A documented non-dangling `Support=unverifiable` row whose
+authoritative `04` source and locator are both blank must not invent either one;
+instead its `SemanticBasis` binds exact semicolon-delimited `audited support:`,
+`audited metadata status:`, and `authority access limitation:` values from that
+`04` row, including its concrete source-specific access/content failure. A
+dangling row likewise contains no source URL/locator and binds its exact
+PDF-visible singleton location, displayed marker, absent `REF` entry, closed
+sentinel, `Support=unverifiable`, `MetadataStatus=mismatch`, and authoritative
+`04` disposition. Generic “unavailable” or “dangling citation” prose is not a
+semantic basis. A passing detailed formula/definition/algorithm/table-value
+responsibility cannot use an abstract-only source locator. Bibliography-field rows contain the authoritative
+record endpoint actually checked plus exact semicolon-delimited
+`rendered cue: <03 value>;`, `authority cue: <03 value>;`, and
+`audited verdict: <03 verdict>;` bindings and an exact rendered-entry page;
+a cross-page URL binds all contributing entry pages. Passing
+finding/question/AI-finding rows match the target item's canonical singleton
+page; failed rows may name a corrected page. Gate/finding/question/verdict and
+AI rows identify concrete PDF evidence or counter-evidence appropriate to the
+unit. Neither evidence field may assign a grade, command the Chair or defense
+decision, or create/add/invent a thesis finding.
+After URL, hash, IDs, numbers, and whitespace are normalized, the same basis may
+not be copied across twelve or more units of one type. This mechanical alarm is
+only a minimum: a smaller repeated template, title interpolation, a generic
+“checked and supported” assertion, or the target actor's own rationale copied
+without independent comparison remains a semantic acceptance failure.
+
+Each Markdown acceptance binds its exact target-artifact list and hashes, CSV
+row count, failure count, prompt hash, PDF start/end hash, fresh-context
+declaration, and closed receipt. Its only overall value is `PASS` or `FAIL`; it
+contains no thesis finding, grade, defense recommendation, or Chair decision.
+The exact isolated input allowlist is target-specific and excludes peer reports,
+peer acceptances, Chair/Stage-S files, old rounds, conversation context, thesis
+source, `.bib`, Git, sibling repositories, and private evidence. Any input named
+in the acceptance evidence must occur in that receipt; public endpoints cannot
+exceed the target's own authorized endpoint set.
+
+When and only when every required target pair independently passes, Stage O
+materializes `06-semantic-acceptance-gate.json`. Its JSON value equals the
+validator-derived canonical v2 object exactly: schema tag, round/retry/PDF
+hash, exact `00-process-parameters.json` SHA-256, the degree-appropriate closed
+`SA-*` actor-prompt hash map copied from that process, the ordered target map,
+each target-artifact hash map, acceptance Markdown/CSV hashes, coverage row
+count, target status `PASS`, and overall `PASS`. It has no free text or semantic
+details. During set materialization and final full validation, the set
+validator requires the directory's regular-file set to equal exactly all
+required pairs, recomputes every hash, and rejects a missing/extra target or
+failed row.
+
+The Chair receives only this hash gate; its isolated view must not contain the
+`06-semantic-acceptance/` directory. Its pre-Stage-S gate therefore exactly
+recomputes the process-file hash, `SA-*` prompt-map projection, current target
+artifact hashes, and expected coverage counts, while treating each
+`acceptance_md_sha256`/`acceptance_csv_sha256` only as a closed 64-hex Stage-O
+transport commitment. It must not claim to have recomputed private acceptance
+bytes. A different well-formed private-file hash cannot be distinguished by the
+Chair alone; after Stage S, the final full validator must open the private
+directory and revalidate those hashes and the complete acceptance content.
+Stage S receives neither the gate nor that directory.
 
 ### Chair and summary reconciliation
 
@@ -236,6 +455,7 @@ production pre-freeze materializer:
 | Doctoral R4 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R4` | `04-citation-claim-audit-ledger.md`, `R4-comprehensive-review.md` receipt endpoint list |
 | Doctoral R5 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R5` | `02-page-layout-ledger.md`, `03-bibliography-audit-ledger.md`, `R5-comprehensive-review.md` receipt endpoint list |
 | Master's R3 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R3` | `02`, `03`, `04` Markdown masters and `R3-comprehensive-review.md` receipt endpoint list |
+| Stage O after all SA targets pass | `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>` | `06-semantic-acceptance-gate.json` only; no R/AI/SA semantic artifact |
 | C | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
 | S | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` | all three wholly derived `93` outputs, including both open-row CSV subsets and every closed Markdown projection |
 
@@ -254,6 +474,8 @@ Every substantive actor then runs its exact read-only gate before freezing or ex
 | Doctoral R5 | `python rules/scripts/validate_r5_output.py <exact-round-root>` | `R5-comprehensive-review.md`, `02`, `03`, and authorized page renders only |
 | Master's R3 | `python rules/scripts/validate_master_r3_output.py <exact-round-root>` | `R3-comprehensive-review.md`, `02`, `03`, `04`, and authorized page renders only |
 | AI | `python rules/scripts/validate_ai_output.py <exact-round-root>` | `05-ai-style-assessment.md` only |
+| Each `SA-<target>` | `python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>` | that acceptor's own `SA-<target>.md` and `.csv` only; never the frozen target |
+| Stage O SA-set closure | `python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set --require-gate` | none; any failure invalidates the retry |
 | C | `python rules/scripts/validate_chair_output.py <exact-round-root>` | current Chair-owned `90`--`92` Markdown/CSV outputs only |
 | S | `python rules/scripts/validate_summary_output.py <exact-round-root>` | `93-user-facing-summary.md` and both `93` CSV projections only |
 
@@ -261,7 +483,7 @@ Each gate passes only when it exits `0` and its first nonempty stdout line is ex
 
 For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P packet or any other frozen input. A packet/frozen-input diagnostic requires R5 to stop and report failure to Stage O; it is never repaired inside the R5 stage.
 
-The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Chair materialization and its gate use the closed C allowlist; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; neither opens the PDF, packet, `02`--`04`, helpers, prior artifacts, or `95`. All validators are read-only and create no `95-bundle-validation.md`.
+The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Each SA scoped gate opens one closed target-specific view and no peer acceptance. Stage O alone checks the complete SA set and materializes its hash gate. Chair materialization and its gate use the closed C allowlist, which contains only that hash gate and never individual SA files; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; neither opens the PDF, packet, `02`--`04`, individual SA files, the SA hash gate, helpers, prior artifacts, or `95`. All validators except the two explicitly named deterministic materializers are read-only and create no `95-bundle-validation.md`.
 
 The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL except for the closed dangling-citation contract, where it and `ExactSourceLocator` remain blank. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Each URL occurrence is checked independently and every marked auxiliary must itself pass the complete source-endpoint gate. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
 
