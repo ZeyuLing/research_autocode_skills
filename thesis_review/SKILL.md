@@ -61,6 +61,15 @@ The orchestration process may compile the author's source to produce the request
 
 Every substantive actor must include exact `Actor ID`, `Review round ID`, and `Review retry ID`; a fresh-context declaration; and one mechanically structured input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, and a permitted `public_endpoints=[...]` list, plus the three no-unlisted/no-prohibited/no-neighbor-enumeration confirmations inside that receipt field itself. `00-process-parameters.json` binds a distinct operational-prompt SHA-256 for P, every R actor, AI, every corresponding `SA-Rn` plus `SA-AI`, C, and S, and contains V if and only if Stage V is run; each artifact's prompt hash must equal its actor entry. Stage O computes the hash from the exact prompt bytes before dispatch and launches those same bytes; artifact validation cannot independently observe task transport. Use a new empty-context process for Stage P, each helper, each reviewer, the AI assessor, each target-specific semantic acceptor, the chair, the final summarizer, and optional Stage V; in Codex multi-agent execution this means `fork_turns: "none"`. Apply the contamination, retry, and quarantine rules in `references/clean-room-orchestration.md`. Labeling prohibited knowledge “author-side,” “already known,” or “only used in the summary” does not rescue the affected stage.
 
+After dispatch, Stage O must not send that actor a progress request, correction,
+status prompt, or any other follow-up message. It may observe task state and
+filesystem topology mechanically without messaging the actor. A needed
+post-launch instruction proves that the frozen operational prompt was
+insufficient and requires quarantine plus a complete clean retry. Every actor's
+initial frozen prompt must require the bundled Python to run with bytecode
+writing disabled (`-B` and/or `PYTHONDONTWRITEBYTECODE=1`); no `__pycache__` or
+`.pyc` entry may remain in an isolated view at freeze.
+
 Absence of a training detail is not affirmative evidence of the opposite. In particular, a row reported as mean/standard-deviation does not prove that rows reported as point estimates were trained once. Unless the PDF explicitly states the repetition count for a configuration, write `the PDF does not state the repetition count for this configuration`; do not call it single-seed, single-run, or one training result, do not turn that unknown into a defect by itself, and do not use it to lower a grade.
 
 ## Workflow

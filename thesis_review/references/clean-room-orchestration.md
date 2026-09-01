@@ -106,6 +106,18 @@ Create a new, uniquely named and identity-neutral round directory for each froze
 
 Before launch, record the frozen PDF SHA-256 and page count, set or treat the frozen copy as immutable, and record the exact task-prompt bytes and their SHA-256, fresh-context launch mode, actor/retry ID, input allowlist, output path, and start time in an orchestration log outside the packet. Launch the actor with those exact prompt bytes; recomputing a different prompt after dispatch is invalid. The bundle validator can prove that artifacts and the process envelope agree on the declared hash, but cannot observe API/task transport; the orchestrator's exact-byte launch record is therefore an explicit process trust boundary, never thesis evidence. Every PDF-opening actor recomputes the PDF checksum at start and end. Stage S does not open the PDF and instead copies the frozen identity from the process/current sources into its required identity fields. PDF-derived sidecars record their own hash plus the source PDF hash. After every substantive stage, verify mechanically that:
 
+Dispatch is the last message Stage O sends to that actor. Do not send progress
+checks, reminders, corrections, cleanup instructions, or other operational
+follow-ups after launch, even when they contain no thesis assertion. Stage O may
+use task-status/wait mechanisms and read-only topology/hash checks that do not
+inject a new actor turn. If any additional instruction is needed, interrupt and
+quarantine the retry; encode the complete instruction in a newly hashed initial
+prompt for a global clean retry. Every initial prompt also requires all Python
+commands to disable bytecode writes with `-B` and/or
+`PYTHONDONTWRITEBYTECODE=1`. An actor may remove its own current-turn cache before
+freeze without prompting, but any retained `__pycache__` directory or `.pyc`
+file is an unexpected isolated-view entry and invalidates the retry.
+
 - the report names the same checksum;
 - its fresh-context and input-receipt/access declarations are present and agree with the orchestration log;
 - all required files exist and no `pending`/`unchecked` placeholder remains in a mandatory ledger;
