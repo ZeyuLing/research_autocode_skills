@@ -55,6 +55,15 @@ quarantine rather than assume the exception.
 
 Stage O may create `00-process-parameters.json` as a closed administrative envelope. It may contain only: round/retry ID; neutral frozen-PDF filename, SHA-256, mechanically measured physical-page count, and the actual ISO-8601 timestamp with timezone at which the neutral copy was frozen (`frozen_at`); degree level and academic/professional type; institution; school/department; discipline; expected submission year; artifact type (`author-copy` or `blind-copy`); requested review mode; output language; exact governing-rule URL(s); neutral copied local rule/template filename(s), official title(s), and original-byte SHA-256; decision-regime selection status; and a closed `actor_prompt_sha256` map computed from each exact operational prompt before launch. The map contains `P`, every degree-appropriate `R` actor, `AI`, the corresponding independent semantic-acceptance actors `SA-R1...SA-Rn` and `SA-AI`, `C`, and `S`; it contains `V` if and only if `94-post-freeze-prior-issue-closure.md` is launched, and every value is a distinct 64-hex digest. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and other filesystem aliases are invalid. A governing-file basename and the frozen-PDF basename must also be mutually distinct and must not reuse any skill-reference basename, generated round-artifact basename (including `P####.png`), or closed-root directory name; otherwise basename-only input receipts are ambiguous. Stage O copies every allowlisted local rule/template into the neutral round under a neutral filename and verifies byte identity; only the orchestration log may retain the original path. These neutral process parameters may come from an explicit current operational request even when they are intentionally absent from a blind PDF. The envelope must not contain an original identity-bearing path, author name/identifier, technical assertion, implementation fact, revision explanation, old issue ID, desired conclusion, or any evaluation of the thesis. A missing field remains `unknown`; never infer it from an identity-bearing workspace path or old conversation.
 
+After every operational prompt hash is known, Stage O exclusively writes the
+final process envelope and runs the `seal-process` and `verify-process-seal`
+lifecycle in Section 8 before Stage P is dispatched. The resulting
+`orchestration/process-seal.json` and the external orchestration log's exact
+metadata/process/seal hashes are process-control records only. They are outside
+every substantive actor view and are never reviewer evidence or an `opened`
+input. Any later process change invalidates the entire retry; the seal is never
+deleted, overwritten, or regenerated in place.
+
 For each substantive stage, require both:
 
 - a **fresh-context declaration** whose own single-line value states that the actor received no inherited substantive user/thread/task turns beyond system/developer instructions and the exact operational prompt; the required canonical sentence remains unchanged and cannot be supplied elsewhere in the report as compensation. The infrastructure-metadata and same-clean-turn-compaction rules above define what is not a substantive inherited turn. In Codex multi-agent execution, use `fork_turns: "none"`, and use an equivalent empty-context process elsewhere;
@@ -84,7 +93,7 @@ Do not enumerate the parent review directory, neighboring review rounds, reposit
 
 | Stage | Must start fresh? | Permitted substantive inputs | Required outputs | Forbidden even if available |
 |---|---|---|---|---|
-| O — mechanical orchestrator | No | Current operational request; exact user-selected PDF path; filesystem needed to copy/hash/create empty paths | Neutral frozen PDF copy/identity; `00-process-parameters.json`; empty round/retry paths; task dispatch log with prompt hashes; mechanical completeness checks | Guessing the target PDF from mtime/name/history; authoring or editing any substantive review conclusion, packet interpretation, chair decision, or summary |
+| O — mechanical orchestrator | No | Current operational request; exact user-selected PDF path; filesystem needed to copy/hash/create empty paths | Neutral frozen PDF copy/identity; final `00-process-parameters.json`; external metadata/process/seal hash anchors; `orchestration/process-seal.json`; empty actor-view paths; exact-byte task dispatch log; mechanical completeness checks | Guessing the target PDF from mtime/name/history; authoring or editing any substantive review conclusion, packet interpretation, chair decision, or summary |
 | P — packet and policy builder | Yes | Exactly one neutral frozen PDF; `00-process-parameters.json`; `SKILL.md`; all ten required reference files; read-only `rules/scripts/validate_review_bundle.py` and `rules/scripts/validate_stage_p_output.py`; allowlisted official public rule sources or frozen official local rule/template files named in the process envelope | `00-manifest.md`, `01-policy-basis.md`, neutral PDF-derived inventories/corpora | Conversation history, user explanations, old reviews, helpers, peer/downstream outputs, neighboring paths, author-side files, substantive interpretations imported from the orchestrator |
 | H — optional mechanical helper | Yes, separately per helper | Neutral frozen PDF; `00-process-parameters.json`; clean manifest; exact mechanical instruction; relevant skill rule; own scratch/output path | PDF-derived render/text/index/count sidecars only plus `Hxx-provenance.json`, each with source/output hashes, prompt hash, receipt/access declaration, tool/version, command/query, and limitations | Semantic judgments, visual dispositions, citation support/metadata verdicts, findings, grades, other actor outputs |
 | R1--R5 / R1--R3 | Yes, separately for each reviewer | Neutral frozen PDF; `00-process-parameters.json`; clean packet/policy; `SKILL.md`; required panel/rubric/grading/report/audit rule files; the actor's exact full/scoped validator insertion; public authoritative sources needed only for citations visible in the PDF; own scratch/output path; allowlisted helper sidecars | Own comprehensive report and assigned ledger/sidecars; scoped-validator `PASS` before freeze | Other reviewers' work, AI report, chair work, old rounds, conversation, user explanations, uncited-literature search, sibling/source artifacts |
@@ -104,7 +113,7 @@ Stage P's manifest is a navigation packet, not a preliminary review. Its process
 
 Create a new, uniquely named and identity-neutral round directory for each frozen PDF. Copy the exact PDF bytes to an identity-neutral filename, verify the copy's checksum, and give substantive actors only that frozen path rather than the original workspace path. Never write a new round into an old round or copy old reports forward. The validated round root is closed: it contains only the process envelope, frozen PDF, hash-bound governing files, documented current-round artifacts, `page-renders/`, optional registered `helpers/`, the exact `06-semantic-acceptance/` file set plus its hash-only root gate, optional Stage-V `stage-v-inputs/` plus `94`, and the mechanical `95` report. Each SA runs first in a separate target-specific neutral view containing only its allowlist; after its scoped gate passes, Stage O byte-copies the frozen SA output into the closed round. An unexpected file, old report, extra directory, symlink, NTFS junction, mount/reparse point, or special entry at the root or inside an allowed subdirectory invalidates the bundle before any artifact is opened, even if no actor claims to have opened it. Give every concurrent actor exact input paths and a private scratch/output path; do not ask it to discover inputs by listing the round parent. A later-stage actor receives an explicit allowlist of current-round files and must not enumerate neighboring files. After all clean artifacts are frozen, Stage O may mechanically copy the complete bundle to a user-facing storage location; that destination is not reviewer evidence.
 
-Before launch, record the frozen PDF SHA-256 and page count, set or treat the frozen copy as immutable, and record the exact task-prompt bytes and their SHA-256, fresh-context launch mode, actor/retry ID, input allowlist, output path, and start time in an orchestration log outside the packet. Launch the actor with those exact prompt bytes; recomputing a different prompt after dispatch is invalid. The bundle validator can prove that artifacts and the process envelope agree on the declared hash, but cannot observe API/task transport; the orchestrator's exact-byte launch record is therefore an explicit process trust boundary, never thesis evidence. Every PDF-opening actor recomputes the PDF checksum at start and end. Stage S does not open the PDF and instead copies the frozen identity from the process/current sources into its required identity fields. PDF-derived sidecars record their own hash plus the source PDF hash. After every substantive stage, verify mechanically that:
+Before launch, record the frozen PDF SHA-256 and page count, set or treat the frozen copy as immutable, and record the exact task-prompt bytes and their SHA-256, fresh-context launch mode, actor/retry ID, input allowlist, output path, and start time in an orchestration log outside the packet. The same external log stores the exact metadata SHA-256 returned by `initialize`, the precomputed final-process SHA-256 supplied to `seal-process`, the returned seal SHA-256, and the successful `verify-process-seal` result immediately preceding Stage P. Launch the actor with those exact prompt bytes; recomputing a different prompt after dispatch is invalid. The bundle validator can prove that artifacts and the process envelope agree on the declared hash, but cannot observe API/task transport; the orchestrator's exact-byte launch and seal-hash record is therefore an explicit process trust boundary, never thesis evidence. Every PDF-opening actor recomputes the PDF checksum at start and end. Stage S does not open the PDF and instead copies the frozen identity from the process/current sources into its required identity fields. PDF-derived sidecars record their own hash plus the source PDF hash. After every substantive stage, verify mechanically that:
 
 Dispatch is the last message Stage O sends to that actor. Do not send progress
 checks, reminders, corrections, cleanup instructions, or other operational
@@ -129,8 +138,9 @@ Every Stage-H helper actually used writes one `Hxx-provenance.json` containing: 
 
 ## 5. Independent semantic acceptance
 
-After every R/AI target has passed its own scoped gate and frozen, but before the
-Chair is launched, start one different fresh `SA-<target>` actor for each target.
+After every R/AI target has passed its own scoped gate and been frozen in the
+closed current round, but before the Chair is launched, start one different
+fresh `SA-<target>` actor for each target.
 Stage SA is process quality control, not another reviewer: it does not create,
 edit, merge, grade, reject, or adjudicate thesis findings. It asks only whether
 the frozen target output is semantically supported, complete for its mandatory
@@ -161,6 +171,15 @@ or semantically false acceptance declaration is a failed mandatory gate. The SA
 must not modify the target. Because the target was already frozen, Stage O
 quarantines the entire retry and performs a new global run after any reusable
 rule defect is repaired.
+
+The frozen SA operational prompt must literally name the two private-view-root
+output paths and must explicitly prohibit an actor-writable
+`06-semantic-acceptance/` directory. It must not present the finalized-round
+promotion destinations as actor outputs. The target and any owned
+ledger/render artifacts are already hash-frozen in the current round before SA
+starts. After SA `PASS`, Stage O promotes only the exact SA pair; the target is
+admitted to later Chair synthesis without being copied or rewritten. Any target
+byte drift is a failed mandatory gate.
 
 After every target passes, Stage O validates the complete SA set and runs
 `materialize_semantic_acceptance_gate.py`. The resulting
@@ -219,7 +238,87 @@ Distinguish later questions precisely:
 
 Contamination or a failed mandatory gate is a process failure, not a thesis finding. `Discard` means mark invalid and quarantine from every substantive allowlist; it never means overwrite a frozen artifact or silently delete the audit trail. An actor may self-correct only before it freezes/exits, in the same clean turn, and only when the diagnostic is confined to its owned outputs. Once any affected actor has frozen/exited—or when the post-S full validator fails—the current bundle is immutable and invalid.
 
-The current bundle contract has one global `round_id/retry_id`, not per-stage lineage. Therefore every post-freeze restart uses a new empty neutral round root, orchestration root, round ID, retry ID, prompt set, and scratch/view set, then reruns the complete `O -> P -> R/AI -> SA -> gate -> C -> S -> full validation` chain against the same explicitly selected PDF bytes. Do not create a mixed bundle by copying apparently clean artifacts from the failed retry; even Stage-P artifacts bind the old process bytes, prompt hash, and retry identity. A failed SA is a process failure, never a thesis finding, and cannot be repaired by rerunning only its target or by passing its reason downstream. The old retry remains intact only as a quarantined audit trail.
+The current bundle contract has one global `round_id/retry_id`, not per-stage lineage. Therefore every post-freeze restart uses one new empty run root containing new `round/`, `views/`, and `orchestration/` children, together with a new round ID, retry ID, prompt set, and scratch/view set, then reruns the complete `O -> P -> R/AI -> SA -> gate -> C -> S -> full validation` chain against the same explicitly selected PDF bytes. Do not create a mixed bundle by copying apparently clean artifacts from the failed retry; even Stage-P artifacts bind the old process bytes, prompt hash, and retry identity. A failed SA is a process failure, never a thesis finding, and cannot be repaired by rerunning only its target or by passing its reason downstream. The old retry remains intact only as a quarantined audit trail.
+
+Use `scripts/manage_review_retry.py initialize` to publish one new run container
+as a single no-replace atomic rename. The run root is a direct child of the
+explicit workspace and contains exactly the fixed administrative children
+`round/`, `views/`, and `orchestration/` at publication; only the explicitly
+named source PDF is copied into `round/`. Use the same tool's `quarantine`
+operation to move that whole run root once to a new direct-child
+`QUARANTINED-*` destination. Both operations require explicit absolute paths,
+refuse replacement and link/reparse-backed paths, and fail closed. A hard crash
+may leave a hidden staging container; `list-staging` is read-only and
+`cleanup-staging` may act only when the tool can re-prove its complete closed
+tree, hashes, and object identities. Despite its compatibility name,
+`cleanup-staging` never physically deletes that tree: it atomically moves it to
+a unique recoverable `QUARANTINED-STAGING-*` direct child. Stage O must not
+replace these operations with recursive copy, partial rename, ad-hoc deletion,
+or reuse of old artifacts.
+
+The initialization modes are explicit and mutually exclusive. Use
+`--initial-run` only when there is no predecessor, or
+`--replacement-for <old-round-id> <old-retry-id>` for a global retry. A typical
+replacement invocation is:
+
+```text
+python -B scripts/manage_review_retry.py initialize --workspace <absolute-workspace> --run-root <absolute-new-run-root> --source-pdf <absolute-selected-PDF> --neutral-pdf-name thesis.pdf --expected-sha256 <64-hex> --expected-pages <positive-integer> --new-round-id <new-round-id> --new-retry-id <new-retry-id> --replacement-for <old-round-id> <old-retry-id>
+```
+
+Capture the successful initialization result's `metadata_sha256` in the
+external orchestration log. Plan every actor prompt, write the final closed
+process envelope exclusively, compute its exact byte hash, and seal it while
+`views/` is empty and `round/` contains exactly that process file, the frozen
+PDF, and any process-declared governing local files:
+
+```text
+python -B scripts/manage_review_retry.py seal-process --workspace <absolute-workspace> --run-root <absolute-new-run-root> --expected-metadata-sha256 <initialize-metadata-sha256> --expected-process-sha256 <final-process-sha256>
+```
+
+Store the returned `seal_sha256` outside the bundle. After staging the exact
+Stage-P rule inputs, and immediately before dispatching P, run:
+
+```text
+python -B scripts/manage_review_retry.py verify-process-seal --workspace <absolute-workspace> --run-root <absolute-new-run-root> --expected-process-sha256 <final-process-sha256> --expected-seal-sha256 <returned-seal-sha256>
+```
+
+Stage P is forbidden unless this command returns exit `0`. Both commands reuse
+the canonical production process validator. `seal-process` is exclusive and
+pre-Stage-P only; it rejects a nonempty actor-view tree, any extra/missing
+pre-Stage-P round entry, process/metadata mismatch, link/reparse/hardlink, or
+external-hash mismatch. `verify-process-seal` remains usable after later
+artifacts exist because it verifies only the originally sealed administrative
+state and object identities. Neither command grants any substantive actor
+access to `orchestration/`.
+
+Quarantine always moves the whole container:
+
+```text
+python -B scripts/manage_review_retry.py quarantine --workspace <absolute-workspace> --run-root <absolute-current-run-root> --quarantine-run-root <absolute-new-QUARANTINED-name>
+```
+
+Exit status `3` with `commit_identity_failure` or
+`committed_but_durability_uncertain`, `process_seal_commit_uncertain`, or
+`sealed_but_durability_uncertain` means an atomic publication or exclusive seal
+may already have committed and requires Stage-O inspection and quarantine of
+the named run. It must never be treated as an ordinary unexecuted failure, as
+permission to delete/recreate the seal, or as permission to reuse the retry.
+
+For every required SA target, run
+`scripts/build_semantic_acceptance_prompt.py plan` before Stage P against a
+stable preplan process object containing only the fields required by that
+command. Insert all returned prompt hashes into the final process envelope once,
+seal and verify that envelope as above, and then freeze the prompt bytes. After
+a target-specific private view is staged, run `verify` with the required
+`--expected-process-sha256 <sealed-final-process-sha256>` argument; it must
+reconstruct the same prompt bytes and hash from the immutable stable projection
+while loading its semantic validator from that view, and it must match both the
+external Stage-O process anchor and Stage P's exact `Process-parameter file and
+SHA-256` commitment in `00-manifest.md`. Dispatch exactly the already-planned
+prompt bytes. After scoped `PASS`, run `promote` with that same required
+`--expected-process-sha256` value to copy only the byte-identical SA
+Markdown/CSV pair into the finalized round. The seal and external log never
+enter the SA view.
 
 Stage O may read the failed validator report only to record orchestration metadata: failed validator hash/version, old round/retry IDs, old artifact hashes, mechanical error counts by owning artifact, earliest invalid stage, invalidation scope, and replacement retry ID. That quarantine log lives outside the reviewer-visible bundle and is forbidden to all new substantive actors. Old errors, snippets, IDs, reports, logs, conclusions, and findings never enter a new prompt or allowlist. General reusable corrections must first be encoded in the canonical skill/rules/validators, frozen and re-hashed, and then applied by a fully fresh retry.
 
@@ -229,4 +328,4 @@ Every invalidation and restart must be recorded in an orchestration log outside 
 
 ## 9. Completion gate
 
-A round cannot be described as a complete independent blind review unless Stage P, every Stage-H helper whose sidecar was used, all required R stages, AI, every target-specific SA actor, the hash-only SA gate, C, and S have the required fresh-context declarations, exact input-receipt/access declarations, start/end PDF checksum agreement where that stage opens the PDF, all required outputs, and a passing mandatory scoped gate before freeze. Stage V requires the same declarations when run. After S freezes, the full validator must exit `0`, begin with a PASS result, and atomically write the current `95-bundle-validation.md`; otherwise quarantine the retry. The final delivery should point to the frozen artifacts and relay `93-user-facing-summary.md` with only a minimal operational wrapper; it must not relay SA reasons.
+A round cannot be described as a complete independent blind review unless the final process was exclusively sealed and externally hash-anchored before P, `verify-process-seal` passed immediately before P dispatch, and Stage P, every Stage-H helper whose sidecar was used, all required R stages, AI, every target-specific SA actor, the hash-only SA gate, C, and S have the required fresh-context declarations, exact input-receipt/access declarations, start/end PDF checksum agreement where that stage opens the PDF, all required outputs, and a passing mandatory scoped gate before freeze. Stage V requires the same declarations when run. After S freezes, the full validator must exit `0`, begin with a PASS result, and atomically write the current `95-bundle-validation.md`; otherwise quarantine the retry. The final delivery should point to the frozen artifacts and relay `93-user-facing-summary.md` with only a minimal operational wrapper; it must not relay SA reasons.

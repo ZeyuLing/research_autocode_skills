@@ -826,6 +826,15 @@ class ValidateReviewBundleTests(unittest.TestCase):
             text = report.read_text(encoding="utf-8")
             for old, new in finding_replacements.items():
                 text = text.replace(old, new, 1)
+            text = text.replace(
+                f"| H — gate | baseline | concern | physical p.1, fixture section | R{reviewer_index}-F01 | high |",
+                "| H — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                1,
+            ).replace(
+                "| F — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                f"| F — gate | baseline | concern | physical p.1, fixture section | R{reviewer_index}-F01 | high |",
+                1,
+            )
             if reviewer_index == 3:
                 text = text.replace(
                     f"public_endpoints=[{BIB_ENDPOINT}; {CITATION_ENDPOINT}]",
@@ -932,6 +941,16 @@ class ValidateReviewBundleTests(unittest.TestCase):
             ("- Combined citation gate: pass", "- Combined citation gate: fail"),
         ):
             chair_text = chair_text.replace(old, new, 1)
+        for reviewer_index, audit_status in (
+            (1, "not assigned"),
+            (2, "not assigned"),
+            (3, "yes"),
+        ):
+            chair_text = chair_text.replace(
+                f"| R{reviewer_index} | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | {audit_status} | yes |",
+                f"| R{reviewer_index} | adequate | adequate | adequate | adequate | adequate | concern | adequate | adequate | adequate | complete | {audit_status} | yes |",
+                1,
+            )
         chair.write_text(chair_text, encoding="utf-8")
         self.write_semantic_acceptance_fixture(root, process)
 
@@ -1020,7 +1039,12 @@ class ValidateReviewBundleTests(unittest.TestCase):
             3: "R3 evidence/integrity/citation + format/bibliography/layout",
         }
         gate_rows = "\n".join(
-            f"| {gate} — gate | baseline | adequate | physical p.1, fixture section | none | high |"
+            (
+                f"| {gate} — gate | baseline | concern | physical p.1, fixture section | "
+                f"R{index}-F01 | high |"
+                if gate == "H"
+                else f"| {gate} — gate | baseline | adequate | physical p.1, fixture section | none | high |"
+            )
             for gate in "ABCDEFGHI"
         )
         reviewer_public = (
@@ -1171,9 +1195,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "\n## Reviewer coverage validation\n\n"
             + "| Reviewer | Gate A | B | C | D | E | F | G | H | I | Whole-thesis rationale | Audit duty complete | Eligible for adjudication |\n"
             + "|---|---|---|---|---|---|---|---|---|---|---|---|---|\n"
-            + "| R1 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
-            + "| R2 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
-            + "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |\n\n"
+            + "| R1 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | not assigned | yes |\n"
+            + "| R2 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | not assigned | yes |\n"
+            + "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | yes | yes |\n\n"
             + "## Independent verdicts\n\n"
             + "| Reviewer | Persona | Category/grade | Defense recommendation | Decision regime/source | Confidence | Decisive reason |\n"
             + "|---|---|---|---|---|---|---|\n"
@@ -1479,6 +1503,19 @@ class ValidateReviewBundleTests(unittest.TestCase):
         )
         if errors:
             raise AssertionError(errors)
+        reviewer_profile = (
+            {}
+            if target == "AI"
+            else SEMANTIC_MODULE.reviewer_semantic_target_profile(
+                root,
+                process,
+                target,
+                VALIDATOR_MODULE,
+                errors,
+            )
+        )
+        if errors:
+            raise AssertionError(errors)
         citation_rows = {
             row["PairID"]: row
             for row in read_csv(root / "04-citation-claim-audit-ledger.csv")[1]
@@ -1632,6 +1669,30 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     f"Chapter-wide PDF reading for {unit_id} traces its problem, "
                     "method, evidence, limitations, and the target review's treatment."
                 )
+            elif unit_type == "finding":
+                page = report_anchors[(unit_type, unit_id)]
+                fields = reviewer_profile["findings"][unit_id]
+                anchor = f"physical p.{page}, exact target finding and supporting passage"
+                basis = json.dumps({
+                    "premise_class": "explicit-positive",
+                    "target_premise": fields["Observation"],
+                    "supporting_pdf_evidence": f"physical p.{page}, the exact observed passage supports the bounded finding",
+                    "whole_pdf_resolution": {
+                        "status": "responsive-passages-reviewed",
+                        "pages": [f"physical p.{page}"],
+                        "search_concepts": ["the bounded proposition and relevant terminology across the frozen PDF"],
+                        "detail": "The responsive passage was reviewed in the context of the complete frozen PDF.",
+                    },
+                    "residual_gap": {
+                        "status": "present",
+                        "detail": "The target report's bounded local concern remains after the whole-PDF comparison.",
+                    },
+                    "action_delta": {
+                        "status": "same-as-target-required-action",
+                        "detail": fields["Required action"],
+                        "independent_reason": "Independent PDF inspection leaves the target action necessary without broadening it.",
+                    },
+                }, ensure_ascii=False, separators=(",", ":"))
             elif (unit_type, unit_id) in report_anchors:
                 page = report_anchors[(unit_type, unit_id)]
                 anchor = f"physical p.{page}, exact target-unit passage"
@@ -1647,10 +1708,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 )
             elif unit_type == "verdict":
                 anchor = "physical p.1-3, target verdict and decisive thesis evidence"
-                basis = (
-                    f"The complete target conclusion {unit_id} is checked against "
-                    "all gate dispositions, findings, and the frozen thesis evidence."
-                )
+                basis = json.dumps({
+                    key: reviewer_profile[key]
+                    for key in SEMANTIC_MODULE.VERDICT_SEMANTIC_BASIS_LABELS
+                }, ensure_ascii=False, separators=(",", ":"))
             elif unit_type == "ai-judgment":
                 anchor = "physical p.1-3, standalone AI-style judgment and sampled prose"
                 basis = (
@@ -2500,10 +2561,10 @@ class ValidateReviewBundleTests(unittest.TestCase):
         chair = root / "90-chair-synthesis.md"
         chair_text = chair.read_text(encoding="utf-8")
         chair_text = chair_text.replace(
-            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |",
-            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | not assigned | yes |\n"
-            "| R4 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |\n"
-            "| R5 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | complete | yes | yes |",
+            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | yes | yes |",
+            "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | not assigned | yes |\n"
+            "| R4 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | yes | yes |\n"
+            "| R5 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | yes | yes |",
             1,
         )
         r4_verdict = (
@@ -2618,6 +2679,31 @@ class ValidateReviewBundleTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn(needle, result.stdout)
 
+    def reviewer_report_errors(
+        self, root: Path, reviewer_index: int = 1
+    ) -> list[str]:
+        process = json.loads(
+            (root / "00-process-parameters.json").read_text(encoding="utf-8")
+        )
+        errors: list[str] = []
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        VALIDATOR_MODULE.validate_reviewer_report(
+            root / f"R{reviewer_index}-comprehensive-review.md",
+            process["selected_pdf_sha256"],
+            reviewer_index,
+            process,
+            reviewer_count,
+            set(),
+            set(),
+            process["degree_level"],
+            process["decision_regime_status"],
+            VALIDATOR_MODULE.process_governing_sources(process),
+            {},
+            process["physical_page_count"],
+            errors,
+        )
+        return errors
+
     def add_external_artifact_finding_and_chair_decision(
         self, root: Path, *, status: str = "rejected", finding_id: str = "R1-F02"
     ) -> None:
@@ -2642,6 +2728,14 @@ class ValidateReviewBundleTests(unittest.TestCase):
         )
         reviewer.write_text(
             reviewer_text.replace(
+                "| E — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                f"| E — gate | baseline | concern | physical p.1, fixture section | {finding_id} | high |",
+                1,
+            ).replace(
+                "| G — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                f"| G — gate | baseline | concern | physical p.1, fixture section | {finding_id} | high |",
+                1,
+            ).replace(
                 "## Questions, not findings", finding + "## Questions, not findings", 1
             ),
             encoding="utf-8",
@@ -2649,6 +2743,11 @@ class ValidateReviewBundleTests(unittest.TestCase):
 
         chair = root / "90-chair-synthesis.md"
         chair_text = chair.read_text(encoding="utf-8")
+        chair_text = chair_text.replace(
+            "| R1 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | not assigned | yes |",
+            "| R1 | adequate | adequate | adequate | adequate | concern | adequate | concern | concern | adequate | complete | not assigned | yes |",
+            1,
+        )
         decision_header = (
             "| Decision ID | Source item IDs | Topic | Positions | Evidence checked | Status | Decision |\n"
             "|---|---|---|---|---|---|---|\n"
@@ -5439,6 +5538,23 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     "- Primary gate: H",
                     "- Primary gate: I",
                     1,
+                ).replace(
+                    "| H — gate | baseline | concern | physical p.1, fixture section | R3-F01 | high |",
+                    "| H — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                    1,
+                ).replace(
+                    "| I — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                    "| I — gate | baseline | concern | physical p.1, fixture section | R3-F01 | high |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            chair = root / "90-chair-synthesis.md"
+            chair.write_text(
+                chair.read_text(encoding="utf-8").replace(
+                    "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | adequate | complete | yes | yes |",
+                    "| R3 | adequate | adequate | adequate | adequate | adequate | adequate | adequate | adequate | concern | complete | yes | yes |",
+                    1,
                 ),
                 encoding="utf-8",
             )
@@ -7617,7 +7733,17 @@ class ValidateReviewBundleTests(unittest.TestCase):
             "| A — gate | baseline | adequate | physical p.1, fixture section | "
             "none | high |"
         )
-        with self.subTest(case="actual current finding"), tempfile.TemporaryDirectory() as directory:
+        gate_h_row = (
+            "| H — gate | baseline | concern | physical p.1, fixture section | "
+            "R1-F01 | high |"
+        )
+        with self.subTest(case="valid bidirectional mapping"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            result = self.run_validator(root, refresh_semantic=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+        with self.subTest(case="adequate cannot cite actionable finding"), tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
             report = root / "R1-comprehensive-review.md"
@@ -7627,8 +7753,29 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 ),
                 encoding="utf-8",
             )
-            result = self.run_validator(root, refresh_semantic=True)
-            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assert_fails(
+                root,
+                "Gate A disposition 'adequate' must not cite an actionable S0-S3 finding",
+            )
+
+        with self.subTest(case="unverifiable cannot cite actionable finding"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    gate_a_row,
+                    gate_a_row.replace("| adequate |", "| unverifiable |").replace(
+                        "| none |", "| R1-F01 |"
+                    ),
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "Gate A disposition 'unverifiable' must not cite an actionable S0-S3 finding",
+            )
 
         invalid_values = (
             "R2-F01",
@@ -7648,8 +7795,8 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 report = root / "R1-comprehensive-review.md"
                 report.write_text(
                     report.read_text(encoding="utf-8").replace(
-                        gate_a_row,
-                        gate_a_row.replace("| none |", f"| {invalid} |"),
+                        gate_h_row,
+                        gate_h_row.replace("| R1-F01 |", f"| {invalid} |"),
                         1,
                     ),
                     encoding="utf-8",
@@ -7660,16 +7807,191 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     "list of actual current R1 findings",
                 )
 
+    def test_gate_concern_requires_an_actionable_finding_mapped_back(self) -> None:
+        with self.subTest(case="concern with no actionable finding"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "| H — gate | baseline | concern | physical p.1, fixture section | R1-F01 | high |",
+                    "| H — gate | baseline | concern | physical p.1, fixture section | none | high |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            errors = self.reviewer_report_errors(root)
+            self.assertTrue(
+                any(
+                    "Gate H concern requires at least one related current actionable "
+                    "S0-S3 finding" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+        with self.subTest(case="concern cites finding that does not map back"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Primary gate: H", "- Primary gate: G", 1
+                ),
+                encoding="utf-8",
+            )
+            errors = self.reviewer_report_errors(root)
+            self.assertTrue(
+                any(
+                    "Gate H concern cites actionable finding R1-F01, but that "
+                    "finding does not map back" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_actionable_primary_and_secondary_gates_require_concern_and_citation(self) -> None:
+        with self.subTest(case="primary gate remains adequate"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "| H — gate | baseline | concern | physical p.1, fixture section | R1-F01 | high |",
+                    "| H — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            errors = self.reviewer_report_errors(root)
+            self.assertTrue(
+                any(
+                    "actionable finding R1-F01 maps to Gate H, whose disposition "
+                    "must be concern" in error
+                    for error in errors
+                ),
+                errors,
+            )
+            self.assertTrue(
+                any(
+                    "actionable finding R1-F01 maps to Gate H, whose Related "
+                    "finding IDs must cite it" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+        with self.subTest(case="secondary gate remains adequate"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "- Secondary gates: none", "- Secondary gates: B", 1
+                ),
+                encoding="utf-8",
+            )
+            errors = self.reviewer_report_errors(root)
+            self.assertTrue(
+                any(
+                    "actionable finding R1-F01 maps to Gate B, whose disposition "
+                    "must be concern" in error
+                    for error in errors
+                ),
+                errors,
+            )
+            self.assertTrue(
+                any(
+                    "actionable finding R1-F01 maps to Gate B, whose Related "
+                    "finding IDs must cite it" in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_na_gate_cannot_cite_an_actionable_finding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "| A — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                    "| A — gate | baseline | N/A | physical p.1, fixture section | R1-F01 | high |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            errors = self.reviewer_report_errors(root)
+            self.assertTrue(
+                any(
+                    "Gate A disposition 'N/A' must not cite an actionable S0-S3 finding"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+    def test_s4_finding_does_not_force_a_gate_concern(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8")
+                .replace("- Severity: S2", "- Severity: S4", 1)
+                .replace("- Academic grade: B", "- Academic grade: A", 1)
+                .replace(
+                    "- Defense recommendation: 小修后可答辩",
+                    "- Defense recommendation: 同意答辩",
+                    1,
+                )
+                .replace(
+                    "| H — gate | baseline | concern | physical p.1, fixture section | R1-F01 | high |",
+                    "| H — gate | baseline | adequate | physical p.1, fixture section | R1-F01 | high |",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assertEqual([], self.reviewer_report_errors(root))
+
     def test_secondary_gates_allow_flexible_sets_but_reject_open_grammar(self) -> None:
-        for valid in ("B", "Gate B / I", "i and b", "Gates B，I"):
+        valid_cases = {
+            "B": ("B",),
+            "Gate B / I": ("B", "I"),
+            "i and b": ("I", "B"),
+            "Gates B，I": ("B", "I"),
+        }
+        for valid, mapped_gates in valid_cases.items():
             with self.subTest(valid=valid), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 self.build_bundle(root)
                 report = root / "R1-comprehensive-review.md"
-                report.write_text(
-                    report.read_text(encoding="utf-8").replace(
+                text = report.read_text(encoding="utf-8").replace(
                         "- Secondary gates: none",
                         f"- Secondary gates: {valid}",
+                        1,
+                    )
+                for gate in mapped_gates:
+                    text = text.replace(
+                        f"| {gate} — gate | baseline | adequate | physical p.1, fixture section | none | high |",
+                        f"| {gate} — gate | baseline | concern | physical p.1, fixture section | R1-F01 | high |",
+                        1,
+                    )
+                report.write_text(text, encoding="utf-8")
+                chair = root / "90-chair-synthesis.md"
+                chair_text = chair.read_text(encoding="utf-8")
+                old_cells = ["adequate"] * 9
+                old_cells[7] = "concern"
+                new_cells = old_cells.copy()
+                for gate in mapped_gates:
+                    new_cells[ord(gate) - ord("A")] = "concern"
+                chair.write_text(
+                    chair_text.replace(
+                        "| R1 | " + " | ".join(old_cells)
+                        + " | complete | not assigned | yes |",
+                        "| R1 | " + " | ".join(new_cells)
+                        + " | complete | not assigned | yes |",
                         1,
                     ),
                     encoding="utf-8",

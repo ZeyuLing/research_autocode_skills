@@ -8635,6 +8635,24 @@ def validate_reviewer_report(
         case_sensitive=True,
     )
     gate_rows = parsed_gate_rows or []
+    actionable_finding_ids = {
+        finding_id
+        for finding_id, fields in findings.items()
+        if fields.get("Severity", "").casefold() in {"s0", "s1", "s2", "s3"}
+    }
+    finding_gate_sets: dict[str, set[str]] = {}
+    for finding_id, fields in findings.items():
+        mapped_gates: set[str] = set()
+        primary_gate = fields.get("Primary gate", "").upper()
+        if primary_gate in set("ABCDEFGHI"):
+            mapped_gates.add(primary_gate)
+        secondary_gates = parse_secondary_gate_set(
+            fields.get("Secondary gates", "")
+        )
+        if secondary_gates is not None:
+            mapped_gates.update(secondary_gates)
+        finding_gate_sets[finding_id] = mapped_gates
+    gate_state_by_label: dict[str, tuple[str, tuple[str, ...]]] = {}
     if parsed_gate_rows is not None and len(gate_rows) != 9:
         errors.append(
             f"{path.name}: Whole-thesis assessment must contain exactly nine "
@@ -8689,8 +8707,60 @@ def validate_reviewer_report(
                 f"{path.name}: Gate {gate} Related finding IDs must be exact none "
                 f"or a non-duplicated list of actual current R{reviewer_index} findings"
             )
+        elif gate in set("ABCDEFGHI"):
+            disposition = cells[2].casefold()
+            gate_state_by_label[gate] = (disposition, related_finding_ids)
+            related_actionable_ids = tuple(
+                identifier
+                for identifier in related_finding_ids
+                if identifier in actionable_finding_ids
+            )
+            if disposition == "concern":
+                mapped_actionable_ids = tuple(
+                    identifier
+                    for identifier in related_actionable_ids
+                    if gate in finding_gate_sets.get(identifier, set())
+                )
+                if not mapped_actionable_ids:
+                    errors.append(
+                        f"{path.name}: Gate {gate} concern requires at least one "
+                        "related current actionable S0-S3 finding whose Primary "
+                        "or Secondary gate maps back to this Gate"
+                    )
+                for identifier in related_actionable_ids:
+                    if gate not in finding_gate_sets.get(identifier, set()):
+                        errors.append(
+                            f"{path.name}: Gate {gate} concern cites actionable "
+                            f"finding {identifier}, but that finding does not map "
+                            "back through its Primary or Secondary gates"
+                        )
+            elif disposition != "concern" and related_actionable_ids:
+                errors.append(
+                    f"{path.name}: Gate {gate} disposition {cells[2]!r} must not "
+                    "cite an actionable S0-S3 finding"
+                )
         if not cells[5] or is_placeholder(cells[5]):
             errors.append(f"{path.name}: Gate {gate} lacks confidence/limitation")
+    for finding_id in sorted(
+        actionable_finding_ids,
+        key=lambda value: int(re.search(r"(\d+)$", value).group(1)),
+    ):
+        for mapped_gate in sorted(finding_gate_sets.get(finding_id, set())):
+            state = gate_state_by_label.get(mapped_gate)
+            if state is None:
+                # Missing/malformed Gate rows already have their own diagnostics.
+                continue
+            disposition, related_ids = state
+            if disposition != "concern":
+                errors.append(
+                    f"{path.name}: actionable finding {finding_id} maps to Gate "
+                    f"{mapped_gate}, whose disposition must be concern"
+                )
+            if finding_id not in related_ids:
+                errors.append(
+                    f"{path.name}: actionable finding {finding_id} maps to Gate "
+                    f"{mapped_gate}, whose Related finding IDs must cite it"
+                )
     if projection["regime"] == "skill-default":
         grade = projection["academic_grade"].upper()
         if grade not in DEFAULT_RECOMMENDATIONS:

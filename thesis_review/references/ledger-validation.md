@@ -303,9 +303,12 @@ belongs to an external cited source.
 
 ### Independent semantic-acceptance contract
 
-Every frozen R/AI target has one fresh acceptance pair under
-`06-semantic-acceptance/`: `SA-<target>.md` and `SA-<target>.csv`. The CSV is
-authoritative and has the exact schema:
+After scoped `PASS` and Stage-O byte-copy, every frozen R/AI target has one
+fresh acceptance pair in the finalized round under `06-semantic-acceptance/`:
+`SA-<target>.md` and `SA-<target>.csv`. Before that SA-pair promotion, the actor
+writes the same two basenames only at the root of its private target-specific
+view; the private view must not contain a `06-semantic-acceptance/` directory.
+The CSV is authoritative and has the exact schema:
 
 `AcceptanceRowID,TargetUnitType,TargetUnitID,TargetArtifact,TargetArtifactSHA256,CheckClass,AcceptanceDisposition,EvidenceAnchor,SemanticBasis`
 
@@ -362,6 +365,23 @@ page; failed rows may name a corrected page. Gate/finding/question/verdict and
 AI rows identify concrete PDF evidence or counter-evidence appropriate to the
 unit. Neither evidence field may assign a grade, command the Chair or defense
 decision, or create/add/invent a thesis finding.
+
+A passing ordinary-reviewer `finding` row uses one compact canonical JSON
+object with the exact ordered outer keys `premise_class`, `target_premise`,
+`supporting_pdf_evidence`, `whole_pdf_resolution`, `residual_gap`, and
+`action_delta`; duplicate, missing, extra, or reordered keys and noncanonical
+JSON spelling fail. `premise_class` is exactly `explicit-positive`,
+`bounded-inference`, or `absence-after-search`; the target premise equals the
+parsed finding `Observation`; and supporting evidence includes the finding's
+exact singleton physical page. `whole_pdf_resolution` has the exact ordered keys
+`status,pages,search_concepts,detail`; `residual_gap` has
+`status,detail`; and `action_delta` has
+`status,detail,independent_reason`. All substantive values must be concrete and
+cannot use empty/`N/A`/`none`/Chinese-empty placeholders. A passing ordinary
+reviewer `verdict` row uses one compact canonical JSON object with the exact
+ordered keys `gate_disposition_profile`, `actionable_finding_profile`,
+`synthesis_cue`, `target_verdict`, and `coherence_result`; each value exactly
+equals the validator's canonical JSON projection string for the frozen report.
 After URL, hash, IDs, numbers, and whitespace are normalized, the same basis may
 not be copied across twelve or more units of one type. This mechanical alarm is
 only a minimum: a smaller repeated template, title interpolation, a generic

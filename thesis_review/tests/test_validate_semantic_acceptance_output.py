@@ -321,16 +321,98 @@ class SemanticAcceptanceFixture:
             if target == "AI":
                 report_body = "# AI style assessment\n\n## Findings\n\nnone\n"
             else:
-                report_body = (
-                    f"# Reviewer {target}\n\n## Findings\n\nnone\n\n"
-                    "## Questions, not findings\n\n"
-                    "| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |\n"
-                    "|---|---|---|---|---|\n"
-                )
+                report_body = self.reviewer_report_body(target)
             report.write_text(
                 self.target_receipt() + "\n" + report_body,
                 encoding="utf-8",
             )
+
+    def reviewer_report_body(self, target: str) -> str:
+        header = "| " + " | ".join(SHARED.REVIEWER_ASSESSMENT_HEADERS) + " |"
+        separator = "|" + "|".join("---" for _ in SHARED.REVIEWER_ASSESSMENT_HEADERS) + "|"
+        gate_rows = "\n".join(
+            f"| {gate} | baseline | adequate | physical p.3, inspected thesis passage for Gate {gate} | none | high confidence within the frozen PDF |"
+            for gate in "ABCDEFGHI"
+        )
+        synthesis = "\n".join(
+            f"- {label}: Parsed synthesis statement {index} connects the complete thesis argument to its frozen evidence and bounded conclusion."
+            for index, label in enumerate(MODULE.SYNTHESIS_PROJECTION_LABELS, start=1)
+        )
+        return f"""# Reviewer {target}
+
+## Role, scope, and independence
+
+- Persona assignment: fixture persona for {target}
+- Persona emphasis: fixture holistic emphasis for {target}
+
+## Verdict
+
+- Decision regime: skill-default
+- Official category: N/A
+- Official defense recommendation: N/A
+- Governing source: N/A
+- Academic grade: A
+- Defense recommendation: {SHARED.DEFAULT_RECOMMENDATIONS['A']}
+- Confidence: high
+- One-paragraph whole-thesis rationale: The complete frozen thesis presents a coherent synthetic argument whose reported claims are proportionately connected to the inspected evidence and stated limitations.
+
+## Whole-thesis synthesis
+
+{synthesis}
+
+## Whole-thesis assessment
+
+{header}
+{separator}
+{gate_rows}
+
+## Findings
+
+none
+
+## Questions, not findings
+
+| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |
+|---|---|---|---|---|
+"""
+
+    def install_reviewer_finding(self, target: str) -> dict[str, str]:
+        reviewer_index = int(target[1:])
+        finding_id = f"{target}-F01"
+        fields = {
+            "Observation": (
+                "The rendered paragraph makes a bounded unsupported statement."
+            ),
+            "Required action": (
+                "Narrow the wording and add the missing PDF-visible qualification."
+            ),
+        }
+        block = f"""## Findings
+
+### {finding_id} — Bounded finding
+- Primary gate: A
+- Secondary gates: none
+- Scope: local
+- Severity: S2
+- S0 subtype: N/A
+- Remedy: W
+- Required for the current defense conclusion: yes, because the claim is central
+- Location: physical p.3
+- Observation: {fields['Observation']}
+- Why it matters: The statement changes how the method contribution is interpreted.
+- Evidence: The exact paragraph and neighboring method definition expose the gap.
+- Required action: {fields['Required action']}
+- Verification: Re-read the revised paragraph and its surrounding definition carefully.
+- Confidence: high
+"""
+        report_path = self.root / f"R{reviewer_index}-comprehensive-review.md"
+        text = report_path.read_text(encoding="utf-8")
+        text = text.replace("## Findings\n\nnone\n", block).replace(
+            f"| A | baseline | adequate | physical p.3, inspected thesis passage for Gate A | none | high confidence within the frozen PDF |",
+            f"| A | baseline | concern | physical p.3, inspected thesis passage for Gate A | {finding_id} | high confidence within the frozen PDF |",
+        )
+        report_path.write_text(text, encoding="utf-8")
+        return fields
 
     def target_receipt(self) -> str:
         return (
@@ -359,6 +441,19 @@ class SemanticAcceptanceFixture:
         if errors:
             raise AssertionError(errors)
         report = MODULE.actor_report_name(target)
+        reviewer_profile = (
+            {}
+            if target == "AI"
+            else MODULE.reviewer_semantic_target_profile(
+                self.root,
+                self.process,
+                target,
+                SHARED,
+                errors,
+            )
+        )
+        if errors:
+            raise AssertionError(errors)
         rows: list[dict[str, str]] = []
         for index, (unit_type, unit_id) in enumerate(units, start=1):
             if unit_type == "page":
@@ -471,8 +566,35 @@ class SemanticAcceptanceFixture:
                         f"{source_locator} of the opened source supports the exact "
                         f"thesis proposition {proposition} bound to {unit_id}."
                     )
+            elif unit_type == "finding":
+                artifact = MODULE.required_artifact_for_unit(target, unit_type, unit_id)
+                target_page = report_anchors[(unit_type, unit_id)]
+                fields = reviewer_profile["findings"][unit_id]
+                anchor = (
+                    f"physical p.{target_page}, exact target finding and supporting passage"
+                )
+                basis = json.dumps({
+                    "premise_class": "explicit-positive",
+                    "target_premise": fields["Observation"],
+                    "supporting_pdf_evidence": f"physical p.{target_page}, the exact observed passage supports the bounded finding",
+                    "whole_pdf_resolution": {
+                        "status": "responsive-passages-reviewed",
+                        "pages": [f"physical p.{target_page}"],
+                        "search_concepts": ["the finding's bounded proposition and its relevant terminology"],
+                        "detail": "The responsive passage was reviewed in the context of the complete frozen PDF.",
+                    },
+                    "residual_gap": {
+                        "status": "present",
+                        "detail": "The stated limitation remains within the target finding's documented scope.",
+                    },
+                    "action_delta": {
+                        "status": "same-as-target-required-action",
+                        "detail": fields["Required action"],
+                        "independent_reason": "The PDF evidence leaves the target remedy necessary without broadening it.",
+                    },
+                }, ensure_ascii=False, separators=(",", ":"))
             elif unit_type in {
-                "gate", "chapter", "finding", "question", "ai-finding"
+                "gate", "chapter", "question", "ai-finding"
             }:
                 artifact = MODULE.required_artifact_for_unit(target, unit_type, unit_id)
                 if unit_type == "chapter":
@@ -502,6 +624,13 @@ class SemanticAcceptanceFixture:
                         f"Item-level frozen-PDF verification for {unit_id} confirms "
                         f"the bounded {unit_type} conclusion against its cited passage."
                     )
+            elif unit_type == "verdict":
+                artifact = MODULE.required_artifact_for_unit(target, unit_type, unit_id)
+                anchor = "physical p.1-5, target report verdict and frozen-PDF synthesis"
+                basis = json.dumps({
+                    key: reviewer_profile[key]
+                    for key in MODULE.VERDICT_SEMANTIC_BASIS_LABELS
+                }, ensure_ascii=False, separators=(",", ":"))
             else:
                 artifact = MODULE.required_artifact_for_unit(target, unit_type, unit_id)
                 anchor = "physical p.1-5, target report verdict and frozen-PDF synthesis"
@@ -1120,8 +1249,7 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             root = Path(directory)
             fixture = SemanticAcceptanceFixture(root)
             report = root / "R1-comprehensive-review.md"
-            report.write_text(
-                "# Reviewer R1\n\nNarrative-only fake IDs R1-F99 and R1-Q99.\n\n"
+            finding_block = (
                 "## Findings\n\n"
                 "### R1-F01 — Bounded finding\n"
                 "- Primary gate: A\n"
@@ -1137,11 +1265,36 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
                 "- Evidence: The exact paragraph and neighboring method definition expose the gap.\n"
                 "- Required action: Narrow the wording and add the missing PDF-visible qualification.\n"
                 "- Verification: Re-read the revised paragraph and its surrounding definition carefully.\n"
-                "- Confidence: high\n\n"
+                "- Confidence: high\n"
+            )
+            question_block = (
                 "## Questions, not findings\n\n"
                 "| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |\n"
                 "|---|---|---|---|---|\n"
-                "| R1-Q01 | physical p.4 | Which protocol variant is used in the reported result? | The rendered methods text leaves two variants possible. | State the selected variant in the revised PDF. |\n",
+                "| R1-Q01 | physical p.4 | Which protocol variant is used in the reported result? | The rendered methods text leaves two variants possible. | State the selected variant in the revised PDF. |\n"
+            )
+            report_text = (
+                fixture.target_receipt()
+                + "\n"
+                + fixture.reviewer_report_body("R1")
+            )
+            report_text = report_text.replace(
+                "# Reviewer R1\n",
+                "# Reviewer R1\n\nNarrative-only fake IDs R1-F99 and R1-Q99.\n",
+            ).replace(
+                "## Findings\n\nnone\n",
+                finding_block,
+            ).replace(
+                "## Questions, not findings\n\n"
+                "| Question ID | Exact PDF anchor | Question | Why unresolved | Needed clarification/evidence |\n"
+                "|---|---|---|---|---|\n",
+                question_block,
+            ).replace(
+                "| A | baseline | adequate | physical p.3, inspected thesis passage for Gate A | none | high confidence within the frozen PDF |",
+                "| A | baseline | concern | physical p.3, inspected thesis passage for Gate A | R1-F01 | high confidence within the frozen PDF |",
+            )
+            report.write_text(
+                report_text,
                 encoding="utf-8",
             )
             fixture.write_acceptance("R1", root)
@@ -1181,6 +1334,326 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             errors, result = MODULE.validate_actor(root, "R1", SHARED)
             self.assertFalse(any("R1-F01" in error and "target's exact" in error for error in errors), errors)
             self.assertEqual("FAIL", result["status"])
+
+    def test_passing_finding_requires_closed_structured_semantic_binding(self) -> None:
+        def run_mutation(mutator):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                fields = fixture.install_reviewer_finding("R1")
+                fixture.write_acceptance("R1", root)
+                csv_path = root / "SA-R1.csv"
+                rows = MODULE.read_csv_rows(csv_path, [])
+                finding = next(
+                    row for row in rows if row["TargetUnitType"] == "finding"
+                )
+                mutator(finding, fields)
+                write_csv(csv_path, MODULE.CSV_COLUMNS, rows)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                return errors
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = SemanticAcceptanceFixture(root)
+            fixture.install_reviewer_finding("R1")
+            fixture.write_acceptance("R1", root)
+            errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+            self.assertEqual([], errors)
+
+        def rewrite(finding, changes, labels=MODULE.FINDING_SEMANTIC_BASIS_LABELS):
+            parse_errors: list[str] = []
+            parsed = MODULE.parse_closed_ordered_semantic_basis(
+                finding["SemanticBasis"],
+                MODULE.FINDING_SEMANTIC_BASIS_LABELS,
+                "fixture",
+                parse_errors,
+            )
+            if parse_errors:
+                raise AssertionError(parse_errors)
+            parsed.update(changes)
+            ordered = {label: parsed[label] for label in labels}
+            finding["SemanticBasis"] = json.dumps(
+                ordered, ensure_ascii=False, separators=(",", ":")
+            )
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {},
+                (
+                    "target_premise",
+                    "premise_class",
+                    *MODULE.FINDING_SEMANTIC_BASIS_LABELS[2:],
+                ),
+            )
+        )
+        self.assertTrue(any("exact closed key order" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(row, {"premise_class": "free-form"})
+        )
+        self.assertTrue(any("premise class must be exactly" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {"target_premise": "A different premise that is absent from the target finding."},
+            )
+        )
+        self.assertTrue(any("must exactly bind" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {
+                    "premise_class": "absence-after-search",
+                    "residual_gap": {"status": "present", "detail": "N/A because no detail was recorded"},
+                },
+            )
+        )
+        self.assertTrue(any("residual_gap detail" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row, {"supporting_pdf_evidence": "N/A because evidence was not copied"}
+            )
+        )
+        self.assertTrue(
+            any("supporting_pdf_evidence" in error and "cannot be N/A" in error for error in errors),
+            errors,
+        )
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(row, {"residual_gap": {"status": "present", "detail": "无：未记录"}})
+        )
+        self.assertTrue(any("residual_gap detail" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {
+                    "supporting_pdf_evidence": (
+                        "physical p.4, a passage unrelated to the target finding page"
+                    )
+                },
+            )
+        )
+        self.assertTrue(
+            any("supporting PDF evidence" in error and "physical p.3" in error for error in errors),
+            errors,
+        )
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {
+                    "supporting_pdf_evidence": (
+                        "physical p.1-3, a range contains but does not exactly anchor the target page"
+                    )
+                },
+            )
+        )
+        self.assertTrue(
+            any("exact singleton physical p.3" in error for error in errors),
+            errors,
+        )
+
+        errors = run_mutation(
+            lambda row, fields: rewrite(
+                row,
+                {"action_delta": {
+                    "status": "same-as-target-required-action",
+                    "detail": fields["Required action"],
+                    "independent_reason": "Independent PDF inspection confirms that the same bounded action remains necessary.",
+                }},
+            )
+        )
+        self.assertEqual([], errors)
+
+        for label, changes in (
+            (
+                "whole_pdf_resolution detail",
+                {"whole_pdf_resolution": {
+                    "status": "responsive-passages-reviewed",
+                    "pages": ["physical p.3"],
+                    "search_concepts": ["concrete responsive concept across the thesis"],
+                    "detail": {"not": "a string"},
+                }},
+            ),
+            (
+                "whole_pdf_resolution search_concepts",
+                {"whole_pdf_resolution": {
+                    "status": "responsive-passages-reviewed",
+                    "pages": ["physical p.3"],
+                    "search_concepts": [{"not": "a string"}],
+                    "detail": "The responsive passage was independently inspected in context.",
+                }},
+            ),
+            (
+                "residual_gap detail",
+                {"residual_gap": {
+                    "status": "present",
+                    "detail": ["not", "a", "string"],
+                }},
+            ),
+            (
+                "action_delta independent_reason",
+                {"action_delta": {
+                    "status": "different-from-target-required-action",
+                    "detail": "Add one narrowly scoped clarification at the cited passage.",
+                    "independent_reason": {"not": "a string"},
+                }},
+            ),
+        ):
+            with self.subTest(non_string_nested_value=label):
+                errors = run_mutation(
+                    lambda row, _fields, changes=changes: rewrite(row, changes)
+                )
+                self.assertTrue(any(label in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, fields: rewrite(
+                row,
+                {"action_delta": {
+                    "status": "narrower-than-target-required-action",
+                    "detail": fields["Required action"],
+                    "independent_reason": "The independent inspection supports a genuinely narrower correction.",
+                }},
+            )
+        )
+        self.assertTrue(any("must not copy the Required action" in error for error in errors), errors)
+
+        for wrapped_action in (
+            lambda action: f"Narrower prefix: {action}",
+            lambda action: f"{action} with a trailing clarification",
+        ):
+            errors = run_mutation(
+                lambda row, fields, wrapped_action=wrapped_action: rewrite(
+                    row,
+                    {"action_delta": {
+                        "status": "different-from-target-required-action",
+                        "detail": wrapped_action(fields["Required action"]),
+                        "independent_reason": "The independent inspection supports a genuinely different correction.",
+                    }},
+                )
+            )
+            self.assertTrue(
+                any("must not copy the Required action" in error for error in errors),
+                errors,
+            )
+
+        errors = run_mutation(
+            lambda row, fields: rewrite(
+                row,
+                {"action_delta": {
+                    "status": "same-as-target-required-action",
+                    "detail": fields["Required action"],
+                    "independent_reason": fields["Required action"],
+                }},
+            )
+        )
+        self.assertTrue(any("independent_reason must not copy" in error for error in errors), errors)
+
+        for reason_source in ("required", "detail"):
+            errors = run_mutation(
+                lambda row, fields, reason_source=reason_source: rewrite(
+                    row,
+                    {"action_delta": {
+                        "status": "different-from-target-required-action",
+                        "detail": "Add one narrowly scoped clarification at the cited passage.",
+                        "independent_reason": "Independent reason: " + (
+                            fields["Required action"]
+                            if reason_source == "required"
+                            else "Add one narrowly scoped clarification at the cited passage."
+                        ),
+                    }},
+                )
+            )
+            self.assertTrue(
+                any("independent_reason must not copy" in error for error in errors),
+                errors,
+            )
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {
+                    "premise_class": "bounded-inference",
+                    "whole_pdf_resolution": {
+                        "status": "no-responsive-passage-found",
+                        "pages": [],
+                        "search_concepts": ["the bounded proposition and relevant terminology throughout the PDF"],
+                        "detail": "The complete search found no additional responsive passage beyond the local evidence.",
+                    },
+                },
+            )
+        )
+        self.assertEqual([], errors)
+
+    def test_passing_verdict_exactly_projects_report_profiles_and_coherence(self) -> None:
+        for cue_label in MODULE.VERDICT_SEMANTIC_BASIS_LABELS:
+            with self.subTest(cue_label=cue_label), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                fixture.write_acceptance("R1", root)
+                csv_path = root / "SA-R1.csv"
+                rows = MODULE.read_csv_rows(csv_path, [])
+                verdict = next(
+                    row for row in rows if row["TargetUnitType"] == "verdict"
+                )
+                parse_errors: list[str] = []
+                parsed = MODULE.parse_closed_ordered_semantic_basis(
+                    verdict["SemanticBasis"],
+                    MODULE.VERDICT_SEMANTIC_BASIS_LABELS,
+                    "fixture",
+                    parse_errors,
+                )
+                self.assertEqual([], parse_errors)
+                parsed[cue_label] += "X"
+                verdict["SemanticBasis"] = json.dumps(
+                    parsed, ensure_ascii=False, separators=(",", ":")
+                )
+                write_csv(csv_path, MODULE.CSV_COLUMNS, rows)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                self.assertTrue(
+                    any(f"verdict {cue_label}" in error for error in errors),
+                    errors,
+                )
+
+        for disposition in ("adequate", "unverifiable"):
+            with self.subTest(non_concern=disposition), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                fixture.install_reviewer_finding("R1")
+                report_path = root / "R1-comprehensive-review.md"
+                report_path.write_text(
+                    report_path.read_text(encoding="utf-8").replace(
+                        "| A | baseline | concern | physical p.3, inspected thesis passage for Gate A | R1-F01 | high confidence within the frozen PDF |",
+                        f"| A | baseline | {disposition} | physical p.3, inspected thesis passage for Gate A | R1-F01 | high confidence within the frozen PDF |",
+                    ),
+                    encoding="utf-8",
+                )
+                fixture.write_acceptance("R1", root)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                self.assertTrue(
+                    any("mechanically incoherent" in error for error in errors),
+                    errors,
+                )
+
+    def test_finding_canonical_json_preserves_literal_legacy_delimiter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = SemanticAcceptanceFixture(root)
+            fields = fixture.install_reviewer_finding("R1")
+            report = root / "R1-comprehensive-review.md"
+            observation = fields["Observation"] + " It literally contains || without splitting fields."
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(fields["Observation"], observation),
+                encoding="utf-8",
+            )
+            fixture.write_acceptance("R1", root)
+            errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+            self.assertEqual([], errors)
 
     def test_verdict_ai_judgment_and_ai_finding_require_physical_target_evidence(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

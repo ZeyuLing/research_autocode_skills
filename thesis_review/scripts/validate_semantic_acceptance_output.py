@@ -142,6 +142,35 @@ DISPLAYED_MARKER_CUE_RE = re.compile(
 RENDERED_REFERENCE_GAP_CUE_RE = re.compile(
     r"(?i)(?:rendered\s+reference\s+gap|渲染参考文献缺口)\s*:"
 )
+FINDING_SEMANTIC_BASIS_LABELS = (
+    "premise_class",
+    "target_premise",
+    "supporting_pdf_evidence",
+    "whole_pdf_resolution",
+    "residual_gap",
+    "action_delta",
+)
+VERDICT_SEMANTIC_BASIS_LABELS = (
+    "gate_disposition_profile",
+    "actionable_finding_profile",
+    "synthesis_cue",
+    "target_verdict",
+    "coherence_result",
+)
+ALLOWED_FINDING_PREMISE_CLASSES = {
+    "explicit-positive",
+    "bounded-inference",
+    "absence-after-search",
+}
+SYNTHESIS_PROJECTION_LABELS = (
+    "Central thesis problem and overall answer",
+    "Degree-level contribution judgment",
+    "Strongest claim--evidence chain",
+    "Weakest claim--evidence chain",
+    "Cross-chapter coherence",
+    "Overall integrity and submission fitness",
+    "Most consequential conclusion outside the persona emphasis, or evidence that no material concern was found there",
+)
 FORBIDDEN_INPUT_TOKEN_RE = re.compile(
     r"(?i)(?:^|[/\\])(?:\.git|src|source|latex|old|previous|prior|chat|"
     r"conversation|thread|review-v\d+)(?:[/\\]|$)|\.bib$|\.tex$"
@@ -1266,6 +1295,421 @@ def authoritative_report_units(
     return units, anchors
 
 
+def reviewer_semantic_target_profile(
+    root: Path,
+    process: dict[str, Any],
+    target: str,
+    shared: Any,
+    errors: list[str],
+) -> dict[str, Any]:
+    """Project only mechanically parsable reviewer fields for PASS binding.
+
+    This projection does not decide whether thesis prose is true.  It preserves
+    the report's own parsed dispositions and hashes longer prose fields so the
+    SA actor can prove exact binding without replaying a defense recommendation
+    as if it were the acceptor's instruction.
+    """
+
+    if target == "AI":
+        return {}
+    report_path = root / actor_report_name(target)
+    try:
+        report_text = report_path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        errors.append(f"cannot read target report {report_path.name}: {exc}")
+        return {}
+    try:
+        physical_page_count = int(process.get("physical_page_count", 0) or 0)
+    except (TypeError, ValueError):
+        physical_page_count = 0
+    reviewer_index = int(target[1:])
+    findings = shared.parse_reviewer_findings(
+        report_text,
+        reviewer_index,
+        report_path.name,
+        physical_page_count,
+        errors,
+    )
+
+    assessment = (
+        shared.markdown_section_body_raw(report_text, "Whole-thesis assessment")
+        or ""
+    )
+    parsed_gate_rows = shared.parse_markdown_table_by_exact_headers(
+        assessment,
+        shared.REVIEWER_ASSESSMENT_HEADERS,
+        report_path.name,
+        errors,
+        case_sensitive=True,
+    )
+    gate_rows = parsed_gate_rows or []
+    gate_profile: list[dict[str, Any]] = []
+    gate_states: dict[str, tuple[str, set[str]]] = {}
+    gate_labels: list[str] = []
+    gate_profile_complete = parsed_gate_rows is not None and len(gate_rows) == 9
+    for position, cells in enumerate(gate_rows):
+        if len(cells) != len(shared.REVIEWER_ASSESSMENT_HEADERS):
+            gate_profile_complete = False
+            continue
+        gate_match = re.fullmatch(
+            r"([A-I])(?:\s*(?:—|–|-)\s*\S.*)?",
+            cells[0],
+        )
+        if gate_match is None:
+            gate_profile_complete = False
+            gate = f"row-{position + 1}"
+        else:
+            gate = gate_match.group(1)
+            gate_labels.append(gate)
+        related_ids = shared.parse_related_finding_ids(cells[4])
+        if related_ids is None:
+            gate_profile_complete = False
+            related_ids = ()
+        disposition = cells[2].casefold()
+        review_depth = cells[1].casefold()
+        gate_profile.append(
+            {
+                "disposition": disposition,
+                "gate": gate,
+                "related_finding_ids": list(related_ids),
+                "review_depth": review_depth,
+            }
+        )
+        if gate in set("ABCDEFGHI"):
+            gate_states[gate] = (disposition, set(related_ids))
+    if gate_labels != list("ABCDEFGHI") or len(gate_states) != 9:
+        gate_profile_complete = False
+
+    actionable_ids = sorted(
+        (
+            finding_id
+            for finding_id, fields in findings.items()
+            if fields.get("Severity", "").casefold() in {"s0", "s1", "s2", "s3"}
+        ),
+        key=lambda value: int(re.search(r"(\d+)$", value).group(1)),
+    )
+    actionable_profile: list[dict[str, Any]] = []
+    finding_gate_sets: dict[str, set[str]] = {}
+    for finding_id in actionable_ids:
+        fields = findings[finding_id]
+        primary_gate = fields.get("Primary gate", "").upper()
+        secondary_gates = shared.parse_secondary_gate_set(
+            fields.get("Secondary gates", "")
+        )
+        mapped_gates = {primary_gate} if primary_gate in set("ABCDEFGHI") else set()
+        if secondary_gates is not None:
+            mapped_gates.update(secondary_gates)
+        finding_gate_sets[finding_id] = mapped_gates
+        actionable_profile.append(
+            {
+                "defense_requirement_sha256": parsed_text_sha256(
+                    fields.get("Required for the current defense conclusion", "")
+                ),
+                "finding_id": finding_id,
+                "observation_sha256": parsed_text_sha256(
+                    fields.get("Observation", "")
+                ),
+                "primary_gate": primary_gate,
+                "remedy": fields.get("Remedy", "").casefold(),
+                "required_action_sha256": parsed_text_sha256(
+                    fields.get("Required action", "")
+                ),
+                "secondary_gates": list(secondary_gates or ()),
+                "severity": fields.get("Severity", "").casefold(),
+            }
+        )
+
+    gate_actionable_linkage = gate_profile_complete
+    actionable_set = set(actionable_ids)
+    for finding_id, mapped_gates in finding_gate_sets.items():
+        if not mapped_gates:
+            gate_actionable_linkage = False
+        for gate in mapped_gates:
+            state = gate_states.get(gate)
+            if state is None:
+                gate_actionable_linkage = False
+                continue
+            disposition, related_ids = state
+            if disposition != "concern" or finding_id not in related_ids:
+                gate_actionable_linkage = False
+    for gate, (disposition, related_ids) in gate_states.items():
+        related_actionable = related_ids & actionable_set
+        mapped_related = {
+            finding_id
+            for finding_id in related_actionable
+            if gate in finding_gate_sets.get(finding_id, set())
+        }
+        if related_actionable != mapped_related:
+            gate_actionable_linkage = False
+        if disposition == "concern" and not mapped_related:
+            gate_actionable_linkage = False
+        if disposition != "concern" and mapped_related:
+            gate_actionable_linkage = False
+
+    synthesis_section = (
+        shared.markdown_section_body_raw(report_text, "Whole-thesis synthesis")
+        or ""
+    )
+    synthesis_values = {
+        label: shared.labeled_value(synthesis_section, label) or ""
+        for label in SYNTHESIS_PROJECTION_LABELS
+    }
+    synthesis_complete = all(synthesis_values.values())
+    synthesis_profile = {
+        label: parsed_text_sha256(value)
+        for label, value in synthesis_values.items()
+    }
+
+    verdict = shared.reviewer_verdict_projection(report_text)
+    target_verdict_profile = {
+        "category": verdict.get("category", ""),
+        "confidence": verdict.get("confidence", "").casefold(),
+        "rationale_sha256": parsed_text_sha256(verdict.get("rationale", "")),
+        "recommendation_sha256": parsed_text_sha256(
+            verdict.get("recommendation", "")
+        ),
+        "regime": verdict.get("regime", ""),
+        "regime_source_sha256": parsed_text_sha256(
+            verdict.get("regime_source", "")
+        ),
+    }
+    verdict_complete = all(
+        verdict.get(key, "")
+        for key in ("regime", "category", "recommendation", "confidence", "rationale")
+    )
+    if verdict.get("regime") == "skill-default":
+        category = verdict.get("category", "").upper()
+        verdict_coherent = (
+            verdict_complete
+            and category in shared.DEFAULT_RECOMMENDATIONS
+            and verdict.get("recommendation", "")
+            == shared.DEFAULT_RECOMMENDATIONS.get(category, "")
+        )
+    elif verdict.get("regime") == "institutional":
+        verdict_coherent = verdict_complete and bool(verdict.get("regime_source", ""))
+    else:
+        verdict_coherent = False
+
+    coherence_profile = {
+        "gate_actionable_linkage": (
+            "match" if gate_actionable_linkage else "mismatch"
+        ),
+        "synthesis_projection": "complete" if synthesis_complete else "incomplete",
+        "target_verdict_projection": "coherent" if verdict_coherent else "incoherent",
+    }
+    return {
+        "findings": findings,
+        "gate_disposition_profile": canonical_profile_json(gate_profile),
+        "actionable_finding_profile": canonical_profile_json(actionable_profile),
+        "synthesis_cue": canonical_profile_json(synthesis_profile),
+        "target_verdict": canonical_profile_json(target_verdict_profile),
+        "coherence_result": canonical_profile_json(coherence_profile),
+        "coherent": (
+            gate_actionable_linkage and synthesis_complete and verdict_coherent
+        ),
+    }
+
+
+def validate_passing_finding_semantic_basis(
+    semantic_basis: str,
+    finding_id: str,
+    finding_fields: dict[str, str] | None,
+    target_page: int | None,
+    physical_page_count: int,
+    location: str,
+    errors: list[str],
+) -> None:
+    parsed = parse_closed_ordered_semantic_basis(
+        semantic_basis,
+        FINDING_SEMANTIC_BASIS_LABELS,
+        location,
+        errors,
+    )
+    if not parsed:
+        return
+    if finding_fields is None:
+        errors.append(
+            f"{location}: passing finding {finding_id} has no parsed target finding"
+        )
+        return
+    for label in ("premise_class", "target_premise", "supporting_pdf_evidence"):
+        if not isinstance(parsed[label], str):
+            errors.append(f"{location}: finding {label} must be a string")
+    premise_class = str(parsed["premise_class"]).casefold()
+    if premise_class not in ALLOWED_FINDING_PREMISE_CLASSES:
+        errors.append(
+            f"{location}: finding premise class must be exactly one of "
+            f"{sorted(ALLOWED_FINDING_PREMISE_CLASSES)}"
+        )
+    target_observation = finding_fields.get("Observation", "")
+    if normalized_binding_text(str(parsed["target_premise"])) != normalized_binding_text(
+        target_observation
+    ):
+        errors.append(
+            f"{location}: finding target premise must exactly bind the parsed "
+            f"Observation of {finding_id}"
+        )
+    supporting_pages = validate_semantic_basis_pages(
+        str(parsed["supporting_pdf_evidence"]),
+        physical_page_count,
+        location,
+        "supporting PDF evidence",
+        errors,
+        require_page=True,
+    )
+    if target_page is not None:
+        has_exact_singleton = any(
+            int(match.group("start")) == target_page
+            and int(match.group("end") or match.group("start")) == target_page
+            for match in PHYSICAL_PAGE_RE.finditer(
+                str(parsed["supporting_pdf_evidence"])
+            )
+        )
+        if not has_exact_singleton:
+            errors.append(
+                f"{location}: finding supporting PDF evidence must include the "
+                f"target finding's exact singleton physical p.{target_page} page"
+            )
+    resolution = validate_closed_object(
+        parsed["whole_pdf_resolution"],
+        ("status", "pages", "search_concepts", "detail"),
+        location,
+        "whole_pdf_resolution",
+        errors,
+    )
+    if resolution:
+        status = resolution["status"]
+        allowed_statuses = {
+            "responsive-passages-reviewed",
+            "no-responsive-passage-found",
+            "not-applicable-positive-local-fact",
+        }
+        if status not in allowed_statuses:
+            errors.append(f"{location}: whole_pdf_resolution status is invalid")
+        pages = resolution["pages"]
+        concepts = resolution["search_concepts"]
+        if not isinstance(pages, list) or not all(isinstance(item, str) for item in pages):
+            errors.append(f"{location}: whole_pdf_resolution pages must be a string array")
+            pages = []
+        if not isinstance(concepts, list) or not all(
+            concrete_semantic_text(item) for item in concepts
+        ):
+            errors.append(f"{location}: whole_pdf_resolution search_concepts must contain concrete text")
+            concepts = []
+        responsive_pages = validate_semantic_basis_pages(
+            " ".join(pages), physical_page_count, location,
+            "whole_pdf_resolution pages", errors, require_page=False,
+        )
+        if status == "responsive-passages-reviewed" and (not responsive_pages or not concepts):
+            errors.append(f"{location}: responsive-passages-reviewed requires pages and search_concepts")
+        if status == "no-responsive-passage-found" and (pages or not concepts):
+            errors.append(f"{location}: no-responsive-passage-found requires empty pages and search_concepts")
+        if status == "not-applicable-positive-local-fact" and (
+            premise_class != "explicit-positive" or pages or concepts
+        ):
+            errors.append(f"{location}: not-applicable-positive-local-fact requires an explicit-positive local fact and empty pages/search_concepts")
+        expected_resolution_by_premise = {
+            "absence-after-search": "no-responsive-passage-found",
+        }
+        expected_status = expected_resolution_by_premise.get(premise_class)
+        if expected_status and status != expected_status:
+            errors.append(
+                f"{location}: premise_class {premise_class!r} requires "
+                f"whole_pdf_resolution status {expected_status!r}"
+            )
+        if not concrete_semantic_text(resolution["detail"]):
+            errors.append(f"{location}: whole_pdf_resolution detail must be concrete")
+    gap = validate_closed_object(
+        parsed["residual_gap"], ("status", "detail"), location,
+        "residual_gap", errors,
+    )
+    if gap:
+        if gap["status"] != "present":
+            errors.append(f"{location}: residual_gap status must be 'present'")
+        if not concrete_semantic_text(gap["detail"]):
+            errors.append(f"{location}: residual_gap detail must be concrete")
+    action = validate_closed_object(
+        parsed["action_delta"], ("status", "detail", "independent_reason"),
+        location, "action_delta", errors,
+    )
+    if action:
+        if action["status"] not in {
+            "same-as-target-required-action",
+            "narrower-than-target-required-action",
+            "different-from-target-required-action",
+        }:
+            errors.append(f"{location}: action_delta status is invalid")
+        for key in ("detail", "independent_reason"):
+            if not concrete_semantic_text(action[key]):
+                errors.append(f"{location}: action_delta {key} must be concrete")
+        if action["status"] == "same-as-target-required-action" and (
+            normalized_binding_text(str(action["detail"]))
+            != normalized_binding_text(finding_fields.get("Required action", ""))
+        ):
+            errors.append(
+                f"{location}: same-as-target-required-action detail must exactly "
+                f"bind the Required action of {finding_id}"
+            )
+        required_identity = normalized_word_identity(
+            finding_fields.get("Required action", "")
+        )
+        detail_identity = normalized_word_identity(str(action["detail"]))
+        reason_identity = normalized_word_identity(str(action["independent_reason"]))
+        if action["status"] in {
+            "narrower-than-target-required-action",
+            "different-from-target-required-action",
+        } and contains_complete_normalized_phrase(detail_identity, required_identity):
+            errors.append(
+                f"{location}: {action['status']} detail must not copy the Required "
+                f"action of {finding_id}"
+            )
+        if (
+            contains_complete_normalized_phrase(reason_identity, detail_identity)
+            or contains_complete_normalized_phrase(reason_identity, required_identity)
+        ):
+            errors.append(
+                f"{location}: action_delta independent_reason must not copy its "
+                f"detail or the Required action of {finding_id}"
+            )
+    for label in ("target_premise", "supporting_pdf_evidence"):
+        if not concrete_semantic_text(parsed[label]):
+            errors.append(f"{location}: finding {label} must be concrete and cannot be N/A/empty")
+    if semantic_value_is_na(parsed["premise_class"]):
+        errors.append(f"{location}: finding premise_class cannot be N/A/empty")
+
+
+def validate_passing_verdict_semantic_basis(
+    semantic_basis: str,
+    target_profile: dict[str, Any],
+    location: str,
+    errors: list[str],
+) -> None:
+    parsed = parse_closed_ordered_semantic_basis(
+        semantic_basis,
+        VERDICT_SEMANTIC_BASIS_LABELS,
+        location,
+        errors,
+    )
+    if not parsed:
+        return
+    expected_keys = {key: key for key in VERDICT_SEMANTIC_BASIS_LABELS}
+    if not target_profile:
+        errors.append(f"{location}: target reviewer report could not be projected")
+        return
+    for cue_label, profile_key in expected_keys.items():
+        expected = str(target_profile.get(profile_key, ""))
+        if parsed[cue_label] != expected:
+            errors.append(
+                f"{location}: verdict {cue_label} does not exactly project the "
+                "parsed target reviewer report"
+            )
+    if not target_profile.get("coherent", False):
+        errors.append(
+            f"{location}: passing verdict cannot admit a mechanically incoherent "
+            "gate/finding/synthesis/verdict projection"
+        )
+
+
 def expected_units(
     root: Path,
     process: dict[str, Any],
@@ -1404,6 +1848,150 @@ def exact_singleton_physical_pages(value: str) -> set[int]:
 def normalized_binding_text(value: str) -> str:
     normalized = unicodedata.normalize("NFKC", value or "").casefold()
     return re.sub(r"\s+", " ", normalized).strip()
+
+
+def normalized_word_identity(value: str) -> str:
+    """Normalize wording while ignoring punctuation-only copy edits."""
+
+    normalized = unicodedata.normalize("NFKC", value or "").casefold()
+    return re.sub(r"[\W_]+", " ", normalized).strip()
+
+
+def contains_complete_normalized_phrase(container: str, phrase: str) -> bool:
+    """Return whether *phrase* occurs as whole normalized words in *container*."""
+
+    if not phrase:
+        return False
+    return re.search(
+        rf"(?:^| ){re.escape(phrase)}(?:$| )",
+        container,
+    ) is not None
+
+
+def parse_closed_ordered_semantic_basis(
+    value: str,
+    labels: tuple[str, ...],
+    location: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    """Parse the sole canonical, closed JSON spelling for a PASS record."""
+
+    duplicate = False
+
+    def closed_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        nonlocal duplicate
+        result: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in result:
+                duplicate = True
+            result[key] = item
+        return result
+
+    try:
+        parsed = json.loads(value, object_pairs_hook=closed_object)
+    except (json.JSONDecodeError, TypeError):
+        errors.append(f"{location}: SemanticBasis must be one canonical JSON object")
+        return {}
+    if duplicate or not isinstance(parsed, dict) or list(parsed) != list(labels):
+        errors.append(
+            f"{location}: SemanticBasis must use exact closed key order {list(labels)}"
+        )
+        return {}
+    if value != json.dumps(parsed, ensure_ascii=False, separators=(",", ":")):
+        errors.append(f"{location}: SemanticBasis must use canonical JSON spelling")
+        return {}
+    return parsed
+
+
+def canonical_profile_json(value: Any) -> str:
+    """Return the sole byte-stable JSON spelling used by verdict projections."""
+
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+
+
+def parsed_text_sha256(value: str) -> str:
+    """Bind a parsed report field without replaying adjudicative wording."""
+
+    return hashlib.sha256(value.encode("utf-8")).hexdigest().upper()
+
+
+def semantic_value_is_na(value: str) -> bool:
+    normalized = unicodedata.normalize("NFKC", str(value or "")).casefold().strip()
+    return bool(
+        re.match(
+            r"^(?:n\s*/?\s*a|none|null|not\s+applicable|unknown|tbd|todo|"
+            r"无|暂无|没有|不适用|未知|待定|未提供|未说明|空)"
+            r"(?:$|[\s:：,，;；.!！?？()（）\-])",
+            normalized,
+        )
+    )
+
+
+def concrete_semantic_text(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    return len(normalized_word_identity(text)) >= 6 and not semantic_value_is_na(text)
+
+
+def validate_closed_object(
+    value: Any,
+    keys: tuple[str, ...],
+    location: str,
+    label: str,
+    errors: list[str],
+) -> dict[str, Any]:
+    if not isinstance(value, dict) or list(value) != list(keys):
+        errors.append(f"{location}: {label} must be a closed object with exact keys {list(keys)}")
+        return {}
+    return value
+
+
+def semantic_gap_is_empty(value: str) -> bool:
+    return normalized_word_identity(value) in {
+        "",
+        "none",
+        "no gap",
+        "no residual gap",
+        "n a",
+        "na",
+        "not applicable",
+    }
+
+
+def validate_semantic_basis_pages(
+    value: str,
+    physical_page_count: int,
+    location: str,
+    field_label: str,
+    errors: list[str],
+    *,
+    require_page: bool,
+) -> set[int]:
+    """Validate explicit physical-page locators in one structured cue."""
+
+    matches = list(PHYSICAL_PAGE_RE.finditer(value))
+    if require_page and not matches:
+        errors.append(
+            f"{location}: finding {field_label} requires an explicit physical p.<n> locator"
+        )
+    pages: set[int] = set()
+    for match in matches:
+        start = int(match.group("start"))
+        end = int(match.group("end") or start)
+        if start > end or start < 1 or end > physical_page_count:
+            errors.append(
+                f"{location}: finding {field_label} locator {match.group(0)!r} "
+                f"is outside 1..{physical_page_count} or descending"
+            )
+            continue
+        pages.update(range(start, end + 1))
+    return pages
 
 
 def substantive_value_is_bound(value: str, evidence: str) -> bool:
@@ -1931,6 +2519,17 @@ def validate_actor(
         errors.append(
             f"target {target} is not required for degree_level={process.get('degree_level')!r}"
         )
+    if enforce_closed_view:
+        reserved_round_directory = root / ACCEPTANCE_DIRECTORY
+        if reserved_round_directory.exists() or shared.is_link_or_reparse(
+            reserved_round_directory
+        ):
+            errors.append(
+                "scoped semantic-acceptance view must place "
+                f"SA-{target}.md and SA-{target}.csv at the view root; "
+                f"{ACCEPTANCE_DIRECTORY} is reserved for Stage-O promotion "
+                "inside the finalized round"
+            )
     report_dir = acceptance_directory or root
     acceptance_md = report_dir / f"SA-{target}.md"
     acceptance_csv = report_dir / f"SA-{target}.csv"
@@ -2072,6 +2671,17 @@ def validate_actor(
         target,
         shared,
         errors,
+    )
+    reviewer_semantic_profile = (
+        {}
+        if target == "AI"
+        else reviewer_semantic_target_profile(
+            root,
+            process,
+            target,
+            shared,
+            errors,
+        )
     )
     chapter_intervals = (
         []
@@ -2241,6 +2851,23 @@ def validate_actor(
                 f"{acceptance_csv.name}:{line}: passing {unit_type} unit "
                 f"{unit_id} must include its target's exact singleton "
                 f"physical p.{required_page} anchor"
+            )
+        if disposition == "pass" and unit_type == "finding":
+            validate_passing_finding_semantic_basis(
+                row["SemanticBasis"],
+                unit_id,
+                reviewer_semantic_profile.get("findings", {}).get(unit_id),
+                report_anchor_by_unit.get(report_key),
+                physical_page_count,
+                f"{acceptance_csv.name}:{line}",
+                errors,
+            )
+        if disposition == "pass" and unit_type == "verdict":
+            validate_passing_verdict_semantic_basis(
+                row["SemanticBasis"],
+                reviewer_semantic_profile,
+                f"{acceptance_csv.name}:{line}",
+                errors,
             )
         if unit_type == "page":
             page_match = re.fullmatch(r"P(\d+)", unit_id)

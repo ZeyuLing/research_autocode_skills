@@ -1,6 +1,6 @@
 # Review bundle template
 
-Store a review round in a dedicated directory:
+Store the finalized, Stage-O-promoted review round in a dedicated directory:
 
 ```text
 thesis-review-round-YYYYMMDD/
@@ -230,6 +230,15 @@ Copy `Persona assignment` exactly from this closed degree-specific mapping; do n
 
 Use `N/A` only when the gate is genuinely inapplicable to the thesis, not because another reviewer owns a related ledger. A report is incomplete if any Gate A--I row is omitted, lacks an evidence anchor, or uses a depth label as a score. Do not invent a finding merely to populate a gate; an evidence-backed strength or `none` is valid.
 
+Gate dispositions and actionable findings are a bidirectional contract. Every
+`S0`--`S3` finding's Primary gate and every declared Secondary gate must be
+`concern` and must cite that finding ID. Conversely, every `concern` row must
+cite at least one current `S0`--`S3` finding that maps back to that Gate, and it
+must not cite an actionable finding whose gate assignment excludes the row.
+Every non-`concern` row (`adequate`, `unverifiable`, or `N/A`) cites no
+actionable `S0`--`S3` finding. `S4` remains optional, may be referenced only as
+informational context, and does not by itself force a Gate to `concern`.
+
 ## Persona-weighted deep review
 
 Explain the additional scrutiny performed because of this reviewer's expertise. This section supplements the common assessment; it does not define the report's entire scope.
@@ -456,7 +465,8 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 ## Independent semantic acceptance
 
 Stage SA starts only after every R report, its owner ledgers/renders, and the
-standalone AI report are frozen. Launch one new, mutually isolated acceptor for
+standalone AI report are frozen in the closed current round. Launch one new,
+mutually isolated acceptor for
 each target actor. An acceptor is neither another reviewer nor a Chair: it may
 not add, delete, rewrite, merge, grade, or adjudicate a finding. It decides only
 whether the target's already-frozen semantic work is sufficiently supported,
@@ -468,6 +478,14 @@ target-specific view; it never writes directly into the closed round's
 `06-semantic-acceptance/` without rewriting them. A single failed row makes
 that acceptor `FAIL` and invalidates the entire retry; the target artifact is
 never reopened or patched.
+
+These namespaces are not alternatives: scoped validation accepts only the two
+private-view-root files, while set validation accepts only the promoted pair in
+the finalized-round subdirectory. The SA prompt names the root-level output
+paths literally and prohibits creating a private-view
+`06-semantic-acceptance/` directory. A passing SA admits the already-frozen,
+byte-identical target to later Chair synthesis; it does not authorize a target
+rewrite or a second target copy.
 
 Each acceptor receives only its exact operational prompt, frozen PDF identity
 and bytes, the governing rules needed for that target, the neutral Stage-P
@@ -564,6 +582,37 @@ severity, and verdict proportionality. A generic template, unchecked row,
 identity-only source match, or copied target rationale is a failure.
 Neither `EvidenceAnchor` nor `SemanticBasis` may assign a grade, direct the
 Chair or defense decision, or create/add/invent a thesis finding.
+
+For a passing `finding` row, `SemanticBasis` is exactly one compact canonical
+JSON object (UTF-8 characters retained, no insignificant whitespace) in this
+closed key order:
+
+```json
+{"premise_class":"<explicit-positive|bounded-inference|absence-after-search>","target_premise":"<exact parsed target Observation>","supporting_pdf_evidence":"<independently checked PDF fact including the finding's exact physical p.N>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found|not-applicable-positive-local-fact>","pages":["<physical p.N, only when responsive>"],"search_concepts":["<concrete concept used in the whole-PDF search>"],"detail":"<what the responsive passages establish, or what the complete search did not find>"},"residual_gap":{"status":"present","detail":"<the defect remaining after the whole-PDF check>"},"action_delta":{"status":"<same-as-target-required-action|narrower-than-target-required-action|different-from-target-required-action>","detail":"<minimum still-unmet action>","independent_reason":"<acceptor's independent reason for that relation>"}}
+```
+
+For `no-responsive-passage-found`, `pages` is `[]` and
+`search_concepts` is nonempty. `absence-after-search` requires that status;
+`bounded-inference` may use it or `responsive-passages-reviewed`. The
+`not-applicable-positive-local-fact` status is limited to `explicit-positive`
+and uses empty `pages` and `search_concepts`. Every substantive string must be
+concrete: empty, `N/A`/`none`-style, and Chinese-empty placeholders fail.
+`same-as-target-required-action` binds the target action exactly;
+`narrower`/`different` must not relabel an identical action, and the independent
+reason must not copy either action text.
+
+For a passing ordinary-reviewer `verdict` row, `SemanticBasis` is one compact
+canonical JSON object with the exact ordered keys shown below. Each outer value
+is the validator-derived canonical JSON projection string for that unit:
+
+```json
+{"gate_disposition_profile":"<canonical projection JSON string>","actionable_finding_profile":"<canonical projection JSON string>","synthesis_cue":"<canonical projection JSON string>","target_verdict":"<canonical projection JSON string>","coherence_result":"<canonical projection JSON string>"}
+```
+
+These values exactly project Gate A--I, all `S0`--`S3` findings, all seven
+whole-thesis synthesis fields, and the verdict. The acceptor still performs the
+semantic comparison; the projection only prevents it from silently accepting a
+different or internally inconsistent report.
 
 After all target acceptors freeze, Stage O runs:
 

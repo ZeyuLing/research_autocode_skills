@@ -171,6 +171,7 @@ Each reviewer must:
 - distinguish direct observation, inference, and unverified concern;
 - test the thesis's strongest claims against its evidence;
 - before freezing any finding, search the whole frozen PDF for the allegedly missing definition, qualification, disclosure, or other thesis-visible remedy; omit a finding whose required substance is already present, and when a local inconsistency remains, anchor and remedy only that residual inconsistency;
+- reconcile Gate A--I and every `S0`--`S3` finding bidirectionally: each actionable finding's Primary and Secondary gates are `concern` rows that cite it, every `concern` cites at least one actionable finding mapped back to that Gate, and every non-`concern` row (`adequate`, `unverifiable`, or `N/A`) cites no actionable `S0`--`S3` item; optional `S4` items may remain informational and do not force `concern`;
 - state what was checked and what could not be verified;
 - issue an individual category, exact defense recommendation, decision regime/source, confidence, and rationale before seeing other reports; under the skill-default regime this is the required A/B/C/D pair;
 - verify that the grade, recommendation, severities, and required revision path are mutually consistent before freezing the report.
@@ -340,12 +341,24 @@ The conservative format reviewer must be able to understand the thesis without r
 ### 7. Run independent semantic acceptance before Chair
 
 After every reviewer and the AI assessor has passed its own scoped gate and
-frozen, launch a different fresh `SA-Rn`/`SA-AI` actor for each target under the
+frozen its outputs in the closed current round, launch a different fresh
+`SA-Rn`/`SA-AI` actor for each target under the
 closed protocol in `references/clean-room-orchestration.md`. The acceptor works
 in a target-only neutral view, receives no peer report or old context, and writes
 the target's Markdown/CSV acceptance pair. It does not become another reviewer,
 does not give A/B/C/D, and cannot create, edit, merge, reject, or adjudicate any
 thesis finding.
+
+Semantic-acceptance paths are phase-specific and must never be interchanged.
+Each SA actor writes exactly `SA-<target>.md` and `SA-<target>.csv` at the root
+of its private target-specific view; that view must not contain a
+`06-semantic-acceptance/` directory. Only after the scoped gate passes may
+Stage O byte-copy the two frozen acceptance files into the finalized round's
+`06-semantic-acceptance/` directory. Conversely, root-level `SA-*` files are
+forbidden in the finalized round. The already-frozen target remains
+byte-identical throughout semantic acceptance; SA `PASS` admits it to the later
+Chair stage, while SA `FAIL` quarantines the entire round and never produces a
+patch opportunity in the same retry.
 
 Every acceptance CSV exhausts the target's mandatory semantic units. In
 particular, `SA-R4` checks every citation Pair; `SA-R5` independently inspects
@@ -357,6 +370,20 @@ The acceptor supplies its own non-template basis and verifies target anchors,
 claims, dispositions, and grade consistency directly from its permitted current
 PDF/source evidence.
 
+A passing reviewer-finding row uses one compact canonical JSON object with the
+exact ordered keys `premise_class`, `target_premise`,
+`supporting_pdf_evidence`, `whole_pdf_resolution`, `residual_gap`, and
+`action_delta`. The last three values are closed subobjects. This record binds
+the target `Observation`, distinguishes an explicit positive defect, bounded
+inference, or absence after a real whole-PDF search, records responsive text or
+a concrete unsuccessful search, identifies the residual defect, and states the
+minimum increment not already satisfied by the PDF. A passing reviewer-verdict
+row similarly uses one compact canonical JSON object with the exact ordered
+projection keys `gate_disposition_profile`, `actionable_finding_profile`,
+`synthesis_cue`, `target_verdict`, and `coherence_result`. These structures make
+the independent comparison auditable; they do not let a validator decide the
+truth of a scholarly proposition by keyword.
+
 Before freezing, each acceptor runs
 `python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>`
 to `PASS`. After all pairs are copied into the closed round, Stage O runs
@@ -364,6 +391,32 @@ to `PASS`. After all pairs are copied into the closed round, Stage O runs
 then `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>`
 to `MATERIALIZED`, and finally reruns the set gate with `--require-gate` to
 `PASS`. The materializer is Stage-O mechanics and is never run by the Chair.
+The scoped command resolves the acceptance pair only at `<exact-SA-view>`'s
+root. The `--set` commands resolve acceptance pairs only inside the finalized
+round's `06-semantic-acceptance/` directory; these namespaces are not
+alternatives.
+
+Before Stage P, Stage O must run
+`scripts/build_semantic_acceptance_prompt.py plan` for every required SA target
+using only the stable preplan fields, then place the returned exact prompt
+hashes in the final process envelope. Stage O then exclusively binds the
+initialization metadata and those final process bytes with
+`scripts/manage_review_retry.py seal-process`, stores its returned seal hash in
+the bundle-external orchestration log, and runs `verify-process-seal` with the
+external process/seal hashes immediately before dispatching P. From Stage P
+onward that envelope, seal, and every planned prompt byte are immutable; the
+seal is process-control metadata outside every substantive actor view. At SA
+launch, Stage O runs the same helper's `verify` operation against the closed
+target view and supplies the required
+`--expected-process-sha256 <sealed-final-process-sha256>` argument.
+Verification loads the validator staged in that view, recomputes the
+algorithmic allowlist and exact prompt bytes, and requires the final process
+bytes to match both this external anchor and the separate SHA-256 commitment
+frozen by Stage P in `00-manifest.md` without changing either artifact. After
+scoped `PASS`, Stage O must use `promote` with that same required external
+process hash for the validated byte-identical SA pair only. A prompt/process/
+seal-hash mismatch, reserved-directory output, overwrite attempt, input-byte
+drift, or scoped failure is fatal.
 
 Any semantic `FAIL`, missing/duplicate unit, contamination, target-hash drift, or
 scoped SA failure invalidates the entire retry after target freeze. The acceptor

@@ -156,4 +156,12 @@ If answers 1--5 are missing, downgrade the issue to an in-scope question or omit
 
 Before freezing any finding, run a whole-PDF resolution search for every definition, qualification, disclosure, cross-reference, or other thesis-visible remedy that the finding says is missing. If the frozen PDF already supplies the requested substance elsewhere, omit the finding rather than asking the author to repeat it. If a genuinely local inconsistency remains, anchor the exact unreconciled passage and prescribe only the residual change; a required action that merely restates text already present in the thesis fails this finding test.
 
+After the finding set is final, reconcile it bidirectionally with Gate A--I.
+Every `S0`--`S3` finding must appear in each Gate named by its Primary and
+Secondary assignments, and each such Gate must be `concern`. Every `concern`
+must be justified by at least one mapped current actionable finding. A
+non-`concern` Gate (`adequate`, `unverifiable`, or `N/A`) cannot retain an
+actionable finding ID. Optional `S4` items may remain informational and do not
+force a Gate disposition.
+
 For every experiment-scope statement, additionally ask whether the PDF states it directly or whether it is only inferred from formatting or omission. Formatting-only inferences about seeds, run counts, checkpoint selection, or training coverage must not become findings.
