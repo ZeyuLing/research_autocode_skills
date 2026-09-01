@@ -62,6 +62,23 @@ class SubmissionObligationPolicyTests(unittest.TestCase):
         self.assertEqual(endpoints, [audit_url])
         self.assertNotIn(metadata_url, endpoints)
 
+    def test_findings_require_whole_pdf_resolution_search(self) -> None:
+        skill = (SKILL_ROOT / "SKILL.md").read_text(encoding="utf-8")
+        rubric = (SKILL_ROOT / "references" / "review-rubric.md").read_text(
+            encoding="utf-8"
+        )
+        panels = (SKILL_ROOT / "references" / "reviewer-panels.md").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("search the whole frozen PDF", skill)
+        self.assertIn("required substance is already present", skill)
+        self.assertIn("whole-PDF resolution search", rubric)
+        self.assertIn("already supplies the requested substance elsewhere", rubric)
+        self.assertIn("merely restates text already present", rubric)
+        self.assertIn("whole-PDF resolution search", panels)
+        self.assertIn("already present in the frozen thesis", panels)
+
     def test_citation_rule_distinguishes_audit_and_rendered_dates(self) -> None:
         citation = (SKILL_ROOT / "references" / "citation-audit.md").read_text(
             encoding="utf-8"

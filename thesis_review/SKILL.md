@@ -160,6 +160,7 @@ Each reviewer must:
 - give every Gate A--I evidence cell, every finding `Location`, and every nonempty question `Exact PDF anchor` at least one in-range physical-page locator in the canonical form `physical p.<n>`, where `1 <= n <= physical_page_count`; logical page, section, table, figure, or equation detail may follow only as supplementary context, and a logical-only or source-line anchor never satisfies blind review;
 - distinguish direct observation, inference, and unverified concern;
 - test the thesis's strongest claims against its evidence;
+- before freezing any finding, search the whole frozen PDF for the allegedly missing definition, qualification, disclosure, or other thesis-visible remedy; omit a finding whose required substance is already present, and when a local inconsistency remains, anchor and remedy only that residual inconsistency;
 - state what was checked and what could not be verified;
 - issue an individual category, exact defense recommendation, decision regime/source, confidence, and rationale before seeing other reports; under the skill-default regime this is the required A/B/C/D pair;
 - verify that the grade, recommendation, severities, and required revision path are mutually consistent before freezing the report.

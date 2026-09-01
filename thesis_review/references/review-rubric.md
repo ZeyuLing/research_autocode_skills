@@ -154,4 +154,6 @@ Before reporting an issue, answer all six:
 
 If answers 1--5 are missing, downgrade the issue to an in-scope question or omit it. If answer 6 is no, omit it; do not preserve an out-of-scope artifact wishlist as `not verifiable`.
 
+Before freezing any finding, run a whole-PDF resolution search for every definition, qualification, disclosure, cross-reference, or other thesis-visible remedy that the finding says is missing. If the frozen PDF already supplies the requested substance elsewhere, omit the finding rather than asking the author to repeat it. If a genuinely local inconsistency remains, anchor the exact unreconciled passage and prescribe only the residual change; a required action that merely restates text already present in the thesis fails this finding test.
+
 For every experiment-scope statement, additionally ask whether the PDF states it directly or whether it is only inferred from formatting or omission. Formatting-only inferences about seeds, run counts, checkpoint selection, or training coverage must not become findings.
