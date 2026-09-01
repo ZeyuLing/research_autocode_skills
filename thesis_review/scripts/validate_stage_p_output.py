@@ -376,6 +376,14 @@ def validate_packet_reconciliation(
                 f"00-unmatched-bracket-ledger.csv:{line}: Disposition must give "
                 "a concrete non-contradictory glyph adjudication"
             )
+        if index <= len(extracted_unmatched):
+            semantic_error = module.unmatched_glyph_disposition_error(
+                row.get("Disposition", ""), extracted_unmatched[index - 1]
+            )
+            if semantic_error:
+                errors.append(
+                    f"00-unmatched-bracket-ledger.csv:{line}: {semantic_error}"
+                )
 
     if len(candidates) != len(extracted_candidates):
         errors.append(

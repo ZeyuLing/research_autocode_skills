@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import hashlib
 import importlib.util
 import json
@@ -12,7 +13,9 @@ import sys
 import tempfile
 import unittest
 import zlib
+from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 from pypdf import PdfWriter, __version__ as PYPDF_VERSION
 from pypdf.generic import DecodedStreamObject, DictionaryObject, NameObject
@@ -326,6 +329,177 @@ def add_ascii_text(
 
 
 class ValidateReviewBundleTests(unittest.TestCase):
+    def test_half_open_interval_unmatched_glyph_role_is_deterministic(self) -> None:
+        cases = (
+            ("gamma in (0, 1] is the discount factor", "]"),
+            ("sampled in (5%, 20%] for this bucket", "]"),
+            ("accept [40, 200) frames", "["),
+            ("x belongs to [a, b) by definition", "["),
+            ("γ ∈ (0, 1]", "]"),
+            ("domain is (-∞, β]", "]"),
+            ("domain is [α, +∞)", "["),
+            ("domain is (0，1]", "]"),
+            ("domain is (.5, 1e-3]", "]"),
+        )
+        for text, glyph in cases:
+            with self.subTest(text=text):
+                offset = text.index(glyph)
+                role = VALIDATOR_MODULE.canonical_unmatched_glyph_role(
+                    text, offset, glyph
+                )
+                self.assertEqual(
+                    "half-open-mathematical-interval", role
+                )
+                extracted = {"CanonicalRole": role}
+                self.assertIsNone(
+                    VALIDATOR_MODULE.unmatched_glyph_disposition_error(
+                        "visible-role:half-open-mathematical-interval",
+                        extracted,
+                    )
+                )
+                error = VALIDATOR_MODULE.unmatched_glyph_disposition_error(
+                    "visible role: extracted display-equation delimiter",
+                    extracted,
+                )
+                self.assertIsNotNone(error)
+                self.assertIn("half-open mathematical interval", error or "")
+
+                for non_exact in (
+                    " Visible-role:half-open-mathematical-interval",
+                    "visible-role:half-open-mathematical-interval ",
+                    "VISIBLE-ROLE:HALF-OPEN-MATHEMATICAL-INTERVAL",
+                    "visible-role:half-open-mathematical-interval; checked",
+                ):
+                    self.assertIsNotNone(
+                        VALIDATOR_MODULE.unmatched_glyph_disposition_error(
+                            non_exact, extracted
+                        )
+                    )
+
+        non_interval = "an unmatched [ prose marker"
+        self.assertIsNone(
+            VALIDATOR_MODULE.canonical_unmatched_glyph_role(
+                non_interval,
+                non_interval.index("["),
+                "[",
+            )
+        )
+        for text, glyph in (
+            ("f(a, b]", "]"),
+            ("array(a, b]", "]"),
+            ("matrix[a, b)", "["),
+        ):
+            with self.subTest(non_interval_expression=text):
+                self.assertIsNone(
+                    VALIDATOR_MODULE.canonical_unmatched_glyph_role(
+                        text, text.index(glyph), glyph
+                    )
+                )
+
+    def test_real_pdf_extraction_classifies_half_open_interval_glyphs(self) -> None:
+        bodies = (
+            "gamma in (0, 1] and accepted frames [40, 200)",
+            "accepted frames [40, 200) and gamma in (0, 1]",
+        )
+        for body in bodies:
+            with self.subTest(body=body), tempfile.TemporaryDirectory() as directory:
+                pdf = Path(directory) / "half-open.pdf"
+                writer = PdfWriter()
+                page = writer.add_blank_page(width=595.28, height=841.89)
+                add_ascii_text(writer, page, body)
+                with pdf.open("wb") as handle:
+                    writer.write(handle)
+                errors: list[str] = []
+                candidates, unmatched = (
+                    VALIDATOR_MODULE.extract_numeric_bracket_candidates(
+                        pdf, set(), errors
+                    )
+                )
+                self.assertEqual([], errors)
+                self.assertEqual([], candidates)
+                self.assertEqual(2, len(unmatched))
+                expected_glyphs = [
+                    character for character in body if character in "[]"
+                ]
+                self.assertEqual(
+                    expected_glyphs,
+                    [row["Glyph"] for row in unmatched],
+                )
+                self.assertEqual(
+                    ["half-open-mathematical-interval"] * 2,
+                    [row["CanonicalRole"] for row in unmatched],
+                )
+
+    def test_full_gate_rejects_half_open_interval_role_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            digest = process["selected_pdf_sha256"]
+            context = "gamma in (0, 1] is the discount factor"
+            write_csv(
+                root / "00-unmatched-bracket-ledger.csv",
+                UNMATCHED_BRACKET_COLUMNS,
+                [{
+                    "GlyphID": "UBG0001",
+                    "PhysicalPage": "1",
+                    "Glyph": "]",
+                    "AdjacentPDFText": context,
+                    "Disposition": (
+                        "visible role: extracted display-equation delimiter"
+                    ),
+                    "PDFSHA256": digest,
+                }],
+            )
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace(
+                    "- Unmatched square-bracket glyphs: 0",
+                    "- Unmatched square-bracket glyphs: 1",
+                )
+                .replace(
+                    "- Unmatched glyph dispositions: No unmatched glyph was found in the rendered fixture page.",
+                    "- Unmatched glyph dispositions: 1 glyph is adjudicated in 00-unmatched-bracket-ledger.csv.",
+                ),
+                encoding="utf-8",
+            )
+            original_extract = (
+                VALIDATOR_MODULE.extract_numeric_bracket_candidates
+            )
+
+            def injected_extract(pdf_path, reference_pages, errors):
+                candidates, _unmatched = original_extract(
+                    pdf_path, reference_pages, errors
+                )
+                return candidates, [{
+                    "PhysicalPage": 1,
+                    "Glyph": "]",
+                    "Adjacent": context,
+                    "CanonicalRole": "half-open-mathematical-interval",
+                }]
+
+            output = io.StringIO()
+            with (
+                mock.patch.object(
+                    VALIDATOR_MODULE,
+                    "extract_numeric_bracket_candidates",
+                    side_effect=injected_extract,
+                ),
+                redirect_stdout(output),
+            ):
+                return_code = VALIDATOR_MODULE.main([str(root)])
+            self.assertNotEqual(0, return_code)
+            self.assertIn(
+                "Disposition must equal "
+                "'visible-role:half-open-mathematical-interval'",
+                output.getvalue(),
+            )
+
     def test_physical_page_locator_accepts_english_and_chinese_forms(self) -> None:
         parse = VALIDATOR_MODULE.parse_physical_page_locator
         self.assertEqual(parse("physical p.7, section"), 7)

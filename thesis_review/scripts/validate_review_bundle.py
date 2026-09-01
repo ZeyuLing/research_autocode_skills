@@ -2953,6 +2953,71 @@ def normalize_extracted_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
+HALF_OPEN_INTERVAL_DISPOSITION = (
+    "visible-role:half-open-mathematical-interval"
+)
+
+
+def canonical_unmatched_glyph_role(
+    text: str,
+    offset: int,
+    glyph: str,
+) -> str | None:
+    """Recognize rendered roles whose syntax determines an unmatched glyph.
+
+    The page-level square-bracket scan intentionally reports the square end of
+    a half-open interval as unmatched because its other delimiter is round.
+    When both endpoints have compact mathematical syntax, the visible role is
+    deterministic and must not be replaced by a plausible-sounding free-form
+    explanation.
+    """
+
+    endpoint = (
+        r"(?:[-+−±]?\s*(?:(?:\d+(?:\.\d*)?|\.\d+)"
+        r"(?:[eE][-+]?\d+)?%?|"
+        r"[A-Za-z_Α-Ωα-ω][A-Za-z0-9_Α-Ωα-ω]*|"
+        r"∞))"
+    )
+    body_pattern = rf"\s*{endpoint}\s*[,，]\s*{endpoint}\s*"
+    identifier_continuation = r"A-Za-z0-9_Α-Ωα-ω"
+    if glyph == "]":
+        prefix = text[max(0, offset - 160):offset + 1]
+        if re.search(
+            rf"(?<![{identifier_continuation}])\({body_pattern}\]\s*$",
+            prefix,
+            flags=re.DOTALL,
+        ):
+            return "half-open-mathematical-interval"
+    elif glyph == "[":
+        if offset > 0 and re.match(
+            rf"[{identifier_continuation}]", text[offset - 1]
+        ):
+            return None
+        suffix = text[offset:min(len(text), offset + 161)]
+        if re.match(rf"^\[{body_pattern}\)", suffix, flags=re.DOTALL):
+            return "half-open-mathematical-interval"
+    return None
+
+
+def unmatched_glyph_disposition_error(
+    disposition: str,
+    extracted: dict[str, Any],
+) -> str | None:
+    """Return a semantic mismatch for a deterministically classified glyph."""
+
+    canonical_role = extracted.get("CanonicalRole")
+    if (
+        canonical_role == "half-open-mathematical-interval"
+        and disposition != HALF_OPEN_INTERVAL_DISPOSITION
+    ):
+        return (
+            f"Disposition must equal {HALF_OPEN_INTERVAL_DISPOSITION!r} because "
+            "the frozen-PDF glyph is the square endpoint of a half-open "
+            "mathematical interval"
+        )
+    return None
+
+
 def expand_numeric_marker(value: str) -> list[int] | None:
     match = NUMERIC_BRACKET_RE.fullmatch(value.strip())
     if not match:
@@ -2996,26 +3061,52 @@ def extract_numeric_bracket_candidates(
                 f"{physical_page}: {exc}"
             )
             continue
+        canonical_mixed_delimiter_roles = {
+            offset: role
+            for offset, character in enumerate(text)
+            if character in {"[", "]"}
+            and (
+                role := canonical_unmatched_glyph_role(
+                    text, offset, character
+                )
+            )
+            is not None
+        }
         opening_stack: list[int] = []
-        unmatched_positions: list[tuple[int, str]] = []
+        unmatched_positions: list[tuple[int, str, str | None]] = []
         for offset, character in enumerate(text):
+            if offset in canonical_mixed_delimiter_roles:
+                unmatched_positions.append((
+                    offset,
+                    character,
+                    canonical_mixed_delimiter_roles[offset],
+                ))
+                continue
             if character == "[":
                 opening_stack.append(offset)
             elif character == "]":
                 if opening_stack:
                     opening_stack.pop()
                 else:
-                    unmatched_positions.append((offset, character))
-        unmatched_positions.extend((offset, "[") for offset in opening_stack)
-        for offset, glyph in sorted(unmatched_positions):
+                    unmatched_positions.append((offset, character, None))
+        unmatched_positions.extend(
+            (offset, "[", None) for offset in opening_stack
+        )
+        for offset, glyph, canonical_role in sorted(unmatched_positions):
             start = max(0, offset - 160)
             end = min(len(text), offset + 161)
             unmatched_glyphs.append({
                 "PhysicalPage": physical_page,
                 "Glyph": glyph,
                 "Adjacent": normalize_extracted_text(text[start:end]),
+                "CanonicalRole": canonical_role,
             })
         for match in NUMERIC_BRACKET_SPAN_RE.finditer(text):
+            if (
+                match.start() in canonical_mixed_delimiter_roles
+                or match.end() - 1 in canonical_mixed_delimiter_roles
+            ):
+                continue
             if not re.search(r"\d", match.group(0)):
                 continue
             start = max(0, match.start() - 160)
@@ -10291,6 +10382,14 @@ def main(argv: list[str] | None = None) -> int:
                 f"00-unmatched-bracket-ledger.csv:{line}: Disposition must "
                 "give a concrete non-contradictory glyph adjudication"
             )
+        if index <= len(extracted_unmatched_glyphs):
+            semantic_error = unmatched_glyph_disposition_error(
+                row["Disposition"], extracted_unmatched_glyphs[index - 1]
+            )
+            if semantic_error:
+                errors.append(
+                    f"00-unmatched-bracket-ledger.csv:{line}: {semantic_error}"
+                )
     if len(citation_candidates) != len(extracted_candidates):
         errors.append(
             "00-citation-candidate-ledger.csv: row count does not equal the "

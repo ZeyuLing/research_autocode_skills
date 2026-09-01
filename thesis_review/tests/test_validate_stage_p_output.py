@@ -1066,6 +1066,96 @@ class ValidateStagePOutputTests(unittest.TestCase):
                 errors,
             )
 
+    def test_half_open_interval_rejects_contradictory_disposition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            digest = process["selected_pdf_sha256"]
+            context = "gamma in (0, 1] is the discount factor"
+            write_rows(
+                root / "00-unmatched-bracket-ledger.csv",
+                list(FULL_VALIDATOR_MODULE.UNMATCHED_BRACKET_COLUMNS),
+                [{
+                    "GlyphID": "UBG0001",
+                    "PhysicalPage": "1",
+                    "Glyph": "]",
+                    "AdjacentPDFText": context,
+                    "Disposition": (
+                        "visible role: extracted display-equation delimiter"
+                    ),
+                    "PDFSHA256": digest,
+                }],
+            )
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace(
+                    "- Unmatched square-bracket glyphs: 0",
+                    "- Unmatched square-bracket glyphs: 1",
+                )
+                .replace(
+                    "- Unmatched glyph dispositions: No unmatched glyph was found in the rendered fixture page.",
+                    "- Unmatched glyph dispositions: 1 glyph is adjudicated in 00-unmatched-bracket-ledger.csv.",
+                ),
+                encoding="utf-8",
+            )
+            original_extract = (
+                FULL_VALIDATOR_MODULE.extract_numeric_bracket_candidates
+            )
+
+            def injected_extract(pdf_path, reference_pages, errors):
+                candidates, _unmatched = original_extract(
+                    pdf_path, reference_pages, errors
+                )
+                return candidates, [{
+                    "PhysicalPage": 1,
+                    "Glyph": "]",
+                    "Adjacent": context,
+                    "CanonicalRole": "half-open-mathematical-interval",
+                }]
+
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "extract_numeric_bracket_candidates",
+                side_effect=injected_extract,
+            ):
+                errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertTrue(
+                any(
+                    "Disposition must equal "
+                    "'visible-role:half-open-mathematical-interval'"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
+            headers, rows = read_rows(
+                root / "00-unmatched-bracket-ledger.csv"
+            )
+            rows[0]["Disposition"] = (
+                FULL_VALIDATOR_MODULE.HALF_OPEN_INTERVAL_DISPOSITION
+            )
+            write_rows(
+                root / "00-unmatched-bracket-ledger.csv", headers, rows
+            )
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "extract_numeric_bracket_candidates",
+                side_effect=injected_extract,
+            ):
+                corrected_errors = STAGE_P_MODULE.validate_stage_p(
+                    root, FULL_VALIDATOR_MODULE
+                )
+            self.assertEqual([], corrected_errors)
+
     def test_planned_stage_v_does_not_probe_stage_v_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

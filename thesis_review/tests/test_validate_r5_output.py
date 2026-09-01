@@ -115,6 +115,62 @@ class ValidateR5OutputTests(unittest.TestCase):
             for filename in PEER_AND_DOWNSTREAM_FILES:
                 self.assertFalse((root / filename).exists())
 
+    def test_r5_packet_gate_rejects_half_open_interval_role_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_r5_only_fixture(root)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            digest = process["selected_pdf_sha256"]
+            context = "gamma in (0, 1] is the discount factor"
+            write_rows(
+                root / "00-unmatched-bracket-ledger.csv",
+                list(FULL_VALIDATOR_MODULE.UNMATCHED_BRACKET_COLUMNS),
+                [{
+                    "GlyphID": "UBG0001",
+                    "PhysicalPage": "1",
+                    "Glyph": "]",
+                    "AdjacentPDFText": context,
+                    "Disposition": (
+                        "visible role: extracted display-equation delimiter"
+                    ),
+                    "PDFSHA256": digest,
+                }],
+            )
+            original_extract = (
+                FULL_VALIDATOR_MODULE.extract_numeric_bracket_candidates
+            )
+
+            def injected_extract(pdf_path, reference_pages, errors):
+                candidates, _unmatched = original_extract(
+                    pdf_path, reference_pages, errors
+                )
+                return candidates, [{
+                    "PhysicalPage": 1,
+                    "Glyph": "]",
+                    "Adjacent": context,
+                    "CanonicalRole": "half-open-mathematical-interval",
+                }]
+
+            with mock.patch.object(
+                FULL_VALIDATOR_MODULE,
+                "extract_numeric_bracket_candidates",
+                side_effect=injected_extract,
+            ):
+                errors = R5_MODULE.validate_r5(root, FULL_VALIDATOR_MODULE)
+            self.assertTrue(
+                any(
+                    "Disposition must equal "
+                    "'visible-role:half-open-mathematical-interval'"
+                    in error
+                    for error in errors
+                ),
+                errors,
+            )
+
     def test_unverifiable_bibliography_row_still_requires_attempted_endpoint(
         self,
     ) -> None:
