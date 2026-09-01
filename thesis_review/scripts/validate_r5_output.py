@@ -488,6 +488,7 @@ def validate_packet_inputs(
         process,
         candidates,
         extracted_unmatched,
+        reference_pages,
         root,
         reviewer_count,
         errors,

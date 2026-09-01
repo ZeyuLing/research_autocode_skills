@@ -3557,6 +3557,129 @@ def detect_rendered_chapter_start(text: str) -> int | None:
     return None
 
 
+def derive_rendered_section_locations(
+    pdf_path: Path,
+    reference_pages: set[int],
+    errors: list[str],
+) -> list[tuple[str, int]]:
+    """Return the canonical body-section map derived from rendered headings.
+
+    Section-like decimals in tables, equations, prose, the table of contents,
+    references, and appendices are deliberately outside this inventory. A
+    candidate is accepted only inside a PDF-derived numbered-chapter region,
+    when its leading component equals that current chapter number and its
+    remaining line is a compact title rather than a numeric value row.
+    """
+
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(str(pdf_path), strict=False)
+        page_texts = [page.extract_text() or "" for page in reader.pages]
+    except Exception as exc:
+        errors.append(f"cannot derive rendered section locations: {exc}")
+        return []
+
+    chapter_starts = {
+        physical_page: number
+        for physical_page, text in enumerate(page_texts, start=1)
+        if physical_page not in reference_pages
+        and (number := detect_rendered_chapter_start(text)) is not None
+    }
+    if not chapter_starts:
+        return []
+
+    first_chapter = min(chapter_starts)
+    non_body_starts = [
+        physical_page
+        for physical_page, text in enumerate(page_texts, start=1)
+        if physical_page >= first_chapter
+        and (
+            physical_page in reference_pages
+            or _has_rendered_structural_heading(text, "appendix")
+            or _has_rendered_structural_heading(text, "back")
+        )
+    ]
+    body_end = min(non_body_starts, default=len(page_texts) + 1) - 1
+    ordered_starts = sorted(chapter_starts.items())
+    inline = re.compile(
+        r"^([0-9]{1,3}(?:[.\uff0e][0-9]{1,3})+)"
+        r"[ \t]+(.+?)[ \t]*$"
+    )
+    standalone = re.compile(
+        r"^([0-9]{1,3}(?:[.\uff0e][0-9]{1,3})+)[ \t]*$"
+    )
+
+    def title_like(value: str) -> bool:
+        title = re.sub(r"[ \t]+", " ", value).strip()
+        letters = re.findall(r"[A-Za-z\u3400-\u9fff]", title)
+        return (
+            len(letters) >= 2
+            and re.search(r"\.{3,}|\u2026{2,}|\u00b7{3,}", title) is None
+            and re.search(r"[.!?。！？;；]", title) is None
+            and re.match(
+                r"(?i)^(?:section|sec\.|节(?:中|内|给出|介绍|讨论|说明)|"
+                r"章(?:中|内|给出|介绍|讨论|说明))",
+                title,
+            ) is None
+        )
+
+    result: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for physical_page in range(first_chapter, body_end + 1):
+        preceding = [
+            (page, number)
+            for page, number in ordered_starts
+            if page <= physical_page
+        ]
+        if not preceding:
+            continue
+        current_chapter = preceding[-1][1]
+        lines = [
+            re.sub(r"[ \t]+", " ", line).strip()
+            for line in page_texts[physical_page - 1].splitlines()
+        ]
+        for index, line in enumerate(lines):
+            match = inline.fullmatch(line)
+            if match is not None:
+                raw_label, title = match.groups()
+            else:
+                label_only = standalone.fullmatch(line)
+                if label_only is None or index + 1 >= len(lines):
+                    continue
+                raw_label = label_only.group(1)
+                title = lines[index + 1]
+            label = raw_label.replace("\uff0e", ".")
+            try:
+                leading = int(label.split(".", 1)[0])
+            except ValueError:
+                continue
+            if leading != current_chapter or not title_like(title):
+                continue
+            if label in seen:
+                errors.append(
+                    "rendered body section label occurs more than once: "
+                    f"{label} (latest physical p.{physical_page})"
+                )
+                continue
+            seen.add(label)
+            result.append((label, physical_page))
+    return result
+
+
+def canonical_rendered_section_location_value(
+    locations: list[tuple[str, int]],
+) -> str:
+    """Serialize the closed manifest ``Sections`` field."""
+
+    if not locations:
+        return "none detected"
+    return "; ".join(
+        f"{label}=physical p.{physical_page}"
+        for label, physical_page in locations
+    )
+
+
 def _has_rendered_structural_heading(text: str, region: str) -> bool:
     """Recognize an independent page-top appendix or back-matter heading."""
 
@@ -8961,6 +9084,7 @@ def validate_manifest(
     process: dict[str, Any],
     citation_candidates: list[dict[str, str]],
     extracted_unmatched_glyphs: list[dict[str, Any]],
+    reference_pages: set[int],
     root: Path,
     reviewer_count: int,
     errors: list[str],
@@ -9112,6 +9236,26 @@ def validate_manifest(
     objective_section = markdown_section_body_raw(
         text, "Objective inventories and locations"
     ) or ""
+    sections_value = labeled_value(objective_section, "Sections")
+    frozen_pdf = root / str(process.get("frozen_pdf_file", ""))
+    if sections_value is None:
+        errors.append(
+            f"{path.name}: Objective inventories and locations requires the "
+            "canonical Sections field"
+        )
+    elif frozen_pdf.is_file():
+        section_errors: list[str] = []
+        expected_sections = canonical_rendered_section_location_value(
+            derive_rendered_section_locations(
+                frozen_pdf, reference_pages, section_errors
+            )
+        )
+        errors.extend(section_errors)
+        if not section_errors and sections_value != expected_sections:
+            errors.append(
+                f"{path.name}: Sections must exactly equal the rendered body-section "
+                f"map; expected={expected_sections!r}"
+            )
     authored_pages_value = labeled_value(
         objective_section, "Authored-prose navigation pages"
     ) or ""
@@ -9124,7 +9268,6 @@ def validate_manifest(
             f"{path.name}: Authored-prose navigation pages must be one canonical "
             "ascending, compact, duplicate-free semicolon-separated physical-page set"
         )
-    frozen_pdf = root / str(process.get("frozen_pdf_file", ""))
     if frozen_pdf.is_file():
         try:
             preface_pages = detect_rendered_substantive_preface_pages(frozen_pdf)
@@ -11202,6 +11345,7 @@ def main(argv: list[str] | None = None) -> int:
             process,
             citation_candidates,
             extracted_unmatched_glyphs,
+            reference_pages,
             root,
             reviewer_count,
             errors,

@@ -84,7 +84,10 @@ Search official sources when rules may have changed. Record the title, issuing b
 All reviewers must assess the same PDF bytes. Launch a fresh Stage-P packet builder with no inherited conversation or author-side knowledge. It creates a PDF-derived manifest containing:
 
 - PDF path, checksum, exact `frozen_at` timestamp copied from the closed process envelope, and page count;
-- chapter and section inventory;
+- chapter inventory and an exact PDF-derived numbered body-section map; section
+  labels, order, and physical pages must match rendered chapter-region headings,
+  while TOC/list entries, table or metric decimals, equations, references, and
+  appendix labels remain excluded;
 - figure, table, equation, algorithm, appendix, and bibliography inventories;
 - a checksum-bound candidate ledger for **every balanced square-bracket span containing at least one digit** found by the validator's deterministic page-by-page PDF extraction outside the independently derived rendered bibliography span, including multiline decimal intervals, vectors/arrays, indices, formulas, and genuine citations; assign continuous `BC0001...` IDs in physical-page/extraction order, preserve the validator's exact normalized extraction window, and classify every candidate from its exact PDF context as `citation` or `non-citation` before creating citation IDs;
 - a checksum-bound `00-unmatched-bracket-ledger.csv` with one continuous `UBG0001...` row for every unmatched `[` or `]` glyph outside that bibliography span, including physical page, exact normalized extraction window, and a concrete visible-role disposition;

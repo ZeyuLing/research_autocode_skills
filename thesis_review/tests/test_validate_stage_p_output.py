@@ -234,6 +234,33 @@ class ValidateStagePOutputTests(unittest.TestCase):
             with self.subTest(text=toc_or_prose):
                 self.assertIsNone(detect(toc_or_prose))
 
+    def test_section_detector_excludes_toc_and_metric_decimals(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pdf_path = Path(directory) / "sections.pdf"
+            writer = fixture_module.PdfWriter()
+            texts = (
+                "Contents\n4.1 Introduction ................ 2\n"
+                "4.2 Method Details ................ 2",
+                "Doctoral Thesis 4 Rendered Boundary\n"
+                "4 Rendered Boundary\n"
+                "4.1 Introduction\n"
+                "0.14 0.30 0.52\n"
+                "4.2\nMethod Details\n"
+                "The experiment reports 4.6 as a numeric value.",
+                "References\n[1] Fixture reference.",
+            )
+            for value in texts:
+                page = writer.add_blank_page(width=595.28, height=841.89)
+                fixture_module.add_ascii_text(writer, page, value)
+            with pdf_path.open("wb") as handle:
+                writer.write(handle)
+            errors: list[str] = []
+            locations = FULL_VALIDATOR_MODULE.derive_rendered_section_locations(
+                pdf_path, {3}, errors
+            )
+            self.assertEqual(errors, [])
+            self.assertEqual(locations, [("4.1", 2), ("4.2", 2)])
+
     def test_chapter_detector_supports_cross_line_titles_and_continuous_transitions(self) -> None:
         detect = FULL_VALIDATOR_MODULE.detect_rendered_chapter_start
         rendered_pages = (
@@ -373,6 +400,43 @@ class ValidateStagePOutputTests(unittest.TestCase):
                 any("omit independently rendered substantive preface" in error
                     for error in errors),
                 errors,
+            )
+
+    def test_manifest_sections_rejects_numeric_false_positive_in_both_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_full_fixture(root)
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- Sections: none detected",
+                    "- Sections: 0.14=physical p.1",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_stage_p_and_full_fail(
+                root,
+                "Sections must exactly equal the rendered body-section map",
+            )
+
+    def test_manifest_sections_require_complete_exact_map_in_both_gates(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            harness.build_bundle(root, page_count=3)
+            manifest = root / "00-manifest.md"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8").replace(
+                    "- Sections: 4.1=physical p.2",
+                    "- Sections: none detected",
+                ),
+                encoding="utf-8",
+            )
+            self.assert_stage_p_and_full_fail(
+                root,
+                "Sections must exactly equal the rendered body-section map",
             )
 
     def test_mixed_cv_page_keeps_substantive_authored_prose_in_corpus(self) -> None:

@@ -623,6 +623,7 @@ def validate_packet_reconciliation(
         process,
         candidates,
         extracted_unmatched,
+        reference_pages,
         root,
         reviewer_count,
         errors,

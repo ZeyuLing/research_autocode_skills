@@ -1393,6 +1393,9 @@ class ValidateReviewBundleTests(unittest.TestCase):
         process_path = root / "00-process-parameters.json"
         process_path.write_text(json.dumps(process), encoding="utf-8")
         process_digest = hashlib.sha256(process_path.read_bytes()).hexdigest().upper()
+        rendered_sections = (
+            "4.1=physical p.2" if page_count >= 3 else "none detected"
+        )
         packet_opened = "; ".join(
             VALIDATOR_MODULE.canonical_stage_opened_inputs(process, 3, "P")
         )
@@ -1419,6 +1422,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
             + "## Thesis structure\n\nThe fixture contains authored thesis matter on physical p.1 and a rendered bibliography on physical p.2.\n\n"
             + "## Thesis-stated questions and contributions — neutral navigation only\n\nThe fixture proposition appears on physical p.1; this line records its location without evaluating the claim.\n\n"
             + "## Objective inventories and locations\n\nThe closed inventories are 00-page-inventory.csv, 00-bibliography-inventory.csv, 00-citation-candidate-ledger.csv, 00-citation-inventory.csv, and 00-unmatched-bracket-ledger.csv.\n\n"
+            + f"- Sections: {rendered_sections}\n"
             + "- Authored-prose navigation pages: physical p.1\n"
             + "- Numeric-bracket candidate rows: 3\n"
             + "- Citation-classified candidate rows: 1\n"
