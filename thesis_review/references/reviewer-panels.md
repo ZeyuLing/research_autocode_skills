@@ -2,7 +2,16 @@
 
 ## Independence protocol
 
-Follow `clean-room-orchestration.md`. Every reviewer starts in a separate fresh context with no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt. In Codex multi-agent execution, use `fork_turns: "none"`; the prompt supplies only the role, prompt/allowlist hashes, neutral process envelope, exact allowlisted paths, frozen PDF identity, and output path.
+Follow `clean-room-orchestration.md`. Every reviewer starts in a separate fresh
+context with no inherited user/thread/task turns beyond system/developer
+instructions and the exact operational prompt. In Codex multi-agent execution,
+use `fork_turns: "none"`; the prompt supplies only the role, prompt/allowlist
+and validator hashes, neutral process envelope, exact allowlisted input paths,
+actor-private scratch and owned-output paths, frozen PDF identity, exact
+pre-freeze commands, and canonical thesis-agnostic review checklists derived
+from this skill. These generic execution contracts do not authorize Stage O to
+insert any thesis-specific assertion, suspected defect, preferred finding, or
+desired conclusion.
 
 All reviewers receive the same frozen **PDF-only reviewer-visible** evidence packet and governing-rule record. The packet contains one rendered thesis PDF, neutral PDF-derived inventories, and public authoritative sources opened only to verify citations visible in that PDF. Before submitting an individual report, a reviewer must not read, receive, or recall:
 
@@ -18,6 +27,19 @@ All reviewers receive the same frozen **PDF-only reviewer-visible** evidence pac
 The same PDF-only boundary limits proposed remedies. Reviewers judge experimental credibility from the thesis's visible method, protocol, numbers, internal consistency, and claim scope. They do not turn the absence of code commits, environment locks, full commands, file/checkpoint hashes, member-level hashes, immutable manifests, controlled evidence packs, internal logs, or confidential raw data into findings or questions, except when a verified governing rule makes an item a formal submission component or the PDF explicitly makes an exact public-artifact claim that is central to the conclusion.
 
 Use separate output files and private scratch directories. If reviewers share a filesystem, give each reviewer exact input paths; it must not enumerate the parent round, neighboring rounds, repository root, or unrelated workspace paths. Every reviewer must include a fresh-context and input-receipt/access declaration covering the prompt hash, all received blocks, opened artifacts, and public endpoints. Access to any prohibited context or artifact invalidates the round and requires the recovery defined in `clean-room-orchestration.md`; relabeling it as author-side evidence does not cure the violation. Batch execution is acceptable; evidence leakage is not.
+
+Stage O builds each R prompt with the canonical plan/verify CLI in
+`clean-room-orchestration.md`, an explicit absolute bundled Python executable,
+and an existing empty actor-private scratch directory outside the run root. If
+this reviewer consumes Stage-H outputs, every `--helper-input` is a separate
+round-relative `helpers/<portable-basename>` argument. The sequence is frozen
+before the process seal and is exactly: each recipient `Hxx-provenance.json` in
+basename order followed immediately by that record's outputs in declared
+order. Plan and verify receive the same repeated sequence; verify rejects any
+actual recipient, provenance, basename, or order drift. No helper flag is
+supplied when the reviewer consumes none. The same verify boundary reruns the
+hash-matched staged Stage-P validator with the bound Python and empty actor
+scratch and requires first-line `PASS` before reviewer dispatch.
 
 Before freezing or exiting, every reviewer first performs the whole-PDF resolution search required by `review-rubric.md` for every proposed finding and verifies that no required action merely asks for a definition, qualification, or disclosure already present in the frozen thesis. The reviewer then runs the exact role-scoped gate in `ledger-validation.md`: ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware gates; master's R3 uses the combined owner gate. The actor may correct only its own current report and assigned ledgers/renders before freeze. A failure attributable to the packet, process envelope, PDF, governing rules, staged validators, or another actor's artifact stops the actor and triggers Stage O's global retry; no reviewer may patch an upstream or peer artifact. A mechanical `PASS` is mandatory but never substitutes for the whole-thesis semantic and visual judgment.
 
@@ -264,6 +286,6 @@ The chair is not a sixth reviewer. Launch it as a new clean actor with no inheri
 
 Before preserving a question that would need evidence beyond the frozen PDF and permitted public citation sources, the chair first decides whether that evidence is part of the thesis's verified submission obligation. If not, reject the source item as an out-of-scope artifact request; do not label it `not verifiable`, keep it open, or send it to Stage S. Use `not verifiable from the submitted PDF` only for an otherwise legitimate thesis question whose answer is required to judge a claim visible in the PDF. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
 
-Before freezing or exiting, the Chair runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS, repeating both after any Chair-source edit. Materialization preserves semantic decisions and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
+Before freezing or exiting, the Chair runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS, repeating both after any Chair-source edit. Stage O freezes the repeated arguments as the exact canonical C-recipient helper sequence; omit them when no C helper applies. Materialization validates only those declared helper files before writing, preserves semantic decisions, and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
 
 After the chair freezes its outputs, run the separate clean Stage-S synthesis in `clean-room-orchestration.md`. The chair does not write free-form user commentary, and the conversation-aware orchestrator does not reconstruct or supplement the issue table.

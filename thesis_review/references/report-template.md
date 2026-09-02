@@ -160,7 +160,7 @@ For every R actor, immediately after `ai-style-audit.md`, insert exactly one rol
 - Chair C: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py`;
 - Stage S: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_summary_output.py`.
 
-`materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
+`materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. For C, the exact command in the frozen prompt repeats `--helper-input helpers/<portable-basename>` for every C-recipient provenance/output in canonical Hxx order and omits the flag otherwise; the materializer validates and opens only those declared paths before writing and never discovers sibling R/AI helpers. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
 
 ## Independent reviewer report
 
@@ -498,8 +498,15 @@ already authorized for the target. Run the staged validator inside the isolated
 view before freezing:
 
 ```text
-python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>
+["<bound-python-executable>","-B","<exact-SA-view>/rules/scripts/validate_semantic_acceptance_output.py","<exact-SA-view>","<target>"]
 ```
+
+This is an exact JSON argument vector executed without a shell or `PATH`
+lookup and with the exact environment override
+`{"PYTHONDONTWRITEBYTECODE":"1"}`. `<bound-python-executable>` is the canonical
+absolute interpreter path and file identity frozen by the SA prompt lifecycle;
+a bare launcher, WindowsApps alias, different interpreter, or runtime drift is
+invalid.
 
 The Markdown file has this exact closed H1/H2 sequence and fields:
 
@@ -526,6 +533,23 @@ The Markdown file has this exact closed H1/H2 sequence and fields:
 - Acceptance failure count: <exact number of failed CSV rows>
 - Limitations: <concrete limits of this acceptance, without creating thesis findings>
 ```
+
+A pair with zero failed rows has the completed scoped outcome `PASS` and is the
+only kind eligible for Stage-O promotion. A mechanically valid pair with one or
+more failed rows has the completed scoped outcome `VALID-FAIL` with exit `3`: preserve its
+private bytes, verify and record their hashes outside substantive actor
+allowlists, quarantine the retry, and never promote or rewrite it to obtain a
+more favorable result. A schema/hash/coverage/input error is neither completed
+outcome and must not be mislabeled `VALID-FAIL`.
+
+Before the actor is launched and while both output files are absent, Stage O
+runs canonical SA `verify` and retains the returned
+`input_commitment.sha256` only in external orchestration state. The later
+`promote` command requires this exact prelaunch value through
+`--expected-input-commitment-sha256`; it may not derive a new baseline from the
+post-dispatch view. Every opened input is a named-stream-free single-link regular
+file whose path, identity, metadata, and bytes remain unchanged through
+exclusive promotion.
 
 The matching CSV is the semantic master and has this exact schema:
 
@@ -583,12 +607,21 @@ identity-only source match, or copied target rationale is a failure.
 Neither `EvidenceAnchor` nor `SemanticBasis` may assign a grade, direct the
 Chair or defense decision, or create/add/invent a thesis finding.
 
+The acceptance threshold is reasonable support and admissibility, not personal
+concurrence. A row may pass when the acceptor would choose a different
+severity, weight, emphasis, or final recommendation, so long as the target
+conclusion is concretely supported, bounded by the permitted evidence, does not
+omit decisive counter-evidence, and requests a proportionate action. A normal
+scholarly weighting disagreement is not itself a failed row. Conversely, an
+honest unsupported or uncheckable conclusion remains `fail`; the acceptor must
+not rewrite that judgment merely to make the pair pass.
+
 For a passing `finding` row, `SemanticBasis` is exactly one compact canonical
 JSON object (UTF-8 characters retained, no insignificant whitespace) in this
 closed key order:
 
 ```json
-{"premise_class":"<explicit-positive|bounded-inference|absence-after-search>","target_premise":"<exact parsed target Observation>","supporting_pdf_evidence":"<independently checked PDF fact including the finding's exact physical p.N>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found|not-applicable-positive-local-fact>","pages":["<physical p.N, only when responsive>"],"search_concepts":["<concrete concept used in the whole-PDF search>"],"detail":"<what the responsive passages establish, or what the complete search did not find>"},"residual_gap":{"status":"present","detail":"<the defect remaining after the whole-PDF check>"},"action_delta":{"status":"<same-as-target-required-action|narrower-than-target-required-action|different-from-target-required-action>","detail":"<minimum still-unmet action>","independent_reason":"<acceptor's independent reason for that relation>"}}
+{"assessment_standard":"reasonable-support-not-concurrence","premise_class":"<explicit-positive|bounded-inference|absence-after-search>","target_premise":"<exact parsed target Observation>","supporting_pdf_evidence":"<independently checked PDF fact including the finding's exact physical p.N>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found|not-applicable-positive-local-fact>","pages":["<physical p.N, only when responsive>"],"search_concepts":["<concrete concept used in the whole-PDF search>"],"detail":"<what the responsive passages establish, or what the complete search did not find>"},"residual_gap":{"status":"reasonably-supported","detail":"<why a reasonable reviewer may retain this bounded residual even if the acceptor would weight it differently>"},"action_delta":{"status":"<same-as-target-required-action|narrower-than-target-required-action|different-from-target-required-action>","detail":"<minimum still-unmet action>","independent_reason":"<acceptor's independent reason for that relation>"},"admissibility_result":"reasonably-supported"}
 ```
 
 For `no-responsive-passage-found`, `pages` is `[]` and
@@ -600,6 +633,31 @@ concrete: empty, `N/A`/`none`-style, and Chinese-empty placeholders fail.
 `same-as-target-required-action` binds the target action exactly;
 `narrower`/`different` must not relabel an identical action, and the independent
 reason must not copy either action text.
+
+For a passing ordinary-reviewer `gate` row, `SemanticBasis` is exactly this
+compact canonical JSON object in the shown key order:
+
+```json
+{"assessment_standard":"reasonable-support-not-concurrence","gate_id":"<exact Gate-A ... Gate-I target unit ID>","target_disposition":"<exact parser-canonical adequate|concern|unverifiable|n/a value; rendered N/A projects to n/a>","target_decisive_evidence":"<exact parsed Decisive evidence cell>","target_related_finding_ids":["<exact parsed related finding IDs in target order>"],"independent_pdf_assessment":{"supporting_pdf_evidence":"<independently rechecked evidence naming at least one physical page from the target decisive-evidence cell>","counterevidence_reviewed":"<concrete responsive neighboring or whole-PDF material checked>","admissibility_reason":"<independent reason the target Gate reading is reasonably supportable>"},"admissibility_result":"reasonably-supported"}
+```
+
+The three target values and related-ID array bind the parser-canonical Gate row
+exactly; a rendered target disposition `N/A` therefore binds as lowercase
+`n/a` with an empty related-ID array. A `concern` Gate must retain at least one
+mapped actionable finding. The independent assessment must be concrete and
+cannot merely copy the target decisive-evidence cell.
+
+For a passing ordinary-reviewer `question` row, `SemanticBasis` is exactly this
+compact canonical JSON object in the shown key order:
+
+```json
+{"assessment_standard":"reasonable-support-not-concurrence","target_question":"<exact parsed Question cell>","target_why_unresolved":"<exact parsed Why unresolved cell>","target_needed_evidence":"<exact parsed Needed clarification/evidence cell>","target_page":"<exact parsed physical p.N anchor>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found>","pages":["<physical p.N for every responsive passage reviewed>"],"search_concepts":["<concrete concepts used across the frozen PDF>"],"detail":"<why the bounded question remains reasonably open after that check>"},"admissibility_result":"reasonably-supported"}
+```
+
+All four target strings bind the parsed Question row exactly. For
+`responsive-passages-reviewed`, both `pages` and `search_concepts` are nonempty;
+for `no-responsive-passage-found`, `pages` is empty and `search_concepts` is
+nonempty. Generic acceptance prose is invalid for either Gate or Question.
 
 For a passing ordinary-reviewer `verdict` row, `SemanticBasis` is one compact
 canonical JSON object with the exact ordered keys shown below. Each outer value
@@ -638,7 +696,7 @@ nor individual SA files.
 
 ## Chair synthesis
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and the hash-only semantic-acceptance gate, while forbidding individual semantic-acceptance reports and `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, semantic-acceptance closure, process/rule input, or PDF returns control to Stage O for a global retry.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit, using the exact repeated C-recipient helper arguments frozen in the operational prompt and no arguments when none apply. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and the hash-only semantic-acceptance gate, while forbidding individual semantic-acceptance reports and `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, semantic-acceptance closure, process/rule input, or PDF returns control to Stage O for a global retry.
 
 ```markdown
 # Chair synthesis
@@ -795,7 +853,7 @@ Within the no-new-experiment table, `E` means existing evidence whose necessary 
 
 Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. They never open the PDF, Stage-P packet, `02`--`04`, individual semantic-acceptance files, `06-semantic-acceptance-gate.json`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
+Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. Every such source/output is a named-stream-free single-link regular file and retains its identity and bytes through the terminal PASS check. They never open the PDF, Stage-P packet, `02`--`04`, individual semantic-acceptance files, `06-semantic-acceptance-gate.json`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
 
 The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
 

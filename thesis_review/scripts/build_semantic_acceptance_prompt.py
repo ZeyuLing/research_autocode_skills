@@ -22,6 +22,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import sys
 import types
 from pathlib import Path
@@ -31,7 +32,10 @@ from typing import Any, Iterable, NamedTuple
 ACCEPTANCE_DIRECTORY = "06-semantic-acceptance"
 TARGET_RE = re.compile(r"(?:R[1-5]|AI)\Z")
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
-PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v2"
+PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v4"
+VERIFICATION_SCHEMA = "thesis-review-semantic-acceptance-verification-v3"
+PROMOTION_SCHEMA = "thesis-review-semantic-acceptance-promotion-v2"
+INPUT_COMMITMENT_SCHEMA = "thesis-review-semantic-acceptance-inputs-v1"
 PROCESS_COMMITMENT_RE = re.compile(
     r"(?m)^- Process-parameter file and SHA-256: "
     r"00-process-parameters\.json / ([0-9A-F]{64})$"
@@ -143,12 +147,20 @@ def _file_stat_signature(stat_result: os.stat_result) -> tuple[int, int, int, in
     )
 
 
-def file_identity_from_open_handle(handle: Any, label: str) -> FileIdentity:
+def file_identity_from_open_handle(
+    handle: Any, label: str, *, require_single_link: bool = True
+) -> FileIdentity:
     """Hash and identify the already-open file without following its pathname."""
 
     try:
         handle.flush()
         before = os.fstat(handle.fileno())
+        if not stat.S_ISREG(before.st_mode) or (
+            require_single_link and int(before.st_nlink) != 1
+        ):
+            raise ContractError(
+                f"{label} must remain a single-link regular file while opened"
+            )
         handle.seek(0)
         digest = hashlib.sha256()
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -158,6 +170,12 @@ def file_identity_from_open_handle(handle: Any, label: str) -> FileIdentity:
         raise ContractError(f"cannot identify {label}: {exc}") from exc
     if _file_stat_signature(before) != _file_stat_signature(after):
         raise ContractError(f"{label} changed while its identity was captured")
+    if not stat.S_ISREG(after.st_mode) or (
+        require_single_link and int(after.st_nlink) != 1
+    ):
+        raise ContractError(
+            f"{label} must remain a single-link regular file while opened"
+        )
     return FileIdentity(
         device=int(after.st_dev),
         inode=int(after.st_ino),
@@ -174,12 +192,41 @@ def capture_file_identity(path: Path, label: str) -> FileIdentity:
     try:
         with path.open("rb") as handle:
             identity = file_identity_from_open_handle(handle, label)
-            path_stat = path.stat()
+            path_stat = path.lstat()
     except OSError as exc:
         raise ContractError(f"cannot identify {label}: {exc}") from exc
-    if is_link_or_reparse(path):
+    if stat.S_ISLNK(path_stat.st_mode) or bool(
+        getattr(path_stat, "st_file_attributes", 0) & 0x400
+    ):
         raise ContractError(f"{label} became link/reparse-backed while inspected: {path}")
+    if not stat.S_ISREG(path_stat.st_mode) or int(path_stat.st_nlink) != 1:
+        raise ContractError(
+            f"{label} became non-regular or multiply linked while inspected: {path}"
+        )
+    require_no_windows_named_streams(path, label)
     if _file_stat_signature(path_stat) != (
+        identity.device,
+        identity.inode,
+        identity.size,
+        identity.mtime_ns,
+    ):
+        raise ContractError(f"{label} pathname changed while its identity was captured")
+    try:
+        final_path_stat = path.lstat()
+    except OSError as exc:
+        raise ContractError(f"cannot recheck {label}: {path}: {exc}") from exc
+    if stat.S_ISLNK(final_path_stat.st_mode) or bool(
+        getattr(final_path_stat, "st_file_attributes", 0) & 0x400
+    ):
+        raise ContractError(f"{label} became link/reparse-backed while inspected: {path}")
+    if (
+        not stat.S_ISREG(final_path_stat.st_mode)
+        or int(final_path_stat.st_nlink) != 1
+    ):
+        raise ContractError(
+            f"{label} became non-regular or multiply linked while inspected: {path}"
+        )
+    if _file_stat_signature(final_path_stat) != (
         identity.device,
         identity.inode,
         identity.size,
@@ -199,6 +246,134 @@ def require_file_identity(
         )
 
 
+def directory_identity_from_open_descriptor(
+    descriptor: int, label: str
+) -> DirectoryIdentity:
+    """Identify an already-open directory handle, not its mutable pathname."""
+
+    try:
+        metadata = os.fstat(descriptor)
+    except OSError as exc:
+        raise ContractError(f"cannot identify opened {label}: {exc}") from exc
+    if not stat.S_ISDIR(metadata.st_mode):
+        raise ContractError(f"opened {label} is no longer a directory")
+    return DirectoryIdentity(int(metadata.st_dev), int(metadata.st_ino))
+
+
+def _windows_opened_object_delete(
+    path: Path,
+    expected: FileIdentity | DirectoryIdentity,
+    label: str,
+    *,
+    is_directory: bool,
+) -> bool:
+    """Delete the exact authenticated object, never a later path replacement.
+
+    A pathname-based ``check; unlink`` sequence can erase an unrelated object
+    installed after the check. Windows by-handle disposition instead binds the
+    deletion to the object opened and authenticated here.
+    """
+
+    if os.name != "nt":  # pragma: no cover - the supported local runner is Windows
+        raise ContractError(
+            f"safe by-handle rollback is unavailable; preserving {label}: {path}"
+        )
+
+    import ctypes
+    import msvcrt
+    from ctypes import wintypes
+
+    delete_access = 0x00010000
+    generic_read = 0x80000000
+    file_read_attributes = 0x00000080
+    share_all = 0x00000001 | 0x00000002 | 0x00000004
+    open_existing = 3
+    open_reparse_point = 0x00200000
+    backup_semantics = 0x02000000
+    file_disposition_info = 4
+
+    class FileDispositionInfo(ctypes.Structure):
+        _fields_ = [("DeleteFile", wintypes.BOOL)]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateFileW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    ]
+    kernel32.CreateFileW.restype = wintypes.HANDLE
+    kernel32.SetFileInformationByHandle.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    kernel32.SetFileInformationByHandle.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    flags = open_reparse_point | (backup_semantics if is_directory else 0)
+    access = delete_access | file_read_attributes
+    if not is_directory:
+        access |= generic_read
+    raw_handle = kernel32.CreateFileW(
+        str(path), access, share_all, None, open_existing, flags, None
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if raw_handle in (None, invalid_handle):
+        error = ctypes.get_last_error()
+        if error in {2, 3}:  # file/path not found
+            return False
+        raise ContractError(
+            f"cannot open exact {label} for rollback {path}: Windows error {error}"
+        )
+
+    descriptor: int | None = None
+    try:
+        descriptor = msvcrt.open_osfhandle(
+            int(raw_handle), os.O_RDONLY | (0 if is_directory else os.O_BINARY)
+        )
+        raw_handle = None  # the CRT descriptor now owns the native handle
+        if is_directory:
+            current: FileIdentity | DirectoryIdentity = (
+                directory_identity_from_open_descriptor(descriptor, label)
+            )
+        else:
+            with os.fdopen(descriptor, "rb", closefd=False) as opened:
+                current = file_identity_from_open_handle(
+                    opened, label, require_single_link=False
+                )
+        if current != expected:
+            raise ContractError(
+                f"{label} was replaced or changed; preserving the current object: {path}"
+            )
+        disposition = FileDispositionInfo(True)
+        native_handle = wintypes.HANDLE(msvcrt.get_osfhandle(descriptor))
+        if not kernel32.SetFileInformationByHandle(
+            native_handle,
+            file_disposition_info,
+            ctypes.byref(disposition),
+            ctypes.sizeof(disposition),
+        ):
+            error = ctypes.get_last_error()
+            raise ContractError(
+                f"cannot remove exact unchanged {label} {path}: Windows error {error}"
+            )
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        elif raw_handle not in (None, invalid_handle):
+            kernel32.CloseHandle(raw_handle)
+    return True
+
+
 def unlink_created_file_if_unchanged(
     path: Path, expected: FileIdentity, label: str
 ) -> bool:
@@ -206,12 +381,9 @@ def unlink_created_file_if_unchanged(
 
     if not os.path.lexists(path):
         return False
-    require_file_identity(path, expected, label)
-    try:
-        path.unlink()
-    except OSError as exc:
-        raise ContractError(f"cannot remove unchanged {label} {path}: {exc}") from exc
-    return True
+    return _windows_opened_object_delete(
+        path, expected, label, is_directory=False
+    )
 
 
 def exclusive_create_bytes(path: Path, value: bytes, label: str) -> FileIdentity:
@@ -293,23 +465,24 @@ def capture_directory_identity(path: Path, label: str) -> DirectoryIdentity:
     return DirectoryIdentity(int(stat_result.st_dev), int(stat_result.st_ino))
 
 
-def rmdir_created_directory_if_unchanged(
+def require_directory_identity(
     path: Path, expected: DirectoryIdentity, label: str
-) -> bool:
-    if not os.path.lexists(path):
-        return False
+) -> None:
     current = capture_directory_identity(path, label)
     if current != expected:
         raise ContractError(
             f"{label} was replaced; preserving the current directory: {path}"
         )
-    try:
-        path.rmdir()
-    except OSError as exc:
-        raise ContractError(
-            f"cannot remove unchanged empty {label} {path}; preserving it: {exc}"
-        ) from exc
-    return True
+
+
+def rmdir_created_directory_if_unchanged(
+    path: Path, expected: DirectoryIdentity, label: str
+) -> bool:
+    if not os.path.lexists(path):
+        return False
+    return _windows_opened_object_delete(
+        path, expected, label, is_directory=True
+    )
 
 
 def is_link_or_reparse(path: Path) -> bool:
@@ -322,11 +495,210 @@ def is_link_or_reparse(path: Path) -> bool:
         return False
 
 
-def resolved(path: Path, *, must_exist: bool) -> Path:
+def require_no_windows_named_streams(path: Path, label: str) -> None:
+    """Reject NTFS named streams that directory enumeration cannot disclose."""
+
+    if os.name != "nt":
+        return
+    import ctypes
+    from ctypes import wintypes
+
+    class Win32FindStreamData(ctypes.Structure):
+        _fields_ = [
+            ("stream_size", ctypes.c_longlong),
+            ("stream_name", ctypes.c_wchar * 296),
+        ]
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    find_first = kernel32.FindFirstStreamW
+    find_first.argtypes = [
+        wintypes.LPCWSTR,
+        ctypes.c_int,
+        ctypes.POINTER(Win32FindStreamData),
+        wintypes.DWORD,
+    ]
+    find_first.restype = wintypes.HANDLE
+    find_next = kernel32.FindNextStreamW
+    find_next.argtypes = [
+        wintypes.HANDLE,
+        ctypes.POINTER(Win32FindStreamData),
+    ]
+    find_next.restype = wintypes.BOOL
+    find_close = kernel32.FindClose
+    find_close.argtypes = [wintypes.HANDLE]
+    find_close.restype = wintypes.BOOL
+
+    data = Win32FindStreamData()
+    handle = find_first(os.fspath(path), 0, ctypes.byref(data), 0)
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        error = ctypes.get_last_error()
+        if error == 38:  # ERROR_HANDLE_EOF: no streams on this filesystem object.
+            return
+        raise ContractError(
+            f"cannot enumerate Windows streams for {label} {path}: error {error}"
+        )
+
+    streams: list[str] = []
     try:
-        return path.expanduser().resolve(strict=must_exist)
+        while True:
+            streams.append(str(data.stream_name))
+            if find_next(handle, ctypes.byref(data)):
+                continue
+            error = ctypes.get_last_error()
+            if error != 38:  # ERROR_HANDLE_EOF
+                raise ContractError(
+                    f"cannot complete Windows stream enumeration for {label} "
+                    f"{path}: error {error}"
+                )
+            break
+    finally:
+        if not find_close(handle):
+            error = ctypes.get_last_error()
+            raise ContractError(
+                f"cannot close Windows stream enumeration for {label} "
+                f"{path}: error {error}"
+            )
+
+    named = [name for name in streams if name != "::$DATA"]
+    if named:
+        raise ContractError(
+            f"{label} must not carry NTFS named streams: {path}: {named}"
+        )
+
+
+def resolved(path: Path, *, must_exist: bool) -> Path:
+    """Return one canonical absolute control path without erasing aliases."""
+
+    value = Path(path)
+    if not value.is_absolute():
+        raise ContractError(f"path must be absolute: {value}")
+    if os.name == "nt" and os.fspath(value).startswith("\\\\"):
+        raise ContractError(
+            f"SA control path must not use a UNC/device namespace: {value}"
+        )
+    if os.name == "nt" and any(":" in part for part in value.parts[1:]):
+        raise ContractError(
+            f"SA control path must not use an NTFS alternate data stream: {value}"
+        )
+    if any(part == ".." for part in value.parts):
+        raise ContractError(f"path must not contain lexical parent traversal: {value}")
+    if any(character in os.fspath(value) for character in ('"', "\r", "\n")):
+        raise ContractError(f"path contains a command-unsafe character: {value}")
+    normalized = Path(os.path.abspath(os.fspath(value)))
+    current = Path(normalized.anchor)
+    for part in normalized.parts[1:]:
+        current = current / part
+        if not os.path.lexists(current):
+            break
+        try:
+            metadata = os.lstat(current)
+        except OSError as exc:
+            raise ContractError(f"cannot inspect path component {current}: {exc}") from exc
+        if stat.S_ISLNK(metadata.st_mode) or bool(
+            getattr(metadata, "st_file_attributes", 0) & 0x400
+        ):
+            raise ContractError(f"path traverses a symlink/reparse component: {current}")
+    if must_exist and not os.path.lexists(normalized):
+        raise ContractError(f"required path is missing: {normalized}")
+    probe = normalized if os.path.lexists(normalized) else normalized.parent
+    if not os.path.lexists(probe):
+        raise ContractError(f"path parent must already exist: {normalized.parent}")
+    try:
+        canonical_probe = probe.resolve(strict=True)
     except OSError as exc:
-        raise ContractError(f"cannot resolve path {path}: {exc}") from exc
+        raise ContractError(f"cannot canonicalize path {probe}: {exc}") from exc
+    if os.path.normcase(os.fspath(probe)) != os.path.normcase(
+        os.fspath(canonical_probe)
+    ):
+        raise ContractError(
+            "path must use its canonical filesystem spelling; aliases such as "
+            f"NTFS 8.3 short names are forbidden: {value}"
+        )
+    return normalized
+
+
+def validate_bound_python_executable(value: Path) -> tuple[Path, FileIdentity]:
+    """Bind SA planning and verification to the builder's actual interpreter."""
+
+    if not sys.executable:
+        raise ContractError("the running builder has no sys.executable to bind")
+    requested = resolved(value, must_exist=True)
+    running = resolved(Path(sys.executable), must_exist=True)
+    require_safe_regular(requested, "bound Python executable")
+    require_safe_regular(running, "running Python executable")
+    if os.path.normcase(str(requested)) != os.path.normcase(str(running)):
+        raise ContractError(
+            "--python-executable must be the exact canonical sys.executable "
+            f"running this builder: expected {running}, got {requested}"
+        )
+    requested_identity = capture_file_identity(requested, "bound Python executable")
+    running_identity = capture_file_identity(running, "running Python executable")
+    if requested_identity != running_identity:
+        raise ContractError(
+            "--python-executable does not have the same file identity as "
+            "the interpreter running this builder"
+        )
+    return requested, requested_identity
+
+
+def file_identity_record(identity: FileIdentity) -> dict[str, int | str]:
+    return {
+        "device": identity.device,
+        "inode": identity.inode,
+        "size": identity.size,
+        "mtime_ns": identity.mtime_ns,
+        "sha256": identity.sha256,
+    }
+
+
+def capture_opened_input_commitment(
+    view_root: Path, opened: Iterable[str]
+) -> dict[str, Any]:
+    """Bind every frozen SA input pathname, identity, and byte hash."""
+
+    records: list[dict[str, Any]] = []
+    for relative in opened:
+        identity = capture_file_identity(
+            view_root / Path(relative), f"private-view input {relative}"
+        )
+        records.append(
+            {
+                "relative_path": relative,
+                **file_identity_record(identity),
+            }
+        )
+    payload = {
+        "schema": INPUT_COMMITMENT_SCHEMA,
+        "view_root": str(view_root),
+        "inputs": records,
+    }
+    encoded = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {**payload, "sha256": sha256_bytes(encoded)}
+
+
+def require_opened_input_commitment(
+    view_root: Path,
+    opened: Iterable[str],
+    expected_sha256: str,
+) -> dict[str, Any]:
+    expected = expected_sha256.upper()
+    if HEX64_RE.fullmatch(expected) is None:
+        raise ContractError(
+            "expected SA input commitment must be one 64-hex prelaunch anchor"
+        )
+    current = capture_opened_input_commitment(view_root, opened)
+    if current["sha256"] != expected:
+        raise ContractError(
+            "private SA view inputs differ from the externally retained "
+            f"prelaunch commitment: expected {expected}, got {current['sha256']}"
+        )
+    return current
 
 
 def is_within(path: Path, parent: Path) -> bool:
@@ -337,14 +709,39 @@ def is_within(path: Path, parent: Path) -> bool:
         return False
 
 
+def require_same_windows_drive(first: Path, second: Path, label: str) -> None:
+    """Exclude alternate drive-letter namespaces from a separation proof."""
+
+    if os.name != "nt":
+        return
+    first_drive = os.path.normcase(first.drive)
+    second_drive = os.path.normcase(second.drive)
+    if not first_drive or not second_drive or first_drive != second_drive:
+        raise ContractError(
+            f"{label} must use one canonical local drive-letter namespace"
+        )
+
+
 def require_safe_directory(path: Path, label: str) -> None:
     if is_link_or_reparse(path) or not path.is_dir():
         raise ContractError(f"{label} is missing, not a directory, or link/reparse-backed: {path}")
+    require_no_windows_named_streams(path, label)
 
 
 def require_safe_regular(path: Path, label: str) -> None:
-    if is_link_or_reparse(path) or not path.is_file():
-        raise ContractError(f"{label} is missing, non-regular, or link/reparse-backed: {path}")
+    try:
+        metadata = path.lstat()
+    except OSError as exc:
+        raise ContractError(f"cannot inspect {label}: {path}: {exc}") from exc
+    if (
+        is_link_or_reparse(path)
+        or not stat.S_ISREG(metadata.st_mode)
+        or metadata.st_nlink != 1
+    ):
+        raise ContractError(
+            f"{label} must be a non-aliased single-link regular file: {path}"
+        )
+    require_no_windows_named_streams(path, label)
 
 
 def read_json_object(path: Path, label: str) -> dict[str, Any]:
@@ -698,9 +1095,11 @@ def enumerate_regular_tree(root: Path) -> tuple[set[str], set[str]]:
                 raise ContractError(f"private SA view contains link/reparse entry: {entry}")
             relative = entry.relative_to(root).as_posix()
             if entry.is_dir():
+                require_safe_directory(entry, "private SA view directory")
                 directories.add(relative)
                 walk(entry)
             elif entry.is_file():
+                require_safe_regular(entry, "private SA view file")
                 files.add(relative)
             else:
                 raise ContractError(f"private SA view contains non-regular entry: {entry}")
@@ -763,12 +1162,68 @@ def validate_closed_view(
     return output_state
 
 
+def require_terminal_sa_verify_closure(
+    *,
+    view_root: Path,
+    target: str,
+    opened: list[str],
+    require_sa_outputs: bool,
+    expected_output_state: str,
+    expected_input_commitment_sha256: str,
+    python_executable: Path,
+    python_identity: FileIdentity,
+    prompt_path: Path,
+    prompt_identity: FileIdentity,
+) -> dict[str, Any]:
+    """Take the final joint private-view snapshot before returning VERIFIED."""
+
+    observed_state = validate_closed_view(
+        view_root,
+        target,
+        opened,
+        require_sa_outputs=require_sa_outputs,
+    )
+    if observed_state != expected_output_state:
+        raise ContractError(
+            "private SA view output state changed during final verification closure"
+        )
+    observed_commitment = capture_opened_input_commitment(view_root, opened)
+    if observed_commitment["sha256"] != expected_input_commitment_sha256.upper():
+        raise ContractError(
+            "private SA view inputs changed during final verification closure"
+        )
+    require_file_identity(
+        python_executable, python_identity, "bound Python executable"
+    )
+    require_file_identity(prompt_path, prompt_identity, "planned SA prompt")
+    # Re-enumerate the complete closed view after the external executable and
+    # prompt checks; this catches late extra entries, links, and pair changes.
+    observed_state = validate_closed_view(
+        view_root,
+        target,
+        opened,
+        require_sa_outputs=require_sa_outputs,
+    )
+    if observed_state != expected_output_state:
+        raise ContractError(
+            "private SA view output state changed during final verification closure"
+        )
+    observed_commitment = capture_opened_input_commitment(view_root, opened)
+    if observed_commitment["sha256"] != expected_input_commitment_sha256.upper():
+        raise ContractError(
+            "private SA view inputs changed during final verification closure"
+        )
+    return observed_commitment
+
+
 def render_prompt(
     view_root: Path,
     target: str,
     process: dict[str, Any],
     opened: list[str],
     validator_commitments: dict[str, str],
+    python_executable: Path,
+    python_identity: FileIdentity,
 ) -> bytes:
     private_md, private_csv = private_output_paths(view_root, target)
     validator_path = view_root / "rules" / "scripts" / "validate_semantic_acceptance_output.py"
@@ -780,6 +1235,22 @@ def render_prompt(
         f"- {relative.as_posix()} SHA-256: "
         f"{validator_commitments[relative.as_posix()]}"
         for relative in VALIDATOR_COMMITMENT_RELATIVES
+    )
+    validator_argv = [
+        str(python_executable),
+        "-B",
+        str(validator_path),
+        str(view_root),
+        target,
+    ]
+    validator_argv_json = json.dumps(
+        validator_argv, ensure_ascii=False, separators=(",", ":")
+    )
+    environment_json = json.dumps(
+        {"PYTHONDONTWRITEBYTECODE": "1"},
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
     )
     text = f"""Semantic-acceptance operational prompt
 
@@ -793,11 +1264,16 @@ Frozen PDF SHA-256: {str(process['selected_pdf_sha256']).upper()}
 Frozen physical page count: {process['physical_page_count']}
 Degree level: {process['degree_level']}
 Output language: {process['output_language']}
+Bound Python executable: {python_executable}
+Bound Python SHA-256: {python_identity.sha256}
 
 Frozen validator commitments (authenticate before importing either file):
 {validator_lines}
 
 Start in a fresh empty task context with fork_turns=none. Follow the staged thesis-review skill and its governing references. Perform only independent semantic acceptance of the frozen {target} target. Do not create, modify, merge, grade, reject, or adjudicate thesis findings. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. No follow-up message will be sent after dispatch.
+
+Acceptance standard:
+Judge reasonable support and admissibility, not concurrence. A target conclusion remains admissible when concrete permitted evidence supports it and its inference and requested action are proportionate, even if you would assign a different severity, weight, emphasis, or final recommendation. Such a reasonable scholarly disagreement is not by itself a failure. Fail a unit only when it lacks reasonable permitted-evidence support, exceeds that evidence, omits decisive counter-evidence, is internally inconsistent, or cannot be checked within the closed authority. Never rewrite an honest semantic judgment merely to obtain PASS.
 
 Private SA view root:
 {view_root}
@@ -814,16 +1290,19 @@ Write exactly these two actor-owned outputs at the private view root:
 
 Do not create or write {view_root / ACCEPTANCE_DIRECTORY}. That directory name is reserved for Stage O in the finalized round and is not an actor output path. Do not write an SA-* file anywhere else.
 
-Run every Python command with bytecode writing disabled: set PYTHONDONTWRITEBYTECODE=1 and invoke Python with -B. Before freezing, run exactly:
-python -B "{validator_path}" "{view_root}" "{target}"
+Run the scoped validator without a shell or PATH lookup. Use exactly this JSON argument vector:
+{validator_argv_json}
+Use exactly this environment override:
+{environment_json}
+The bound executable is the same canonical file identity as the Python interpreter that planned and verified this prompt. The `-B` argument and `PYTHONDONTWRITEBYTECODE=1` override are mandatory. Before freezing, execute exactly that argument vector with that environment override; do not substitute `python`, `py`, a WindowsApps alias, another executable, or a changed runtime.
 
-Freeze only if the command exits 0 and its first nonempty stdout line is exactly PASS. Leave no __pycache__ directory or .pyc file. If a frozen input or staged-rule defect prevents PASS, stop without modifying any target artifact.
+The scoped command has two admissible completed outcomes. `PASS` with exit 0 means the pair is mechanically valid and every target unit is semantically admissible; freeze the private pair for Stage-O promotion. `VALID-FAIL` with exit 3 means the pair is mechanically valid but contains at least one honest semantic failure; freeze and preserve that private pair for Stage O to hash-verify and quarantine the entire retry, and do not revise it to seek PASS. Any other output/exit combination is a mechanical or staged-input failure: stop without modifying any target artifact. A `VALID-FAIL` pair must never be promoted or used to materialize the semantic-acceptance gate. Leave no __pycache__ directory or .pyc file.
 """
     return text.replace("\r\n", "\n").encode("utf-8")
 
 
-def exclusive_write(path: Path, value: bytes) -> None:
-    exclusive_create_bytes(path, value, "prompt output")
+def exclusive_write(path: Path, value: bytes) -> FileIdentity:
+    return exclusive_create_bytes(path, value, "prompt output")
 
 
 def plan_prompt(
@@ -831,28 +1310,51 @@ def plan_prompt(
     view_root_value: Path,
     target: str,
     output_value: Path,
+    python_executable_value: Path,
 ) -> dict[str, Any]:
     process_path = resolved(process_path_value, must_exist=True)
     view_root = resolved(view_root_value, must_exist=False)
     output = resolved(output_value, must_exist=False)
+    require_same_windows_drive(
+        view_root, output, "private SA view and planned prompt output"
+    )
     if is_within(output, view_root):
         raise ContractError("planned prompt output must live outside the private SA view")
+    python_executable, python_identity = validate_bound_python_executable(
+        python_executable_value
+    )
     process = stable_process_projection(
         read_json_object(process_path, "preplan process envelope")
     )
     opened = algorithmic_opened_inputs(process, target)
     validator_commitments = canonical_validator_commitments()
     prompt = render_prompt(
-        view_root, target, process, opened, validator_commitments
+        view_root,
+        target,
+        process,
+        opened,
+        validator_commitments,
+        python_executable,
+        python_identity,
     )
     digest = sha256_bytes(prompt)
-    exclusive_write(output, prompt)
+    prompt_identity = exclusive_write(output, prompt)
+    try:
+        require_file_identity(
+            python_executable, python_identity, "bound Python executable"
+        )
+        require_file_identity(output, prompt_identity, "prompt output")
+    except ContractError:
+        unlink_created_file_if_unchanged(output, prompt_identity, "prompt output")
+        raise
     return {
         "schema": PROMPT_SCHEMA,
         "target": target,
         "view_root": str(view_root),
         "prompt_file": str(output),
         "prompt_sha256": digest,
+        "python_executable": str(python_executable),
+        "python_executable_identity": file_identity_record(python_identity),
         "stable_process_fields": process,
         "private_outputs": [
             str(path) for path in private_output_paths(view_root, target)
@@ -868,15 +1370,24 @@ def verify_prompt(
     prompt_value: Path,
     target: str,
     expected_process_sha256: str,
+    python_executable_value: Path,
     *,
     require_sa_outputs: bool = False,
+    expected_input_commitment_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     view_root = resolved(view_root_value, must_exist=True)
     prompt_path = resolved(prompt_value, must_exist=True)
     require_safe_directory(view_root, "private SA view")
     require_safe_regular(prompt_path, "planned SA prompt")
+    require_same_windows_drive(
+        view_root, prompt_path, "private SA view and planned prompt"
+    )
+    prompt_identity = capture_file_identity(prompt_path, "planned SA prompt")
     if is_within(prompt_path, view_root):
         raise ContractError("planned prompt must remain outside the private SA view")
+    python_executable, python_identity = validate_bound_python_executable(
+        python_executable_value
+    )
     expected_process_sha256 = expected_process_sha256.upper()
     if not HEX64_RE.fullmatch(expected_process_sha256):
         raise ContractError(
@@ -884,7 +1395,10 @@ def verify_prompt(
         )
 
     actual_prompt = prompt_path.read_bytes()
+    require_file_identity(prompt_path, prompt_identity, "planned SA prompt")
     prompt_digest = sha256_bytes(actual_prompt)
+    if prompt_digest != prompt_identity.sha256:
+        raise ContractError("planned SA prompt changed while its bytes were read")
     preimport_process = read_json_object(
         view_root / "00-process-parameters.json",
         "pre-import process envelope",
@@ -915,6 +1429,32 @@ def verify_prompt(
         preimport_opened,
         require_sa_outputs=require_sa_outputs,
     )
+    if expected_input_commitment_sha256 is None and output_state != "absent":
+        raise ContractError(
+            "initial SA verification must run before dispatch while the actor "
+            "output pair is absent; refusing a post-dispatch input baseline"
+        )
+    initial_input_commitment = capture_opened_input_commitment(
+        view_root, preimport_opened
+    )
+    if expected_input_commitment_sha256 is not None:
+        expected_input_commitment_sha256 = (
+            expected_input_commitment_sha256.upper()
+        )
+        if HEX64_RE.fullmatch(expected_input_commitment_sha256) is None:
+            raise ContractError(
+                "expected SA input commitment must be one 64-hex prelaunch anchor"
+            )
+        if (
+            initial_input_commitment["sha256"]
+            != expected_input_commitment_sha256
+        ):
+            raise ContractError(
+                "private SA view inputs differ from the externally retained "
+                "prelaunch commitment: expected "
+                f"{expected_input_commitment_sha256}, got "
+                f"{initial_input_commitment['sha256']}"
+            )
     validator_commitments = parse_prompt_validator_commitments(actual_prompt)
     authenticated_sources = verify_staged_validator_commitments(
         view_root, validator_commitments
@@ -976,6 +1516,8 @@ def verify_prompt(
         stable_process,
         planned_opened,
         validator_commitments,
+        python_executable,
+        python_identity,
     )
     if actual_prompt != expected_prompt:
         raise ContractError(
@@ -993,8 +1535,39 @@ def verify_prompt(
             f"existing SA-{target} prompt SHA-256 {digest} does not equal "
             f"process.actor_prompt_sha256[SA-{target}]={process_hash or '<missing>'}"
         )
+    require_file_identity(
+        python_executable, python_identity, "bound Python executable"
+    )
+    final_input_commitment = capture_opened_input_commitment(
+        view_root, dynamic_opened
+    )
+    if final_input_commitment != initial_input_commitment:
+        raise ContractError(
+            "private SA view inputs changed during prompt verification"
+        )
+    terminal_output_state = validate_closed_view(
+        view_root,
+        target,
+        dynamic_opened,
+        require_sa_outputs=require_sa_outputs,
+    )
+    if terminal_output_state != output_state:
+        raise ContractError(
+            "private SA view output state changed during prompt verification"
+        )
+    terminal_input_commitment = capture_opened_input_commitment(
+        view_root, dynamic_opened
+    )
+    if terminal_input_commitment != initial_input_commitment:
+        raise ContractError(
+            "private SA view inputs changed during terminal prompt verification"
+        )
+    require_file_identity(
+        python_executable, python_identity, "bound Python executable"
+    )
+    require_file_identity(prompt_path, prompt_identity, "planned SA prompt")
     metadata = {
-        "schema": "thesis-review-semantic-acceptance-verification-v1",
+        "schema": VERIFICATION_SCHEMA,
         "target": target,
         "status": "VERIFIED",
         "view_root": str(view_root),
@@ -1003,10 +1576,13 @@ def verify_prompt(
         "process_prompt_sha256": process_hash,
         "process_sha256": process_sha256,
         "expected_process_sha256": expected_process_sha256,
+        "python_executable": str(python_executable),
+        "python_executable_identity": file_identity_record(python_identity),
         "opened": dynamic_opened,
         "public_endpoints_derived_at_verify": dynamic_endpoints,
         "validator_sha256": validator_commitments,
         "sa_output_state": output_state,
+        "input_commitment": terminal_input_commitment,
     }
     context = {
         "validator": validator,
@@ -1015,11 +1591,41 @@ def verify_prompt(
         "opened": dynamic_opened,
         "view_root": view_root,
         "prompt_path": prompt_path,
+        "prompt_identity": prompt_identity,
+        "python_executable": python_executable,
+        "python_identity": python_identity,
+        "input_commitment": terminal_input_commitment,
     }
+    terminal_input_commitment = require_terminal_sa_verify_closure(
+        view_root=view_root,
+        target=target,
+        opened=dynamic_opened,
+        require_sa_outputs=require_sa_outputs,
+        expected_output_state=output_state,
+        expected_input_commitment_sha256=initial_input_commitment["sha256"],
+        python_executable=python_executable,
+        python_identity=python_identity,
+        prompt_path=prompt_path,
+        prompt_identity=prompt_identity,
+    )
+    metadata["input_commitment"] = terminal_input_commitment
+    context["input_commitment"] = terminal_input_commitment
     return metadata, context
 
 
 def ensure_disjoint_roots(view_root: Path, round_root: Path) -> None:
+    require_same_windows_drive(
+        view_root, round_root, "private SA view and finalized round root"
+    )
+    try:
+        if os.path.samefile(view_root, round_root):
+            raise ContractError(
+                "private SA view and finalized round root identify the same directory"
+            )
+    except OSError as exc:
+        raise ContractError(
+            f"cannot prove private SA view/finalized round separation: {exc}"
+        ) from exc
     if view_root == round_root or is_within(view_root, round_root) or is_within(round_root, view_root):
         raise ContractError("private SA view and finalized round root must be disjoint")
 
@@ -1031,20 +1637,45 @@ def compare_view_and_round_inputs(
     target: str,
     validator: Any,
     shared: Any,
-) -> None:
+) -> dict[str, tuple[FileIdentity, FileIdentity]]:
     errors: list[str] = []
     opened = validator.canonical_sa_opened_inputs(
         view_root, process, target, errors
     )
     if errors:
         raise ContractError("; ".join(errors))
+    snapshots: dict[str, tuple[FileIdentity, FileIdentity]] = {}
     for relative in opened:
         view_path = view_root / Path(relative)
         round_path = round_root / Path(relative)
-        require_safe_regular(view_path, f"private-view input {relative}")
-        require_safe_regular(round_path, f"round input {relative}")
-        if sha256_file(view_path) != sha256_file(round_path):
+        view_identity = capture_file_identity(
+            view_path, f"private-view input {relative}"
+        )
+        round_identity = capture_file_identity(
+            round_path, f"round input {relative}"
+        )
+        if view_identity.sha256 != round_identity.sha256:
             raise ContractError(f"private-view/round input byte mismatch: {relative}")
+        snapshots[relative] = (view_identity, round_identity)
+    return snapshots
+
+
+def require_unchanged_view_and_round_inputs(
+    view_root: Path,
+    round_root: Path,
+    snapshots: dict[str, tuple[FileIdentity, FileIdentity]],
+) -> None:
+    for relative, (view_identity, round_identity) in snapshots.items():
+        require_file_identity(
+            view_root / Path(relative),
+            view_identity,
+            f"private-view input {relative}",
+        )
+        require_file_identity(
+            round_root / Path(relative),
+            round_identity,
+            f"round input {relative}",
+        )
 
 
 def validate_existing_acceptance_directory(
@@ -1061,17 +1692,139 @@ def validate_existing_acceptance_directory(
         for suffix in ("md", "csv")
     }
     for entry in directory.iterdir():
-        if is_link_or_reparse(entry) or not entry.is_file():
+        try:
+            require_safe_regular(entry, "existing acceptance entry")
+        except ContractError:
             raise ContractError(f"unsafe/non-file existing acceptance entry: {entry}")
         if entry.name not in allowed:
             raise ContractError(f"unexpected existing acceptance entry: {entry}")
+
+
+def capture_acceptance_directory_entries(directory: Path) -> dict[str, FileIdentity]:
+    return {
+        entry.name: capture_file_identity(entry, "existing acceptance entry")
+        for entry in sorted(directory.iterdir(), key=lambda path: path.name)
+    }
+
+
+def require_acceptance_directory_state(
+    directory: Path,
+    directory_identity: DirectoryIdentity,
+    expected_entries: dict[str, FileIdentity],
+) -> None:
+    require_directory_identity(
+        directory, directory_identity, "round semantic-acceptance directory"
+    )
+    actual_names = {entry.name for entry in directory.iterdir()}
+    if actual_names != set(expected_entries):
+        raise ContractError(
+            "round semantic-acceptance directory changed concurrently; "
+            f"missing={sorted(set(expected_entries) - actual_names)}, "
+            f"extra={sorted(actual_names - set(expected_entries))}"
+        )
+    for name, identity in expected_entries.items():
+        require_file_identity(
+            directory / name, identity, "round semantic-acceptance entry"
+        )
+    require_directory_identity(
+        directory, directory_identity, "round semantic-acceptance directory"
+    )
+
+
+def require_round_promotion_state(round_root: Path, validator: Any) -> None:
+    require_safe_directory(round_root, "finalized round root")
+    leaked = sorted(
+        entry.name
+        for entry in round_root.iterdir()
+        if validator.ROUND_ROOT_ACTOR_OUTPUT_RE.fullmatch(entry.name)
+    )
+    if leaked:
+        raise ContractError(f"round root contains leaked SA actor outputs: {leaked}")
+    gate = round_root / validator.GATE_FILE
+    if gate.exists() or is_link_or_reparse(gate):
+        raise ContractError(
+            f"refusing promotion while semantic-acceptance gate already exists: {gate}"
+        )
+
+
+def require_terminal_sa_promotion_closure(
+    *,
+    view_root: Path,
+    round_root: Path,
+    target: str,
+    opened: list[str],
+    expected_input_commitment_sha256: str,
+    input_snapshots: dict[str, tuple[FileIdentity, FileIdentity]],
+    sources: tuple[Path, Path],
+    source_identities: tuple[FileIdentity, FileIdentity],
+    destinations: tuple[Path, Path],
+    destination_identities: tuple[FileIdentity, ...],
+    acceptance_dir: Path,
+    acceptance_directory_identity: DirectoryIdentity,
+    acceptance_entries: dict[str, FileIdentity],
+    validator: Any,
+    python_executable: Path,
+    python_identity: FileIdentity,
+    prompt_path: Path,
+    prompt_identity: FileIdentity,
+) -> None:
+    """Jointly close every namespace used to authorize PROMOTED."""
+
+    if len(destination_identities) != 2:
+        raise ContractError("terminal SA promotion closure lacks the output pair")
+    if (
+        validate_closed_view(
+            view_root,
+            target,
+            opened,
+            require_sa_outputs=True,
+        )
+        != "complete"
+    ):
+        raise ContractError("private SA output pair changed during promotion closure")
+    for source, identity in zip(sources, source_identities):
+        require_file_identity(source, identity, "private SA output")
+    for destination, identity in zip(destinations, destination_identities):
+        require_file_identity(destination, identity, "frozen SA output")
+    require_acceptance_directory_state(
+        acceptance_dir,
+        acceptance_directory_identity,
+        acceptance_entries,
+    )
+    require_round_promotion_state(round_root, validator)
+    require_unchanged_view_and_round_inputs(
+        view_root, round_root, input_snapshots
+    )
+    require_opened_input_commitment(
+        view_root, opened, expected_input_commitment_sha256
+    )
+    require_file_identity(
+        python_executable, python_identity, "bound Python executable"
+    )
+    require_file_identity(prompt_path, prompt_identity, "planned SA prompt")
+    # End with both complete namespaces, not with one narrow file check.
+    require_acceptance_directory_state(
+        acceptance_dir,
+        acceptance_directory_identity,
+        acceptance_entries,
+    )
+    if (
+        validate_closed_view(
+            view_root,
+            target,
+            opened,
+            require_sa_outputs=True,
+        )
+        != "complete"
+    ):
+        raise ContractError("private SA output pair changed during promotion closure")
 
 
 def copy_pair_exclusively(
     sources: tuple[Path, Path],
     destinations: tuple[Path, Path],
     expected_sources: tuple[FileIdentity, FileIdentity] | None = None,
-) -> list[dict[str, str]]:
+) -> tuple[list[dict[str, str]], tuple[FileIdentity, FileIdentity]]:
     if expected_sources is None:
         expected_sources = tuple(
             capture_file_identity(source, "private SA output") for source in sources
@@ -1100,6 +1853,16 @@ def copy_pair_exclusively(
             require_file_identity(destination, identity, "frozen SA output")
             if identity.sha256 != expected.sha256:
                 raise ContractError(f"promoted SA output hash mismatch: {destination}")
+        for (source, destination, _value, expected), (
+            created_destination,
+            created_identity,
+        ) in zip(payloads, created):
+            if destination != created_destination:
+                raise ContractError("internal SA destination identity ordering mismatch")
+            require_file_identity(source, expected, "private SA output")
+            require_file_identity(
+                destination, created_identity, "frozen SA output"
+            )
     except Exception as exc:
         cleanup_errors: list[str] = []
         for destination, identity in reversed(created):
@@ -1116,14 +1879,17 @@ def copy_pair_exclusively(
             ) from exc
         raise
 
-    return [
-        {
-            "source": str(source),
-            "destination": str(destination),
-            "sha256": expected.sha256,
-        }
-        for source, destination, _value, expected in payloads
-    ]
+    return (
+        [
+            {
+                "source": str(source),
+                "destination": str(destination),
+                "sha256": expected.sha256,
+            }
+            for source, destination, _value, expected in payloads
+        ],
+        tuple(identity for _destination, identity in created),
+    )
 
 
 def promote(
@@ -1132,13 +1898,17 @@ def promote(
     prompt_value: Path,
     target: str,
     expected_process_sha256: str,
+    expected_input_commitment_sha256: str,
+    python_executable_value: Path,
 ) -> dict[str, Any]:
     verification, context = verify_prompt(
         view_root_value,
         prompt_value,
         target,
         expected_process_sha256,
+        python_executable_value,
         require_sa_outputs=True,
+        expected_input_commitment_sha256=expected_input_commitment_sha256,
     )
     view_root = context["view_root"]
     round_root = resolved(round_root_value, must_exist=True)
@@ -1169,21 +1939,21 @@ def promote(
         details = "; ".join(scoped_errors) or "semantic acceptance status is not PASS"
         raise ContractError(f"scoped semantic-acceptance validation failed: {details}")
 
-    compare_view_and_round_inputs(
+    input_snapshots = compare_view_and_round_inputs(
         view_root, round_root, process, target, validator, shared
     )
-    leaked = sorted(
-        entry.name
-        for entry in round_root.iterdir()
-        if validator.ROUND_ROOT_ACTOR_OUTPUT_RE.fullmatch(entry.name)
+    require_opened_input_commitment(
+        view_root, context["opened"], expected_input_commitment_sha256
     )
-    if leaked:
-        raise ContractError(f"round root contains leaked SA actor outputs: {leaked}")
-    gate = round_root / validator.GATE_FILE
-    if gate.exists() or is_link_or_reparse(gate):
-        raise ContractError(
-            f"refusing promotion while semantic-acceptance gate already exists: {gate}"
-        )
+    require_file_identity(
+        context["python_executable"],
+        context["python_identity"],
+        "bound Python executable",
+    )
+    require_file_identity(
+        context["prompt_path"], context["prompt_identity"], "planned SA prompt"
+    )
+    require_round_promotion_state(round_root, validator)
 
     acceptance_dir = round_root / ACCEPTANCE_DIRECTORY
     validate_existing_acceptance_directory(acceptance_dir, process, validator)
@@ -1199,14 +1969,154 @@ def promote(
             acceptance_dir, "round semantic-acceptance directory"
         )
     require_safe_directory(acceptance_dir, "round semantic-acceptance directory")
+    acceptance_directory_identity = capture_directory_identity(
+        acceptance_dir, "round semantic-acceptance directory"
+    )
+    existing_entry_identities = capture_acceptance_directory_entries(
+        acceptance_dir
+    )
     destinations = round_output_paths(round_root, target)
+    destination_identities: list[FileIdentity] = []
     try:
-        copied = copy_pair_exclusively(
+        if (
+            validate_closed_view(
+                view_root,
+                target,
+                context["opened"],
+                require_sa_outputs=True,
+            )
+            != "complete"
+        ):
+            raise ContractError("private SA output pair is no longer complete")
+        require_acceptance_directory_state(
+            acceptance_dir,
+            acceptance_directory_identity,
+            existing_entry_identities,
+        )
+        require_unchanged_view_and_round_inputs(
+            view_root, round_root, input_snapshots
+        )
+        require_opened_input_commitment(
+            view_root, context["opened"], expected_input_commitment_sha256
+        )
+        require_file_identity(
+            context["python_executable"],
+            context["python_identity"],
+            "bound Python executable",
+        )
+        require_file_identity(
+            context["prompt_path"],
+            context["prompt_identity"],
+            "planned SA prompt",
+        )
+        copied, copied_identities = copy_pair_exclusively(
             sources,
             destinations,
             validated_source_identities,
         )
+        destination_identities.extend(copied_identities)
+        require_unchanged_view_and_round_inputs(
+            view_root, round_root, input_snapshots
+        )
+        require_opened_input_commitment(
+            view_root, context["opened"], expected_input_commitment_sha256
+        )
+        require_file_identity(
+            context["python_executable"],
+            context["python_identity"],
+            "bound Python executable",
+        )
+        require_file_identity(
+            context["prompt_path"],
+            context["prompt_identity"],
+            "planned SA prompt",
+        )
+        if (
+            validate_closed_view(
+                view_root,
+                target,
+                context["opened"],
+                require_sa_outputs=True,
+            )
+            != "complete"
+        ):
+            raise ContractError("private SA output pair is no longer complete")
+        for source, identity in zip(sources, validated_source_identities):
+            require_file_identity(source, identity, "private SA output")
+        for destination, identity in zip(destinations, destination_identities):
+            require_file_identity(destination, identity, "frozen SA output")
+        expected_acceptance_entries = dict(existing_entry_identities)
+        expected_acceptance_entries.update(
+            {
+                destination.name: identity
+                for destination, identity in zip(
+                    destinations, destination_identities
+                )
+            }
+        )
+        require_acceptance_directory_state(
+            acceptance_dir,
+            acceptance_directory_identity,
+            expected_acceptance_entries,
+        )
+        require_round_promotion_state(round_root, validator)
+        require_unchanged_view_and_round_inputs(
+            view_root, round_root, input_snapshots
+        )
+        require_opened_input_commitment(
+            view_root, context["opened"], expected_input_commitment_sha256
+        )
+        require_file_identity(
+            context["python_executable"],
+            context["python_identity"],
+            "bound Python executable",
+        )
+        require_file_identity(
+            context["prompt_path"],
+            context["prompt_identity"],
+            "planned SA prompt",
+        )
+        promotion_result = {
+            "schema": PROMOTION_SCHEMA,
+            "target": target,
+            "status": "PROMOTED",
+            "verification": verification,
+            "expected_input_commitment_sha256": (
+                expected_input_commitment_sha256.upper()
+            ),
+            "files": copied,
+        }
+        require_terminal_sa_promotion_closure(
+            view_root=view_root,
+            round_root=round_root,
+            target=target,
+            opened=context["opened"],
+            expected_input_commitment_sha256=expected_input_commitment_sha256,
+            input_snapshots=input_snapshots,
+            sources=sources,
+            source_identities=validated_source_identities,
+            destinations=destinations,
+            destination_identities=tuple(destination_identities),
+            acceptance_dir=acceptance_dir,
+            acceptance_directory_identity=acceptance_directory_identity,
+            acceptance_entries=expected_acceptance_entries,
+            validator=validator,
+            python_executable=context["python_executable"],
+            python_identity=context["python_identity"],
+            prompt_path=context["prompt_path"],
+            prompt_identity=context["prompt_identity"],
+        )
     except Exception as exc:
+        cleanup_errors: list[str] = []
+        for destination, identity in reversed(
+            list(zip(destinations, destination_identities))
+        ):
+            try:
+                unlink_created_file_if_unchanged(
+                    destination, identity, "frozen SA output"
+                )
+            except ContractError as cleanup_exc:
+                cleanup_errors.append(str(cleanup_exc))
         if created_directory is not None:
             try:
                 rmdir_created_directory_if_unchanged(
@@ -1215,18 +2125,14 @@ def promote(
                     "round semantic-acceptance directory",
                 )
             except ContractError as cleanup_exc:
-                raise ContractError(
-                    f"promotion failed: {exc}; directory rollback failed closed: "
-                    f"{cleanup_exc}"
-                ) from exc
+                cleanup_errors.append(str(cleanup_exc))
+        if cleanup_errors:
+            raise ContractError(
+                f"promotion failed: {exc}; rollback failed closed and preserved "
+                "one or more current objects: " + "; ".join(cleanup_errors)
+            ) from exc
         raise
-    return {
-        "schema": "thesis-review-semantic-acceptance-promotion-v1",
-        "target": target,
-        "status": "PROMOTED",
-        "verification": verification,
-        "files": copied,
-    }
+    return promotion_result
 
 
 def print_result(status: str, value: dict[str, Any] | None = None, error: str = "") -> int:
@@ -1247,12 +2153,15 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser.add_argument("--view-root", type=Path, required=True)
     plan_parser.add_argument("--target", required=True)
     plan_parser.add_argument("--output", type=Path, required=True)
+    plan_parser.add_argument("--python-executable", type=Path, required=True)
 
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--view-root", type=Path, required=True)
     verify_parser.add_argument("--prompt", type=Path, required=True)
     verify_parser.add_argument("--target", required=True)
     verify_parser.add_argument("--expected-process-sha256", required=True)
+    verify_parser.add_argument("--expected-input-commitment-sha256")
+    verify_parser.add_argument("--python-executable", type=Path, required=True)
     verify_parser.add_argument("--require-sa-outputs", action="store_true")
 
     promote_parser = subparsers.add_parser("promote")
@@ -1261,6 +2170,10 @@ def main(argv: list[str] | None = None) -> int:
     promote_parser.add_argument("--prompt", type=Path, required=True)
     promote_parser.add_argument("--target", required=True)
     promote_parser.add_argument("--expected-process-sha256", required=True)
+    promote_parser.add_argument(
+        "--expected-input-commitment-sha256", required=True
+    )
+    promote_parser.add_argument("--python-executable", type=Path, required=True)
 
     args = parser.parse_args(argv)
     previous = sys.dont_write_bytecode
@@ -1270,7 +2183,11 @@ def main(argv: list[str] | None = None) -> int:
             return print_result(
                 "PLANNED",
                 plan_prompt(
-                    args.process, args.view_root, args.target, args.output
+                    args.process,
+                    args.view_root,
+                    args.target,
+                    args.output,
+                    args.python_executable,
                 ),
             )
         if args.command == "verify":
@@ -1279,7 +2196,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.prompt,
                 args.target,
                 args.expected_process_sha256,
+                args.python_executable,
                 require_sa_outputs=args.require_sa_outputs,
+                expected_input_commitment_sha256=(
+                    args.expected_input_commitment_sha256
+                ),
             )
             return print_result("VERIFIED", verification)
         return print_result(
@@ -1290,6 +2211,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.prompt,
                 args.target,
                 args.expected_process_sha256,
+                args.expected_input_commitment_sha256,
+                args.python_executable,
             ),
         )
     except ContractError as exc:

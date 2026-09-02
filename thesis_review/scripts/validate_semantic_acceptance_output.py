@@ -27,7 +27,9 @@ import csv
 import hashlib
 import importlib.util
 import json
+import os
 import re
+import stat
 import sys
 import unicodedata
 from collections import Counter, defaultdict
@@ -143,13 +145,35 @@ RENDERED_REFERENCE_GAP_CUE_RE = re.compile(
     r"(?i)(?:rendered\s+reference\s+gap|渲染参考文献缺口)\s*:"
 )
 FINDING_SEMANTIC_BASIS_LABELS = (
+    "assessment_standard",
     "premise_class",
     "target_premise",
     "supporting_pdf_evidence",
     "whole_pdf_resolution",
     "residual_gap",
     "action_delta",
+    "admissibility_result",
 )
+GATE_SEMANTIC_BASIS_LABELS = (
+    "assessment_standard",
+    "gate_id",
+    "target_disposition",
+    "target_decisive_evidence",
+    "target_related_finding_ids",
+    "independent_pdf_assessment",
+    "admissibility_result",
+)
+QUESTION_SEMANTIC_BASIS_LABELS = (
+    "assessment_standard",
+    "target_question",
+    "target_why_unresolved",
+    "target_needed_evidence",
+    "target_page",
+    "whole_pdf_resolution",
+    "admissibility_result",
+)
+REASONABLE_SUPPORT_STANDARD = "reasonable-support-not-concurrence"
+REASONABLY_SUPPORTED = "reasonably-supported"
 VERDICT_SEMANTIC_BASIS_LABELS = (
     "gate_disposition_profile",
     "actionable_finding_profile",
@@ -221,18 +245,28 @@ COMMON_SA_PACKET_INPUTS = [
 
 
 def path_has_unsafe_component(root: Path, path: Path, shared: Any) -> bool:
-    """Reject a symlink/reparse point in any root-relative path component."""
+    """Reject aliases or named streams in any root-relative path component."""
 
     try:
         relative = path.relative_to(root)
     except ValueError:
         return True
     current = root
-    if shared.is_link_or_reparse(current):
-        return True
+    components = [current]
     for part in relative.parts:
         current = current / part
+        components.append(current)
+    for current in components:
         if shared.is_link_or_reparse(current):
+            return True
+        try:
+            metadata = current.lstat()
+        except OSError:
+            return True
+        if stat.S_ISREG(metadata.st_mode) and int(metadata.st_nlink) != 1:
+            return True
+        streams, stream_error = shared._ntfs_named_streams(current)
+        if stream_error is not None or streams:
             return True
     return False
 
@@ -256,43 +290,243 @@ def preflight_regular_files(
             relative = path.relative_to(root).as_posix()
         except ValueError:
             relative = str(path)
-        if path_has_unsafe_component(root, path, shared) or not path.is_file():
+        streams, stream_error = shared._ntfs_named_streams(path)
+        if (
+            path_has_unsafe_component(root, path, shared)
+            or not shared.is_single_link_regular_file(path)
+            or stream_error is not None
+            or bool(streams)
+        ):
             errors.append(f"missing or unsafe {label}: {relative}")
 
 
-def preflight_tree_no_reparse(
+def capture_tree_no_reparse(
     root: Path, shared: Any, errors: list[str]
-) -> None:
-    """Metadata-only recursive topology check; never follows a reparse directory."""
+) -> dict[str, tuple[int, int, int, int, int, int, int]]:
+    """Bind a single-link/no-ADS metadata topology without opening file bytes."""
 
-    stack = [root]
+    snapshot: dict[str, tuple[int, int, int, int, int, int, int]] = {}
+    stack: list[tuple[Path, str]] = [(root, ".")]
     while stack:
-        directory = stack.pop()
+        directory, relative_directory = stack.pop()
+        try:
+            before = directory.lstat()
+        except OSError as exc:
+            errors.append(
+                f"cannot inspect semantic-acceptance topology directory "
+                f"{relative_directory}: {exc}"
+            )
+            continue
+        attributes = int(getattr(before, "st_file_attributes", 0))
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+            or shared.is_link_or_reparse(directory)
+        ):
+            errors.append(
+                "semantic-acceptance topology contains unsafe directory "
+                f"{relative_directory}"
+            )
+            continue
+        streams, stream_error = shared._ntfs_named_streams(directory)
+        if stream_error is not None:
+            errors.append(
+                f"semantic-acceptance topology {relative_directory}: {stream_error}"
+            )
+            continue
+        if streams:
+            errors.append(
+                "semantic-acceptance topology directory carries NTFS named "
+                f"streams: {relative_directory}: {streams}"
+            )
+            continue
         try:
             entries = list(directory.iterdir())
         except OSError as exc:
             errors.append(f"cannot enumerate semantic-acceptance topology: {exc}")
             continue
+        try:
+            after = directory.lstat()
+        except OSError as exc:
+            errors.append(
+                f"cannot re-inspect semantic-acceptance topology directory "
+                f"{relative_directory}: {exc}"
+            )
+            continue
+        identity = (
+            int(before.st_dev),
+            int(before.st_ino),
+            int(before.st_mode),
+            int(before.st_nlink),
+            int(before.st_size),
+            int(getattr(before, "st_mtime_ns", int(before.st_mtime * 1e9))),
+            attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0),
+        )
+        after_identity = (
+            int(after.st_dev),
+            int(after.st_ino),
+            int(after.st_mode),
+            int(after.st_nlink),
+            int(after.st_size),
+            int(getattr(after, "st_mtime_ns", int(after.st_mtime * 1e9))),
+            int(getattr(after, "st_file_attributes", 0))
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0),
+        )
+        if identity != after_identity:
+            errors.append(
+                "semantic-acceptance topology directory changed during "
+                f"enumeration: {relative_directory}"
+            )
+            continue
+        snapshot[relative_directory] = identity
         for entry in entries:
-            if shared.is_link_or_reparse(entry):
-                try:
-                    relative = entry.relative_to(root).as_posix()
-                except ValueError:
-                    relative = str(entry)
+            try:
+                relative = entry.relative_to(root).as_posix()
+            except ValueError:
+                relative = str(entry)
+            try:
+                metadata = entry.lstat()
+            except OSError as exc:
+                errors.append(
+                    f"cannot inspect semantic-acceptance topology {relative}: {exc}"
+                )
+                continue
+            entry_attributes = int(getattr(metadata, "st_file_attributes", 0))
+            if (
+                stat.S_ISLNK(metadata.st_mode)
+                or bool(
+                    entry_attributes
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                )
+                or shared.is_link_or_reparse(entry)
+            ):
                 errors.append(
                     f"semantic-acceptance topology contains reparse/symlink entry {relative}"
                 )
                 continue
-            if entry.is_dir():
-                stack.append(entry)
-            elif not entry.is_file():
-                try:
-                    relative = entry.relative_to(root).as_posix()
-                except ValueError:
-                    relative = str(entry)
+            entry_streams, entry_stream_error = shared._ntfs_named_streams(entry)
+            if entry_stream_error is not None:
+                errors.append(
+                    f"semantic-acceptance topology {relative}: {entry_stream_error}"
+                )
+                continue
+            if entry_streams:
+                errors.append(
+                    "semantic-acceptance topology entry carries NTFS named "
+                    f"streams: {relative}: {entry_streams}"
+                )
+                continue
+            entry_identity = (
+                int(metadata.st_dev),
+                int(metadata.st_ino),
+                int(metadata.st_mode),
+                int(metadata.st_nlink),
+                int(metadata.st_size),
+                int(
+                    getattr(
+                        metadata,
+                        "st_mtime_ns",
+                        int(metadata.st_mtime * 1e9),
+                    )
+                ),
+                entry_attributes
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0),
+            )
+            if stat.S_ISDIR(metadata.st_mode):
+                stack.append((entry, relative))
+            elif stat.S_ISREG(metadata.st_mode):
+                if int(metadata.st_nlink) != 1:
+                    errors.append(
+                        "semantic-acceptance topology regular file must be "
+                        f"single-link: {relative}"
+                    )
+                    continue
+                snapshot[relative] = entry_identity
+            else:
                 errors.append(
                     f"semantic-acceptance topology contains non-regular entry {relative}"
                 )
+    return snapshot
+
+
+def preflight_tree_no_reparse(
+    root: Path, shared: Any, errors: list[str]
+) -> dict[str, tuple[int, int, int, int, int, int, int]]:
+    """Public preflight wrapper retained for callers and fault-injection tests."""
+
+    return capture_tree_no_reparse(root, shared, errors)
+
+
+def capture_safe_file_set(
+    root: Path,
+    paths: Iterable[Path],
+    shared: Any,
+    errors: list[str],
+    *,
+    label: str,
+) -> dict[str, tuple[Any, ...]]:
+    """Bind exact allowed bytes and identities, discarding copied payload bytes."""
+
+    snapshots: dict[str, tuple[Any, ...]] = {}
+    seen: set[str] = set()
+    for path in paths:
+        try:
+            relative = path.relative_to(root).as_posix()
+        except ValueError:
+            errors.append(f"{label} escapes semantic-acceptance root: {path}")
+            continue
+        if relative in seen:
+            continue
+        seen.add(relative)
+        snapshot = shared.capture_helper_input_snapshot(
+            path, f"{label} {relative}", errors
+        )
+        if snapshot is not None:
+            snapshots[relative] = tuple(snapshot[:-1])
+    return snapshots
+
+
+def require_terminal_integrity_closure(
+    root: Path,
+    shared: Any,
+    errors: list[str],
+    *,
+    initial_topology: dict[str, tuple[int, int, int, int, int, int, int]],
+    safety_paths: Iterable[Path],
+    initial_file_safety: dict[str, tuple[Any, ...]],
+    label: str,
+) -> None:
+    """Reclose topology and bytes after the public terminal preflight returns.
+
+    The ordinary terminal check deliberately remains a public, separately
+    patchable preflight because callers and regression tests use it as an
+    observation boundary. A mutation can occur immediately after that call
+    returns, however. This final closure therefore uses the underlying tree
+    capturer directly, reopens every declared file through stable handles, and
+    then captures the tree again. The first tree pass detects late topology or
+    link-count drift, the file pass detects late identity/byte drift even when
+    size and timestamps are preserved, and the second tree pass detects drift
+    during those stable-handle reads.
+    """
+
+    closure_topology_before = capture_tree_no_reparse(root, shared, errors)
+    closure_file_safety = capture_safe_file_set(
+        root,
+        safety_paths,
+        shared,
+        errors,
+        label=label,
+    )
+    closure_topology_after = capture_tree_no_reparse(root, shared, errors)
+    if (
+        closure_topology_before != initial_topology
+        or closure_topology_after != initial_topology
+        or closure_topology_before != closure_topology_after
+    ):
+        errors.append(f"{label}: terminal topology closure mismatch")
+    if closure_file_safety != initial_file_safety:
+        errors.append(f"{label}: terminal file identity or bytes closure mismatch")
 
 
 def process_governing_files(process: dict[str, Any]) -> list[str]:
@@ -1330,6 +1564,13 @@ def reviewer_semantic_target_profile(
         physical_page_count,
         errors,
     )
+    questions = shared.parse_reviewer_questions(
+        report_text,
+        reviewer_index,
+        report_path.name,
+        physical_page_count,
+        errors,
+    )
 
     assessment = (
         shared.markdown_section_body_raw(report_text, "Whole-thesis assessment")
@@ -1344,6 +1585,7 @@ def reviewer_semantic_target_profile(
     )
     gate_rows = parsed_gate_rows or []
     gate_profile: list[dict[str, Any]] = []
+    gate_targets: dict[str, dict[str, Any]] = {}
     gate_states: dict[str, tuple[str, set[str]]] = {}
     gate_labels: list[str] = []
     gate_profile_complete = parsed_gate_rows is not None and len(gate_rows) == 9
@@ -1369,6 +1611,7 @@ def reviewer_semantic_target_profile(
         review_depth = cells[1].casefold()
         gate_profile.append(
             {
+                "decisive_evidence_sha256": parsed_text_sha256(cells[3]),
                 "disposition": disposition,
                 "gate": gate,
                 "related_finding_ids": list(related_ids),
@@ -1377,6 +1620,12 @@ def reviewer_semantic_target_profile(
         )
         if gate in set("ABCDEFGHI"):
             gate_states[gate] = (disposition, set(related_ids))
+            gate_targets[f"Gate-{gate}"] = {
+                "gate_id": f"Gate-{gate}",
+                "target_disposition": disposition,
+                "target_decisive_evidence": cells[3],
+                "target_related_finding_ids": list(related_ids),
+            }
     if gate_labels != list("ABCDEFGHI") or len(gate_states) != 9:
         gate_profile_complete = False
 
@@ -1497,8 +1746,20 @@ def reviewer_semantic_target_profile(
         "synthesis_projection": "complete" if synthesis_complete else "incomplete",
         "target_verdict_projection": "coherent" if verdict_coherent else "incoherent",
     }
+    question_targets = {
+        question_id: {
+            "target_question": row[2],
+            "target_why_unresolved": row[3],
+            "target_needed_evidence": row[4],
+            "target_page": row[1],
+        }
+        for question_id, row in questions.items()
+        if len(row) == 5
+    }
     return {
         "findings": findings,
+        "gates": gate_targets,
+        "questions": question_targets,
         "gate_disposition_profile": canonical_profile_json(gate_profile),
         "actionable_finding_profile": canonical_profile_json(actionable_profile),
         "synthesis_cue": canonical_profile_json(synthesis_profile),
@@ -1532,6 +1793,16 @@ def validate_passing_finding_semantic_basis(
             f"{location}: passing finding {finding_id} has no parsed target finding"
         )
         return
+    if parsed["assessment_standard"] != REASONABLE_SUPPORT_STANDARD:
+        errors.append(
+            f"{location}: finding assessment_standard must be exactly "
+            f"{REASONABLE_SUPPORT_STANDARD!r}"
+        )
+    if parsed["admissibility_result"] != REASONABLY_SUPPORTED:
+        errors.append(
+            f"{location}: passing finding admissibility_result must be exactly "
+            f"{REASONABLY_SUPPORTED!r}"
+        )
     for label in ("premise_class", "target_premise", "supporting_pdf_evidence"):
         if not isinstance(parsed[label], str):
             errors.append(f"{location}: finding {label} must be a string")
@@ -1588,19 +1859,21 @@ def validate_passing_finding_semantic_basis(
             errors.append(f"{location}: whole_pdf_resolution status is invalid")
         pages = resolution["pages"]
         concepts = resolution["search_concepts"]
-        if not isinstance(pages, list) or not all(isinstance(item, str) for item in pages):
-            errors.append(f"{location}: whole_pdf_resolution pages must be a string array")
-            pages = []
+        validated_pages = validate_closed_physical_page_array(
+            pages,
+            physical_page_count,
+            location,
+            "whole_pdf_resolution pages",
+            errors,
+        )
         if not isinstance(concepts, list) or not all(
             concrete_semantic_text(item) for item in concepts
         ):
             errors.append(f"{location}: whole_pdf_resolution search_concepts must contain concrete text")
             concepts = []
-        responsive_pages = validate_semantic_basis_pages(
-            " ".join(pages), physical_page_count, location,
-            "whole_pdf_resolution pages", errors, require_page=False,
-        )
-        if status == "responsive-passages-reviewed" and (not responsive_pages or not concepts):
+        if status == "responsive-passages-reviewed" and (
+            not validated_pages or not concepts
+        ):
             errors.append(f"{location}: responsive-passages-reviewed requires pages and search_concepts")
         if status == "no-responsive-passage-found" and (pages or not concepts):
             errors.append(f"{location}: no-responsive-passage-found requires empty pages and search_concepts")
@@ -1624,8 +1897,12 @@ def validate_passing_finding_semantic_basis(
         "residual_gap", errors,
     )
     if gap:
-        if gap["status"] != "present":
-            errors.append(f"{location}: residual_gap status must be 'present'")
+        if gap["status"] != REASONABLY_SUPPORTED:
+            errors.append(
+                f"{location}: residual_gap status must be "
+                f"{REASONABLY_SUPPORTED!r}; semantic acceptance tests "
+                "admissibility, not whether the acceptor concurs"
+            )
         if not concrete_semantic_text(gap["detail"]):
             errors.append(f"{location}: residual_gap detail must be concrete")
     action = validate_closed_object(
@@ -1671,11 +1948,279 @@ def validate_passing_finding_semantic_basis(
                 f"{location}: action_delta independent_reason must not copy its "
                 f"detail or the Required action of {finding_id}"
             )
-    for label in ("target_premise", "supporting_pdf_evidence"):
+    for label in (
+        "assessment_standard",
+        "target_premise",
+        "supporting_pdf_evidence",
+        "admissibility_result",
+    ):
         if not concrete_semantic_text(parsed[label]):
             errors.append(f"{location}: finding {label} must be concrete and cannot be N/A/empty")
     if semantic_value_is_na(parsed["premise_class"]):
         errors.append(f"{location}: finding premise_class cannot be N/A/empty")
+
+
+def expanded_physical_pages(value: str, physical_page_count: int) -> set[int]:
+    """Return in-range rendered pages named by canonical physical-page tokens."""
+
+    pages: set[int] = set()
+    for match in PHYSICAL_PAGE_RE.finditer(value):
+        start = int(match.group("start"))
+        end = int(match.group("end") or start)
+        if 1 <= start <= end <= physical_page_count:
+            pages.update(range(start, end + 1))
+    return pages
+
+
+def validate_closed_physical_page_array(
+    value: Any,
+    physical_page_count: int,
+    location: str,
+    label: str,
+    errors: list[str],
+) -> list[str]:
+    """Validate every array member as one canonical in-range singleton page."""
+
+    if not isinstance(value, list):
+        errors.append(f"{location}: {label} must be a string array")
+        return []
+    validated: list[str] = []
+    seen_pages: set[int] = set()
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            errors.append(
+                f"{location}: {label}[{index}] must be exactly one canonical "
+                "physical p.N string"
+            )
+            continue
+        match = re.fullmatch(r"physical p\.([1-9]\d*)", item)
+        if match is None:
+            errors.append(
+                f"{location}: {label}[{index}] must be exactly one canonical "
+                "singleton physical p.N locator"
+            )
+            continue
+        page = int(match.group(1))
+        if page > physical_page_count:
+            errors.append(
+                f"{location}: {label}[{index}] physical p.{page} is outside "
+                f"1..{physical_page_count}"
+            )
+            continue
+        if page in seen_pages:
+            errors.append(
+                f"{location}: {label} must be duplicate-free; physical p.{page} "
+                "appears more than once"
+            )
+            continue
+        seen_pages.add(page)
+        validated.append(item)
+    return validated
+
+
+def validate_reasonable_support_marker(
+    parsed: dict[str, Any],
+    unit_label: str,
+    location: str,
+    errors: list[str],
+) -> None:
+    if parsed.get("assessment_standard") != REASONABLE_SUPPORT_STANDARD:
+        errors.append(
+            f"{location}: {unit_label} assessment_standard must be exactly "
+            f"{REASONABLE_SUPPORT_STANDARD!r}"
+        )
+    if parsed.get("admissibility_result") != REASONABLY_SUPPORTED:
+        errors.append(
+            f"{location}: passing {unit_label} admissibility_result must be "
+            f"exactly {REASONABLY_SUPPORTED!r}"
+        )
+
+
+def validate_passing_gate_semantic_basis(
+    semantic_basis: str,
+    gate_id: str,
+    gate_target: dict[str, Any] | None,
+    physical_page_count: int,
+    location: str,
+    errors: list[str],
+) -> None:
+    """Require a closed independent admissibility check for one Gate row."""
+
+    parsed = parse_closed_ordered_semantic_basis(
+        semantic_basis,
+        GATE_SEMANTIC_BASIS_LABELS,
+        location,
+        errors,
+    )
+    if not parsed:
+        return
+    if gate_target is None:
+        errors.append(f"{location}: passing gate {gate_id} has no parsed target Gate row")
+        return
+    validate_reasonable_support_marker(parsed, "gate", location, errors)
+    expected_scalar = {
+        "gate_id": gate_id,
+        "target_disposition": str(gate_target.get("target_disposition", "")),
+        "target_decisive_evidence": str(
+            gate_target.get("target_decisive_evidence", "")
+        ),
+    }
+    for key, expected in expected_scalar.items():
+        observed = parsed.get(key)
+        if not isinstance(observed, str) or normalized_binding_text(
+            observed
+        ) != normalized_binding_text(expected):
+            errors.append(
+                f"{location}: gate {key} must exactly bind the parsed target "
+                f"Gate row for {gate_id}"
+            )
+    expected_related = list(gate_target.get("target_related_finding_ids", []))
+    if parsed.get("target_related_finding_ids") != expected_related:
+        errors.append(
+            f"{location}: gate target_related_finding_ids must exactly bind "
+            f"the parsed target Gate row for {gate_id}"
+        )
+    if expected_scalar["target_disposition"] == "concern" and not expected_related:
+        errors.append(
+            f"{location}: passing concern gate {gate_id} must bind at least one "
+            "mapped actionable finding"
+        )
+    assessment = validate_closed_object(
+        parsed.get("independent_pdf_assessment"),
+        (
+            "supporting_pdf_evidence",
+            "counterevidence_reviewed",
+            "admissibility_reason",
+        ),
+        location,
+        "independent_pdf_assessment",
+        errors,
+    )
+    if assessment:
+        for key in (
+            "supporting_pdf_evidence",
+            "counterevidence_reviewed",
+            "admissibility_reason",
+        ):
+            if not concrete_semantic_text(assessment[key]):
+                errors.append(
+                    f"{location}: gate independent_pdf_assessment {key} must "
+                    "contain concrete independent reasoning"
+                )
+        support_pages = expanded_physical_pages(
+            str(assessment["supporting_pdf_evidence"]), physical_page_count
+        )
+        if not support_pages:
+            errors.append(
+                f"{location}: gate supporting_pdf_evidence must name an in-range "
+                "physical page"
+            )
+        target_pages = expanded_physical_pages(
+            expected_scalar["target_decisive_evidence"], physical_page_count
+        )
+        if target_pages and not (support_pages & target_pages):
+            errors.append(
+                f"{location}: gate supporting_pdf_evidence must independently "
+                "recheck at least one page named by the target decisive evidence"
+            )
+        if normalized_binding_text(
+            str(assessment["admissibility_reason"])
+        ) == normalized_binding_text(expected_scalar["target_decisive_evidence"]):
+            errors.append(
+                f"{location}: gate admissibility_reason must not merely copy the "
+                "target decisive evidence"
+            )
+
+
+def validate_passing_question_semantic_basis(
+    semantic_basis: str,
+    question_id: str,
+    question_target: dict[str, Any] | None,
+    physical_page_count: int,
+    location: str,
+    errors: list[str],
+) -> None:
+    """Require an exact target binding plus a whole-PDF unresolved check."""
+
+    parsed = parse_closed_ordered_semantic_basis(
+        semantic_basis,
+        QUESTION_SEMANTIC_BASIS_LABELS,
+        location,
+        errors,
+    )
+    if not parsed:
+        return
+    if question_target is None:
+        errors.append(
+            f"{location}: passing question {question_id} has no parsed target row"
+        )
+        return
+    validate_reasonable_support_marker(parsed, "question", location, errors)
+    bindings = {
+        "target_question": "target_question",
+        "target_why_unresolved": "target_why_unresolved",
+        "target_needed_evidence": "target_needed_evidence",
+        "target_page": "target_page",
+    }
+    for basis_key, target_key in bindings.items():
+        observed = parsed.get(basis_key)
+        expected = str(question_target.get(target_key, ""))
+        if not isinstance(observed, str) or normalized_binding_text(
+            observed
+        ) != normalized_binding_text(expected):
+            errors.append(
+                f"{location}: question {basis_key} must exactly bind the parsed "
+                f"target row for {question_id}"
+            )
+    resolution = validate_closed_object(
+        parsed.get("whole_pdf_resolution"),
+        ("status", "pages", "search_concepts", "detail"),
+        location,
+        "whole_pdf_resolution",
+        errors,
+    )
+    if resolution:
+        status = resolution["status"]
+        if status not in {
+            "responsive-passages-reviewed",
+            "no-responsive-passage-found",
+        }:
+            errors.append(
+                f"{location}: question whole_pdf_resolution status is invalid"
+            )
+        pages = resolution["pages"]
+        concepts = resolution["search_concepts"]
+        validated_pages = validate_closed_physical_page_array(
+            pages,
+            physical_page_count,
+            location,
+            "question whole_pdf_resolution pages",
+            errors,
+        )
+        if not isinstance(concepts, list) or not all(
+            concrete_semantic_text(item) for item in concepts
+        ):
+            errors.append(
+                f"{location}: question whole_pdf_resolution search_concepts must "
+                "contain concrete text"
+            )
+            concepts = []
+        if status == "responsive-passages-reviewed" and (
+            not validated_pages or not concepts
+        ):
+            errors.append(
+                f"{location}: question responsive-passages-reviewed requires "
+                "pages and search_concepts"
+            )
+        if status == "no-responsive-passage-found" and (pages or not concepts):
+            errors.append(
+                f"{location}: question no-responsive-passage-found requires empty "
+                "pages and nonempty search_concepts"
+            )
+        if not concrete_semantic_text(resolution["detail"]):
+            errors.append(
+                f"{location}: question whole_pdf_resolution detail must be concrete"
+            )
 
 
 def validate_passing_verdict_semantic_basis(
@@ -2128,6 +2673,62 @@ def normalized_basis_signature(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip().casefold()
 
 
+def semantic_basis_language_for_diversity(row: dict[str, str]) -> str:
+    """Return only actor-authored reasoning, not required canonical JSON syntax.
+
+    Finding, Gate, and Question PASS rows intentionally share closed key names,
+    marker values, and exact target bindings.  Treating their raw JSON spelling
+    as prose turns those mandatory structural tokens into a false template
+    cluster.  Diversity checks therefore inspect only the independently written
+    evidence/search/reason fields.  Malformed or non-contract prose stays raw so
+    the anti-template checks still fail closed.
+    """
+
+    value = row.get("SemanticBasis", "")
+    unit_type = row.get("TargetUnitType", "")
+    if unit_type not in {"finding", "gate", "question"}:
+        return value
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return value
+    if not isinstance(parsed, dict):
+        return value
+
+    selected: list[Any]
+    if unit_type == "finding":
+        selected = [
+            parsed.get("supporting_pdf_evidence"),
+            parsed.get("whole_pdf_resolution"),
+            parsed.get("residual_gap", {}).get("detail")
+            if isinstance(parsed.get("residual_gap"), dict)
+            else None,
+            parsed.get("action_delta", {}).get("independent_reason")
+            if isinstance(parsed.get("action_delta"), dict)
+            else None,
+        ]
+    elif unit_type == "gate":
+        selected = [parsed.get("independent_pdf_assessment")]
+    else:
+        selected = [parsed.get("whole_pdf_resolution")]
+
+    strings: list[str] = []
+
+    def collect(item: Any) -> None:
+        if isinstance(item, str):
+            strings.append(item)
+        elif isinstance(item, list):
+            for member in item:
+                collect(member)
+        elif isinstance(item, dict):
+            for member in item.values():
+                collect(member)
+
+    for item in selected:
+        collect(item)
+    return " ".join(strings) if strings else value
+
+
 TEMPLATE_CLUSTER_MIN_ROWS = 6
 TEMPLATE_CLUSTER_MAX_ROWS = 12
 TEMPLATE_CLUSTER_DOMINANCE_NUMERATOR = 4
@@ -2160,7 +2761,7 @@ def validate_template_diversity(rows: list[dict[str, str]], errors: list[str]) -
     cluster_threshold = template_cluster_threshold(len(rows))
     groups: dict[str, list[str]] = defaultdict(list)
     for row in rows:
-        value = row.get("SemanticBasis", "").replace(
+        value = semantic_basis_language_for_diversity(row).replace(
             row.get("TargetUnitID", ""), " <unit> "
         )
         signature = normalized_basis_signature(value)
@@ -2182,7 +2783,7 @@ def validate_template_diversity(rows: list[dict[str, str]], errors: list[str]) -
     cjk_shingles: dict[str, set[int]] = defaultdict(set)
     for row_index, row in enumerate(rows):
         normalized = normalized_basis_signature(
-            row.get("SemanticBasis", "").replace(
+            semantic_basis_language_for_diversity(row).replace(
                 row.get("TargetUnitID", ""), " <unit> "
             )
         )
@@ -2234,7 +2835,7 @@ def validate_template_diversity(rows: list[dict[str, str]], errors: list[str]) -
     document_frequency: Counter[str] = Counter()
     for row in rows:
         normalized = normalized_basis_signature(
-            row.get("SemanticBasis", "").replace(
+            semantic_basis_language_for_diversity(row).replace(
                 row.get("TargetUnitID", ""), " <unit> "
             )
         )
@@ -2268,7 +2869,7 @@ def validate_template_diversity(rows: list[dict[str, str]], errors: list[str]) -
     fuzzy_features: list[set[str]] = []
     for row in rows:
         normalized = normalized_basis_signature(
-            row.get("SemanticBasis", "").replace(
+            semantic_basis_language_for_diversity(row).replace(
                 row.get("TargetUnitID", ""), " <unit> "
             )
         )
@@ -2498,7 +3099,7 @@ def validate_actor(
         return [f"invalid semantic-acceptance target {target!r}"], None
     if shared.is_link_or_reparse(root) or not root.is_dir():
         return ["acceptance input root is missing or unsafe"], None
-    preflight_tree_no_reparse(root, shared, errors)
+    initial_topology = preflight_tree_no_reparse(root, shared, errors)
     if errors:
         return errors, None
     process_path = root / "00-process-parameters.json"
@@ -2551,6 +3152,26 @@ def validate_actor(
     if errors:
         return errors, None
     expected_opened = canonical_sa_opened_inputs(root, process, target, errors)
+    if errors:
+        return errors, None
+    if require_opened_files:
+        safety_paths = [root / Path(relative) for relative in expected_opened]
+    else:
+        safety_paths = actor_seed_input_paths(
+            root, process, target, report_dir
+        )
+        safety_paths.extend(
+            root / Path(relative)
+            for relative in target_artifacts(root, process, target, errors)
+        )
+    safety_paths.extend((acceptance_md, acceptance_csv))
+    initial_file_safety = capture_safe_file_set(
+        root,
+        safety_paths,
+        shared,
+        errors,
+        label=f"SA-{target} allowed file",
+    )
     if errors:
         return errors, None
     try:
@@ -2858,6 +3479,24 @@ def validate_actor(
                 unit_id,
                 reviewer_semantic_profile.get("findings", {}).get(unit_id),
                 report_anchor_by_unit.get(report_key),
+                physical_page_count,
+                f"{acceptance_csv.name}:{line}",
+                errors,
+            )
+        if disposition == "pass" and unit_type == "gate":
+            validate_passing_gate_semantic_basis(
+                row["SemanticBasis"],
+                unit_id,
+                reviewer_semantic_profile.get("gates", {}).get(unit_id),
+                physical_page_count,
+                f"{acceptance_csv.name}:{line}",
+                errors,
+            )
+        if disposition == "pass" and unit_type == "question":
+            validate_passing_question_semantic_basis(
+                row["SemanticBasis"],
+                unit_id,
+                reviewer_semantic_profile.get("questions", {}).get(unit_id),
                 physical_page_count,
                 f"{acceptance_csv.name}:{line}",
                 errors,
@@ -3487,6 +4126,22 @@ def validate_actor(
                     errors.append(
                         "semantic-acceptance view rules/scripts file topology mismatch"
                     )
+    terminal_file_safety = capture_safe_file_set(
+        root,
+        safety_paths,
+        shared,
+        errors,
+        label=f"SA-{target} allowed file",
+    )
+    if terminal_file_safety != initial_file_safety:
+        errors.append(
+            f"SA-{target}: allowed file identity or bytes changed during validation"
+        )
+    terminal_topology = preflight_tree_no_reparse(root, shared, errors)
+    if terminal_topology != initial_topology:
+        errors.append(
+            f"SA-{target}: semantic-acceptance topology changed during validation"
+        )
     result = {
         "target": target,
         "status": overall,
@@ -3496,6 +4151,17 @@ def validate_actor(
         "coverage_rows": len(rows),
         "failure_count": fail_count,
     }
+    require_terminal_integrity_closure(
+        root,
+        shared,
+        errors,
+        initial_topology=initial_topology,
+        safety_paths=safety_paths,
+        initial_file_safety=initial_file_safety,
+        label=f"SA-{target} allowed file",
+    )
+    if errors:
+        return errors, None
     return errors, result
 
 
@@ -3543,7 +4209,7 @@ def validate_set(
     cache = derived_cache if derived_cache is not None else {}
     if shared.is_link_or_reparse(root) or not root.is_dir():
         return ["semantic-acceptance round root is missing or unsafe"], None
-    preflight_tree_no_reparse(root, shared, errors)
+    initial_topology = preflight_tree_no_reparse(root, shared, errors)
     if errors:
         return errors, None
     process_path = root / "00-process-parameters.json"
@@ -3608,6 +4274,29 @@ def validate_set(
             f"{ACCEPTANCE_DIRECTORY}: file set mismatch; "
             f"missing={sorted(expected_names-actual_names)}, extra={sorted(actual_names-expected_names)}"
         )
+    set_safety_paths = [
+        process_path,
+        *(acceptance_dir / name for name in sorted(expected_names)),
+    ]
+    for target in required_targets(process):
+        set_safety_paths.extend(
+            actor_seed_input_paths(root, process, target, acceptance_dir)
+        )
+        set_safety_paths.extend(
+            root / Path(relative)
+            for relative in target_artifacts(root, process, target, errors)
+        )
+    if gate_path.exists():
+        set_safety_paths.append(gate_path)
+    initial_set_file_safety = capture_safe_file_set(
+        root,
+        set_safety_paths,
+        shared,
+        errors,
+        label="finalized semantic-acceptance file",
+    )
+    if errors:
+        return errors, None
     results: list[dict[str, Any]] = []
     for target in required_targets(process):
         actor_errors, result = validate_actor(
@@ -3645,6 +4334,34 @@ def validate_set(
                 errors.append(f"{GATE_FILE}: gate content/hash closure mismatch")
     elif require_gate:
         errors.append(f"missing required {GATE_FILE}")
+    terminal_set_file_safety = capture_safe_file_set(
+        root,
+        set_safety_paths,
+        shared,
+        errors,
+        label="finalized semantic-acceptance file",
+    )
+    if terminal_set_file_safety != initial_set_file_safety:
+        errors.append(
+            "finalized semantic-acceptance file identity or bytes changed "
+            "during set validation"
+        )
+    terminal_topology = preflight_tree_no_reparse(root, shared, errors)
+    if terminal_topology != initial_topology:
+        errors.append(
+            "finalized semantic-acceptance topology changed during set validation"
+        )
+    require_terminal_integrity_closure(
+        root,
+        shared,
+        errors,
+        initial_topology=initial_topology,
+        safety_paths=set_safety_paths,
+        initial_file_safety=initial_set_file_safety,
+        label="finalized semantic-acceptance file",
+    )
+    if errors:
+        return errors, None
     return errors, expected
 
 
@@ -3682,10 +4399,22 @@ def main(argv: list[str] | None = None) -> int:
         errors, result = validate_actor(
             root, str(args.target), shared, enforce_closed_view=True
         )
-        if result is not None and result.get("status") != "PASS":
+        if not errors and result is None:
             errors.append(
-                f"SA-{args.target}: semantic acceptance is not PASS"
+                f"SA-{args.target}: semantic-acceptance result is missing"
             )
+        if (
+            not errors
+            and result is not None
+            and result.get("status") == "FAIL"
+        ):
+            print("VALID-FAIL")
+            print(
+                f"Current SA-{args.target} pair is mechanically valid and "
+                "records an honest semantic FAIL; freeze it privately, do not "
+                "promote it, and quarantine the retry."
+            )
+            return 3
         return print_result(
             errors,
             f"Current SA-{args.target} view passed the read-only semantic-acceptance gate.",

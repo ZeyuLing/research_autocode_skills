@@ -308,6 +308,22 @@ fresh acceptance pair in the finalized round under `06-semantic-acceptance/`:
 `SA-<target>.md` and `SA-<target>.csv`. Before that SA-pair promotion, the actor
 writes the same two basenames only at the root of its private target-specific
 view; the private view must not contain a `06-semantic-acceptance/` directory.
+Immediately before actor dispatch and while both outputs are absent, Stage O
+runs the canonical SA `verify` command and retains its
+`input_commitment.sha256` outside the private view and finalized round. Every
+promotion must supply that exact value through the required
+`--expected-input-commitment-sha256`; a baseline derived after dispatch is not
+admissible. All opened inputs are named-stream-free single-link regular files
+and their paths, identities, metadata, and bytes must still equal the prelaunch
+commitment before and after exclusive copy. The scoped actor gate and finalized
+`--set`/`--require-gate` gates independently repeat that invariant: every target
+artifact and SA Markdown/CSV pair, plus the materialized root gate when
+required, remains single-link, named-stream-free, and identity/byte stable
+through terminal PASS. A hardlink, hidden NTFS stream, late replacement, or
+late topology change invalidates the set. If an exclusive copy fails on Windows,
+rollback disposes only the already-opened object whose identity and bytes match
+the file created by that invocation; it never performs a check-then-path-unlink
+that could erase a concurrently installed replacement.
 The CSV is authoritative and has the exact schema:
 
 `AcceptanceRowID,TargetUnitType,TargetUnitID,TargetArtifact,TargetArtifactSHA256,CheckClass,AcceptanceDisposition,EvidenceAnchor,SemanticBasis`
@@ -338,6 +354,17 @@ gate/chapter/finding/question/verdict rows name the target report; citation pair
 `03-bibliography-audit-ledger.csv`; and AI rows name
 `05-ai-style-assessment.md`.
 
+The scoped SA CLI has exactly two mechanically completed outcomes. A nonempty,
+fully covered pair with no failed row returns first-line `PASS` and exit `0` and
+is the only pair Stage O may promote. A mechanically valid pair with one or more
+honest failed rows returns first-line `VALID-FAIL` and exit `3`; Stage O
+hash-verifies and preserves that private pair outside every substantive
+allowlist, never invokes promotion or gate materialization for it, and
+quarantines the entire retry. Any other first-line/exit combination is a schema,
+hash, coverage, input, or execution failure rather than a completed semantic
+outcome. Neither the acceptor nor Stage O rewrites a `VALID-FAIL` pair to seek a
+more favorable result.
+
 `EvidenceAnchor` and `SemanticBasis` are row-specific evidence, not ceremonial
 sign-off. Physical-page units name an actual `physical p.<n>`; page-owner rows
 are grounded in the corresponding PNG. Citation-pair rows for `direct`,
@@ -366,22 +393,79 @@ AI rows identify concrete PDF evidence or counter-evidence appropriate to the
 unit. Neither evidence field may assign a grade, command the Chair or defense
 decision, or create/add/invent a thesis finding.
 
-A passing ordinary-reviewer `finding` row uses one compact canonical JSON
-object with the exact ordered outer keys `premise_class`, `target_premise`,
-`supporting_pdf_evidence`, `whole_pdf_resolution`, `residual_gap`, and
-`action_delta`; duplicate, missing, extra, or reordered keys and noncanonical
-JSON spelling fail. `premise_class` is exactly `explicit-positive`,
+The acceptance threshold is reasonable support and admissibility, not personal
+concurrence. A row may pass when the acceptor would choose a different
+severity, weight, emphasis, or final recommendation, so long as the target
+conclusion is concretely supported, bounded by the permitted evidence, does not
+omit decisive counter-evidence, and requests a proportionate action. A normal
+scholarly weighting disagreement is not itself a failed row. Conversely, an
+honest unsupported or uncheckable conclusion remains `fail`; the acceptor must
+not rewrite that judgment merely to make the pair pass.
+
+For a passing `finding` row, `SemanticBasis` is exactly one compact canonical
+JSON object (UTF-8 characters retained, no insignificant whitespace) in this
+closed key order:
+
+```json
+{"assessment_standard":"reasonable-support-not-concurrence","premise_class":"<explicit-positive|bounded-inference|absence-after-search>","target_premise":"<exact parsed target Observation>","supporting_pdf_evidence":"<independently checked PDF fact including the finding's exact physical p.N>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found|not-applicable-positive-local-fact>","pages":["<physical p.N, only when responsive>"],"search_concepts":["<concrete concept used in the whole-PDF search>"],"detail":"<what the responsive passages establish, or what the complete search did not find>"},"residual_gap":{"status":"reasonably-supported","detail":"<why a reasonable reviewer may retain this bounded residual even if the acceptor would weight it differently>"},"action_delta":{"status":"<same-as-target-required-action|narrower-than-target-required-action|different-from-target-required-action>","detail":"<minimum still-unmet action>","independent_reason":"<acceptor's independent reason for that relation>"},"admissibility_result":"reasonably-supported"}
+```
+
+The outer key order is exactly `assessment_standard`, `premise_class`,
+`target_premise`, `supporting_pdf_evidence`, `whole_pdf_resolution`,
+`residual_gap`, `action_delta`, and `admissibility_result`. The two marker
+values are exactly `reasonable-support-not-concurrence` and
+`reasonably-supported`. `premise_class` is exactly `explicit-positive`,
 `bounded-inference`, or `absence-after-search`; the target premise equals the
 parsed finding `Observation`; and supporting evidence includes the finding's
 exact singleton physical page. `whole_pdf_resolution` has the exact ordered keys
 `status,pages,search_concepts,detail`; `residual_gap` has
-`status,detail`; and `action_delta` has
-`status,detail,independent_reason`. All substantive values must be concrete and
-cannot use empty/`N/A`/`none`/Chinese-empty placeholders. A passing ordinary
-reviewer `verdict` row uses one compact canonical JSON object with the exact
-ordered keys `gate_disposition_profile`, `actionable_finding_profile`,
-`synthesis_cue`, `target_verdict`, and `coherence_result`; each value exactly
-equals the validator's canonical JSON projection string for the frozen report.
+`status,detail` and its status is exactly `reasonably-supported`; and
+`action_delta` has `status,detail,independent_reason`. For
+`no-responsive-passage-found`, `pages` is `[]` and `search_concepts` is
+nonempty. `absence-after-search` requires that status; `bounded-inference` may
+use it or `responsive-passages-reviewed`. The
+`not-applicable-positive-local-fact` status is limited to `explicit-positive`
+and uses empty `pages` and `search_concepts`. All substantive values must be
+concrete and cannot use empty/`N/A`/`none`/Chinese-empty placeholders.
+
+For a passing ordinary-reviewer `gate` row, `SemanticBasis` is exactly this
+compact canonical JSON object in the shown key order:
+
+```json
+{"assessment_standard":"reasonable-support-not-concurrence","gate_id":"<exact Gate-A ... Gate-I target unit ID>","target_disposition":"<exact parser-canonical adequate|concern|unverifiable|n/a value; rendered N/A projects to n/a>","target_decisive_evidence":"<exact parsed Decisive evidence cell>","target_related_finding_ids":["<exact parsed related finding IDs in target order>"],"independent_pdf_assessment":{"supporting_pdf_evidence":"<independently rechecked evidence naming at least one physical page from the target decisive-evidence cell>","counterevidence_reviewed":"<concrete responsive neighboring or whole-PDF material checked>","admissibility_reason":"<independent reason the target Gate reading is reasonably supportable>"},"admissibility_result":"reasonably-supported"}
+```
+
+The outer key order is exactly `assessment_standard`, `gate_id`,
+`target_disposition`, `target_decisive_evidence`,
+`target_related_finding_ids`, `independent_pdf_assessment`, and
+`admissibility_result`. The independent assessment has the exact ordered keys
+`supporting_pdf_evidence,counterevidence_reviewed,admissibility_reason`. The
+three target values and related-ID array bind the parser-canonical Gate row
+exactly; a rendered target disposition `N/A` therefore binds as lowercase
+`n/a` with an empty related-ID array. A `concern` Gate retains at least one
+mapped actionable finding. The independent assessment is concrete and cannot
+merely copy the target decisive-evidence cell.
+
+For a passing ordinary-reviewer `question` row, `SemanticBasis` is exactly this
+compact canonical JSON object in the shown key order:
+
+```json
+{"assessment_standard":"reasonable-support-not-concurrence","target_question":"<exact parsed Question cell>","target_why_unresolved":"<exact parsed Why unresolved cell>","target_needed_evidence":"<exact parsed Needed clarification/evidence cell>","target_page":"<exact parsed physical p.N anchor>","whole_pdf_resolution":{"status":"<responsive-passages-reviewed|no-responsive-passage-found>","pages":["<physical p.N for every responsive passage reviewed>"],"search_concepts":["<concrete concepts used across the frozen PDF>"],"detail":"<why the bounded question remains reasonably open after that check>"},"admissibility_result":"reasonably-supported"}
+```
+
+The outer key order is exactly `assessment_standard`, `target_question`,
+`target_why_unresolved`, `target_needed_evidence`, `target_page`,
+`whole_pdf_resolution`, and `admissibility_result`. All four target strings
+bind the parsed Question row exactly. For `responsive-passages-reviewed`, both
+`pages` and `search_concepts` are nonempty; for
+`no-responsive-passage-found`, `pages` is empty and `search_concepts` is
+nonempty. Generic acceptance prose is invalid for either Gate or Question.
+
+A passing ordinary reviewer `verdict` row uses one compact canonical JSON
+object with the exact ordered keys `gate_disposition_profile`,
+`actionable_finding_profile`, `synthesis_cue`, `target_verdict`, and
+`coherence_result`; each value exactly equals the validator's canonical JSON
+projection string for the frozen report.
 After URL, hash, IDs, numbers, and whitespace are normalized, the same basis may
 not be copied across twelve or more units of one type. This mechanical alarm is
 only a minimum: a smaller repeated template, title interpolation, a generic
@@ -465,6 +549,16 @@ Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these to
 
 `received_blocks`, `opened_inputs`, `limitations`, and `recipient_stages` are arrays. The fresh-context string is canonical, and `input_receipt_access_declaration` must exactly serialize `received_blocks`, `opened_inputs`, and the three clean-access statements; prose cannot contradict or compensate for the arrays. `outputs` is a non-empty array of objects with exactly `file` and `sha256`; `file` is a neutral basename inside `helpers/`, and its hash is verified. The prompt and PDF hashes are 64 hexadecimal characters; both PDF hashes equal the frozen PDF. Every non-provenance file in `helpers/` must be registered by exactly one provenance record. For every declared recipient actor, the canonical opened list appends the provenance path and all output paths in deterministic helper/output order; every artifact signed by that actor must report those inputs. Unregistered, multiply registered, missing, path-traversing, unconsumed, or hash-mismatched helper output invalidates the bundle. If no helper is consumed, omit the `helpers/` directory.
 
+For Chair materialization, Stage O also serializes that exact C-recipient
+projection as repeated `--helper-input helpers/<portable-basename>` arguments in
+the frozen C prompt. The sequence is ascending `Hxx-provenance.json` order,
+with each provenance immediately followed by its declared outputs. The scoped
+materializer validates and opens only those exact single-link regular files;
+it never discovers, opens, or rejects sibling helpers assigned only to R/AI.
+Missing, reordered, duplicate, hardlinked/reparse-backed, wrong-recipient,
+schema-invalid, or hash-invalid declared C inputs fail before any Chair output
+is written. Omit the arguments when C consumes no helper.
+
 ## 3. Mandatory stage gates and final validation
 
 Every actor with deterministic cross-artifact projections first runs the same
@@ -476,7 +570,7 @@ production pre-freeze materializer:
 | Doctoral R5 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R5` | `02-page-layout-ledger.md`, `03-bibliography-audit-ledger.md`, `R5-comprehensive-review.md` receipt endpoint list |
 | Master's R3 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R3` | `02`, `03`, `04` Markdown masters and `R3-comprehensive-review.md` receipt endpoint list |
 | Stage O after all SA targets pass | `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>` | `06-semantic-acceptance-gate.json` only; no R/AI/SA semantic artifact |
-| C | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
+| C | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
 | S | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` | all three wholly derived `93` outputs, including both open-row CSV subsets and every closed Markdown projection |
 
 The materializer must exit `0` with first nonempty stdout `MATERIALIZED`. It is
@@ -503,7 +597,7 @@ Each gate passes only when it exits `0` and its first nonempty stdout line is ex
 
 For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P packet or any other frozen input. A packet/frozen-input diagnostic requires R5 to stop and report failure to Stage O; it is never repaired inside the R5 stage.
 
-The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Each SA scoped gate opens one closed target-specific view and no peer acceptance. Stage O alone checks the complete SA set and materializes its hash gate. Chair materialization and its gate use the closed C allowlist, which contains only that hash gate and never individual SA files; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; neither opens the PDF, packet, `02`--`04`, individual SA files, the SA hash gate, helpers, prior artifacts, or `95`. All validators except the two explicitly named deterministic materializers are read-only and create no `95-bundle-validation.md`.
+The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Each SA scoped gate opens one closed target-specific view and no peer acceptance. Stage O alone checks the complete SA set and materializes its hash gate. Chair materialization and its gate use the closed C allowlist, which contains only that hash gate and never individual SA files; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; the gate requires its standalone process snapshot to equal the process entry in the complete stable-handle snapshot and serves every semantic CSV/Markdown read from those captured bytes. Every member is single-link, named-stream-free, and identity/byte stable through the terminal scoped PASS. Neither opens the PDF, packet, `02`--`04`, individual SA files, the SA hash gate, helpers, prior artifacts, or `95`. All validators except the two explicitly named deterministic materializers are read-only and create no `95-bundle-validation.md`.
 
 The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL except for the closed dangling-citation contract, where it and `ExactSourceLocator` remain blank. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Each URL occurrence is checked independently and every marked auxiliary must itself pass the complete source-endpoint gate. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
 

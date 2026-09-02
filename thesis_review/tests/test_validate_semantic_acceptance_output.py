@@ -97,6 +97,40 @@ def remove_ephemeral_sa_view_rules(root: Path) -> None:
     shutil.rmtree(root / "rules", ignore_errors=True)
 
 
+def retain_scoped_actor_view(
+    root: Path, process: dict[str, object], target: str
+) -> None:
+    keep = set(MODULE.canonical_sa_opened_inputs(root, process, target, []))
+    keep.update({f"SA-{target}.md", f"SA-{target}.csv"})
+    allowed_dirs = {
+        Path(item).parts[0]
+        for item in keep
+        if len(Path(item).parts) > 1
+    }
+    for path in list(root.iterdir()):
+        if path.is_file() and path.name not in keep:
+            path.unlink()
+        elif path.is_dir() and path.name not in allowed_dirs:
+            shutil.rmtree(path)
+
+
+def overwrite_same_length_and_restore_mtime(path: Path) -> None:
+    metadata = path.stat()
+    payload = bytearray(path.read_bytes())
+    index = next(
+        index
+        for index in range(len(payload) - 1, -1, -1)
+        if payload[index] not in {10, 13}
+    )
+    payload[index] = ord("!") if payload[index] != ord("!") else ord("?")
+    with path.open("r+b") as handle:
+        handle.seek(0)
+        handle.write(payload)
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.utime(path, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+
+
 class SemanticAcceptanceFixture:
     endpoint = "https://example.org/source"
 
@@ -574,6 +608,7 @@ none
                     f"physical p.{target_page}, exact target finding and supporting passage"
                 )
                 basis = json.dumps({
+                    "assessment_standard": MODULE.REASONABLE_SUPPORT_STANDARD,
                     "premise_class": "explicit-positive",
                     "target_premise": fields["Observation"],
                     "supporting_pdf_evidence": f"physical p.{target_page}, the exact observed passage supports the bounded finding",
@@ -584,14 +619,15 @@ none
                         "detail": "The responsive passage was reviewed in the context of the complete frozen PDF.",
                     },
                     "residual_gap": {
-                        "status": "present",
-                        "detail": "The stated limitation remains within the target finding's documented scope.",
+                        "status": MODULE.REASONABLY_SUPPORTED,
+                        "detail": "A reasonable reviewer could retain the stated limitation within the target finding's documented scope even if another reviewer would assign it less weight.",
                     },
                     "action_delta": {
                         "status": "same-as-target-required-action",
                         "detail": fields["Required action"],
                         "independent_reason": "The PDF evidence leaves the target remedy necessary without broadening it.",
                     },
+                    "admissibility_result": MODULE.REASONABLY_SUPPORTED,
                 }, ensure_ascii=False, separators=(",", ":"))
             elif unit_type in {
                 "gate", "chapter", "question", "ai-finding"
@@ -610,15 +646,52 @@ none
                 else:
                     anchor = "physical p.1-5, representative exact thesis clauses"
                 if unit_type == "gate":
-                    basis = (
-                        f"Gate-specific independent inspection for {unit_id} compares "
-                        "the stated criterion with concrete thesis evidence and the target decision."
-                    )
+                    gate = reviewer_profile["gates"][unit_id]
+                    gate_concept = {
+                        "Gate-A": "problem formulation and research significance",
+                        "Gate-B": "technical correctness and methodological validity",
+                        "Gate-C": "novelty and contribution boundaries",
+                        "Gate-D": "experimental design and comparative evidence",
+                        "Gate-E": "claim calibration and inferential support",
+                        "Gate-F": "thesis organization and cross-chapter continuity",
+                        "Gate-G": "terminology clarity and scholarly expression",
+                        "Gate-H": "citation attachment and bibliographic integrity",
+                        "Gate-I": "submission readiness and defense risk",
+                    }[unit_id]
+                    basis = json.dumps({
+                        "assessment_standard": MODULE.REASONABLE_SUPPORT_STANDARD,
+                        "gate_id": unit_id,
+                        "target_disposition": gate["target_disposition"],
+                        "target_decisive_evidence": gate["target_decisive_evidence"],
+                        "target_related_finding_ids": gate["target_related_finding_ids"],
+                        "independent_pdf_assessment": {
+                            "supporting_pdf_evidence": f"{gate['target_decisive_evidence']}, independently checked for {gate_concept}",
+                            "counterevidence_reviewed": f"physical p.4, neighboring discussion bearing on {gate_concept} was checked for an answer or qualification.",
+                            "admissibility_reason": f"The cited {gate_concept} evidence makes this bounded Gate disposition reasonably supportable even if another reviewer would assign different weight.",
+                        },
+                        "admissibility_result": MODULE.REASONABLY_SUPPORTED,
+                    }, ensure_ascii=False, separators=(",", ":"))
                 elif unit_type == "chapter":
                     basis = (
                         f"Chapter-wide PDF reading for {unit_id} traces its methods, "
                         "experiments, limitations, and the target review's treatment."
                     )
+                elif unit_type == "question":
+                    question = reviewer_profile["questions"][unit_id]
+                    basis = json.dumps({
+                        "assessment_standard": MODULE.REASONABLE_SUPPORT_STANDARD,
+                        "target_question": question["target_question"],
+                        "target_why_unresolved": question["target_why_unresolved"],
+                        "target_needed_evidence": question["target_needed_evidence"],
+                        "target_page": question["target_page"],
+                        "whole_pdf_resolution": {
+                            "status": "responsive-passages-reviewed",
+                            "pages": [question["target_page"]],
+                            "search_concepts": ["the protocol choice and the terminology used by the unresolved question"],
+                            "detail": "The responsive passages were checked across the frozen PDF and still leave the bounded clarification reasonably open.",
+                        },
+                        "admissibility_result": MODULE.REASONABLY_SUPPORTED,
+                    }, ensure_ascii=False, separators=(",", ":"))
                 else:
                     basis = (
                         f"Item-level frozen-PDF verification for {unit_id} confirms "
@@ -749,6 +822,61 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             self.assertEqual(0, cli.returncode, cli.stdout + cli.stderr)
             self.assertTrue(cli.stdout.startswith("PASS\n"), cli.stdout)
             self.assertEqual(before, after)
+
+    def test_actor_terminal_closure_rejects_post_preflight_late_drift(self) -> None:
+        for mutation_kind in ("hardlink", "topology", "bytes"):
+            with (
+                self.subTest(mutation_kind=mutation_kind),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                base = Path(directory)
+                root = base / "actor-view"
+                root.mkdir()
+                fixture = SemanticAcceptanceFixture(root)
+                fixture.write_acceptance("R1", root)
+                retain_scoped_actor_view(root, fixture.process, "R1")
+                target = root / "SA-R1.md"
+                alias = base / "SA-R1-late-alias.md"
+                original_preflight = MODULE.preflight_tree_no_reparse
+                calls = 0
+
+                def mutate_after_terminal_preflight(*args, **kwargs):
+                    nonlocal calls
+                    snapshot = original_preflight(*args, **kwargs)
+                    calls += 1
+                    if calls == 2:
+                        if mutation_kind == "hardlink":
+                            os.link(target, alias)
+                        elif mutation_kind == "topology":
+                            (root / "late-extra.txt").write_text(
+                                "late topology drift\n", encoding="utf-8"
+                            )
+                        else:
+                            overwrite_same_length_and_restore_mtime(target)
+                    return snapshot
+
+                with mock.patch.object(
+                    MODULE,
+                    "preflight_tree_no_reparse",
+                    side_effect=mutate_after_terminal_preflight,
+                ):
+                    errors, result = MODULE.validate_actor(
+                        root, "R1", SHARED, enforce_closed_view=True
+                    )
+                self.assertEqual(2, calls)
+                self.assertIsNone(result)
+                self.assertTrue(errors)
+                expected_error = (
+                    "terminal topology closure mismatch"
+                    if mutation_kind == "topology"
+                    else "terminal file identity or bytes closure mismatch"
+                )
+                self.assertTrue(
+                    any(expected_error in error for error in errors),
+                    errors,
+                )
+                if mutation_kind == "hardlink":
+                    self.assertEqual(2, target.stat().st_nlink)
 
     def test_ordinary_acceptance_requires_every_rendered_body_chapter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -1390,6 +1518,26 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
         self.assertTrue(any("exact closed key order" in error for error in errors), errors)
 
         errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row, {"assessment_standard": "independent-concurrence"}
+            )
+        )
+        self.assertTrue(
+            any("assessment_standard must be exactly" in error for error in errors),
+            errors,
+        )
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row, {"admissibility_result": "reviewer-agrees"}
+            )
+        )
+        self.assertTrue(
+            any("admissibility_result must be exactly" in error for error in errors),
+            errors,
+        )
+
+        errors = run_mutation(
             lambda row, _fields: rewrite(row, {"premise_class": "free-form"})
         )
         self.assertTrue(any("premise class must be exactly" in error for error in errors), errors)
@@ -1412,6 +1560,21 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             )
         )
         self.assertTrue(any("residual_gap detail" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row, _fields: rewrite(
+                row,
+                {
+                    "residual_gap": {
+                        "status": "present",
+                        "detail": "The bounded concern remains after whole-PDF review.",
+                    }
+                },
+            )
+        )
+        self.assertTrue(
+            any("residual_gap status" in error for error in errors), errors
+        )
 
         errors = run_mutation(
             lambda row, _fields: rewrite(
@@ -1458,6 +1621,41 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             errors,
         )
 
+        for label, invalid_pages in (
+            ("mixed invalid", ["physical p.3", "not-a-page"]),
+            ("out of range", ["physical p.3", "physical p.999"]),
+            ("range", ["physical p.3-4"]),
+            ("duplicate", ["physical p.3", "physical p.3"]),
+        ):
+            with self.subTest(finding_page_array=label):
+                errors = run_mutation(
+                    lambda row, _fields, invalid_pages=invalid_pages: rewrite(
+                        row,
+                        {
+                            "whole_pdf_resolution": {
+                                "status": "responsive-passages-reviewed",
+                                "pages": invalid_pages,
+                                "search_concepts": [
+                                    "the bounded proposition throughout the frozen PDF"
+                                ],
+                                "detail": "The responsive passages were inspected independently in context.",
+                            }
+                        },
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        "whole_pdf_resolution pages" in error
+                        and (
+                            "canonical" in error
+                            or "outside" in error
+                            or "duplicate-free" in error
+                        )
+                        for error in errors
+                    ),
+                    errors,
+                )
+
         errors = run_mutation(
             lambda row, fields: rewrite(
                 row,
@@ -1469,6 +1667,43 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             )
         )
         self.assertEqual([], errors)
+
+    def test_passing_finding_nested_values_and_action_delta_contract(self) -> None:
+        def run_mutation(mutator):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                fields = fixture.install_reviewer_finding("R1")
+                fixture.write_acceptance("R1", root)
+                csv_path = root / "SA-R1.csv"
+                rows = MODULE.read_csv_rows(csv_path, [])
+                finding = next(
+                    row for row in rows if row["TargetUnitType"] == "finding"
+                )
+                mutator(finding, fields)
+                write_csv(csv_path, MODULE.CSV_COLUMNS, rows)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                return errors
+
+        def rewrite(finding, changes):
+            parse_errors: list[str] = []
+            parsed = MODULE.parse_closed_ordered_semantic_basis(
+                finding["SemanticBasis"],
+                MODULE.FINDING_SEMANTIC_BASIS_LABELS,
+                "fixture",
+                parse_errors,
+            )
+            if parse_errors:
+                raise AssertionError(parse_errors)
+            parsed.update(changes)
+            finding["SemanticBasis"] = json.dumps(
+                {
+                    label: parsed[label]
+                    for label in MODULE.FINDING_SEMANTIC_BASIS_LABELS
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
 
         for label, changes in (
             (
@@ -1492,7 +1727,7 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             (
                 "residual_gap detail",
                 {"residual_gap": {
-                    "status": "present",
+                    "status": MODULE.REASONABLY_SUPPORTED,
                     "detail": ["not", "a", "string"],
                 }},
             ),
@@ -1589,6 +1824,265 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             )
         )
         self.assertEqual([], errors)
+
+    def test_passing_gate_requires_exact_target_binding_and_independent_pdf_basis(self) -> None:
+        def run_mutation(mutator):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                fixture.install_reviewer_finding("R1")
+                fixture.write_acceptance("R1", root)
+                csv_path = root / "SA-R1.csv"
+                rows = MODULE.read_csv_rows(csv_path, [])
+                gate = next(
+                    row
+                    for row in rows
+                    if row["TargetUnitType"] == "gate"
+                    and row["TargetUnitID"] == "Gate-A"
+                )
+                mutator(gate)
+                write_csv(csv_path, MODULE.CSV_COLUMNS, rows)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                return errors
+
+        def rewrite(gate, changes):
+            parse_errors: list[str] = []
+            parsed = MODULE.parse_closed_ordered_semantic_basis(
+                gate["SemanticBasis"],
+                MODULE.GATE_SEMANTIC_BASIS_LABELS,
+                "fixture",
+                parse_errors,
+            )
+            if parse_errors:
+                raise AssertionError(parse_errors)
+            parsed.update(changes)
+            gate["SemanticBasis"] = json.dumps(
+                {
+                    label: parsed[label]
+                    for label in MODULE.GATE_SEMANTIC_BASIS_LABELS
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = SemanticAcceptanceFixture(root)
+            fixture.install_reviewer_finding("R1")
+            fixture.write_acceptance("R1", root)
+            errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+            self.assertEqual([], errors)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture = SemanticAcceptanceFixture(root)
+            report = root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8").replace(
+                    "| A | baseline | adequate | physical p.3, inspected thesis passage for Gate A | none | high confidence within the frozen PDF |",
+                    "| A | baseline | N/A | physical p.3, inspected thesis passage for Gate A | none | high confidence within the frozen PDF |",
+                ),
+                encoding="utf-8",
+            )
+            fixture.write_acceptance("R1", root)
+            rows = MODULE.read_csv_rows(root / "SA-R1.csv", [])
+            gate_a = next(row for row in rows if row["TargetUnitID"] == "Gate-A")
+            parsed = json.loads(gate_a["SemanticBasis"])
+            self.assertEqual("n/a", parsed["target_disposition"])
+            errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+            self.assertEqual([], errors)
+            parsed["target_disposition"] = "adequate"
+            gate_a["SemanticBasis"] = json.dumps(
+                {
+                    label: parsed[label]
+                    for label in MODULE.GATE_SEMANTIC_BASIS_LABELS
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            write_csv(root / "SA-R1.csv", MODULE.CSV_COLUMNS, rows)
+            errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+            self.assertTrue(any("target_disposition" in error for error in errors), errors)
+
+        for label, changes in (
+            ("target disposition", {"target_disposition": "adequate"}),
+            (
+                "target decisive evidence",
+                {
+                    "target_decisive_evidence": (
+                        "physical p.4, unrelated evidence from a different page"
+                    )
+                },
+            ),
+            ("related finding IDs", {"target_related_finding_ids": []}),
+        ):
+            with self.subTest(binding=label):
+                errors = run_mutation(
+                    lambda row, changes=changes: rewrite(row, changes)
+                )
+                self.assertTrue(
+                    any("exactly bind" in error for error in errors), errors
+                )
+
+        errors = run_mutation(
+            lambda row: row.update(
+                {
+                    "SemanticBasis": (
+                        "Gate-specific independent inspection says this looks "
+                        "reasonable after reading the thesis."
+                    )
+                }
+            )
+        )
+        self.assertTrue(any("canonical JSON" in error for error in errors), errors)
+
+        def replace_support_page(row):
+            parse_errors: list[str] = []
+            parsed = MODULE.parse_closed_ordered_semantic_basis(
+                row["SemanticBasis"],
+                MODULE.GATE_SEMANTIC_BASIS_LABELS,
+                "fixture",
+                parse_errors,
+            )
+            if parse_errors:
+                raise AssertionError(parse_errors)
+            assessment = dict(parsed["independent_pdf_assessment"])
+            assessment["supporting_pdf_evidence"] = (
+                "physical p.4, unrelated passage after an independent check"
+            )
+            rewrite(row, {"independent_pdf_assessment": assessment})
+
+        errors = run_mutation(replace_support_page)
+        self.assertTrue(
+            any("recheck at least one page" in error for error in errors), errors
+        )
+
+    def test_passing_question_requires_exact_target_binding_and_whole_pdf_resolution(self) -> None:
+        def install_question(fixture):
+            report = fixture.root / "R1-comprehensive-review.md"
+            report.write_text(
+                report.read_text(encoding="utf-8")
+                + (
+                    "| R1-Q01 | physical p.4 | Which protocol variant is used "
+                    "in the reported result? | The rendered methods text leaves "
+                    "two variants possible. | State the selected variant in the "
+                    "revised PDF. |\n"
+                ),
+                encoding="utf-8",
+            )
+
+        def run_mutation(mutator):
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                install_question(fixture)
+                fixture.write_acceptance("R1", root)
+                csv_path = root / "SA-R1.csv"
+                rows = MODULE.read_csv_rows(csv_path, [])
+                question = next(
+                    row for row in rows if row["TargetUnitType"] == "question"
+                )
+                mutator(question)
+                write_csv(csv_path, MODULE.CSV_COLUMNS, rows)
+                errors, _ = MODULE.validate_actor(root, "R1", SHARED)
+                return errors
+
+        def rewrite(question, changes):
+            parse_errors: list[str] = []
+            parsed = MODULE.parse_closed_ordered_semantic_basis(
+                question["SemanticBasis"],
+                MODULE.QUESTION_SEMANTIC_BASIS_LABELS,
+                "fixture",
+                parse_errors,
+            )
+            if parse_errors:
+                raise AssertionError(parse_errors)
+            parsed.update(changes)
+            question["SemanticBasis"] = json.dumps(
+                {
+                    label: parsed[label]
+                    for label in MODULE.QUESTION_SEMANTIC_BASIS_LABELS
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+
+        for label, changes in (
+            ("question", {"target_question": "A different unresolved question."}),
+            ("why", {"target_why_unresolved": "A different reason."}),
+            ("needed evidence", {"target_needed_evidence": "Different evidence."}),
+            ("page", {"target_page": "physical p.3"}),
+        ):
+            with self.subTest(binding=label):
+                errors = run_mutation(
+                    lambda row, changes=changes: rewrite(row, changes)
+                )
+                self.assertTrue(
+                    any("exactly bind" in error for error in errors), errors
+                )
+
+        errors = run_mutation(
+            lambda row: row.update(
+                {
+                    "SemanticBasis": (
+                        "The question remains reasonable after a general PDF read."
+                    )
+                }
+            )
+        )
+        self.assertTrue(any("canonical JSON" in error for error in errors), errors)
+
+        errors = run_mutation(
+            lambda row: rewrite(
+                row,
+                {
+                    "whole_pdf_resolution": {
+                        "status": "no-responsive-passage-found",
+                        "pages": ["physical p.4"],
+                        "search_concepts": ["the bounded unresolved protocol choice"],
+                        "detail": "The stated search did not locate a responsive passage.",
+                    }
+                },
+            )
+        )
+        self.assertTrue(
+            any("requires empty pages" in error for error in errors), errors
+        )
+
+        for label, invalid_pages in (
+            ("mixed invalid", ["physical p.4", "not-a-page"]),
+            ("out of range", ["physical p.4", "physical p.999"]),
+            ("range", ["physical p.3-4"]),
+            ("duplicate", ["physical p.4", "physical p.4"]),
+        ):
+            with self.subTest(question_page_array=label):
+                errors = run_mutation(
+                    lambda row, invalid_pages=invalid_pages: rewrite(
+                        row,
+                        {
+                            "whole_pdf_resolution": {
+                                "status": "responsive-passages-reviewed",
+                                "pages": invalid_pages,
+                                "search_concepts": [
+                                    "the bounded unresolved protocol choice"
+                                ],
+                                "detail": "The responsive passages were checked across the frozen PDF.",
+                            }
+                        },
+                    )
+                )
+                self.assertTrue(
+                    any(
+                        "question whole_pdf_resolution pages" in error
+                        and (
+                            "canonical" in error
+                            or "outside" in error
+                            or "duplicate-free" in error
+                        )
+                        for error in errors
+                    ),
+                    errors,
+                )
 
     def test_passing_verdict_exactly_projects_report_profiles_and_coherence(self) -> None:
         for cue_label in MODULE.VERDICT_SEMANTIC_BASIS_LABELS:
@@ -2540,6 +3034,209 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             self.assertTrue(any("target artifact hash mismatch" in error for error in errors), errors)
             self.assertTrue(any("gate content/hash closure mismatch" in error for error in errors), errors)
 
+    def test_finalized_set_rejects_hardlinked_acceptance_pair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "round"
+            root.mkdir()
+            fixture = SemanticAcceptanceFixture(root)
+            acceptance_dir = root / MODULE.ACCEPTANCE_DIRECTORY
+            for target in fixture.targets:
+                fixture.write_acceptance(target, acceptance_dir)
+            remove_ephemeral_sa_view_rules(root)
+            os.link(acceptance_dir / "SA-R1.md", base / "SA-R1-alias.md")
+            errors, expected = MODULE.validate_set(
+                root, SHARED, require_gate=False
+            )
+            self.assertIsNone(expected)
+            self.assertTrue(
+                any("single-link" in error for error in errors), errors
+            )
+
+    def test_set_terminal_closure_rejects_post_preflight_late_drift(self) -> None:
+        for mutation_kind in ("hardlink", "topology", "bytes", "target-bytes"):
+            with (
+                self.subTest(mutation_kind=mutation_kind),
+                tempfile.TemporaryDirectory() as directory,
+            ):
+                base = Path(directory)
+                root = base / "round"
+                root.mkdir()
+                fixture = SemanticAcceptanceFixture(root)
+                acceptance_dir = root / MODULE.ACCEPTANCE_DIRECTORY
+                for target_name in fixture.targets:
+                    fixture.write_acceptance(target_name, acceptance_dir)
+                remove_ephemeral_sa_view_rules(root)
+                materialized = MATERIALIZER_MODULE.materialize(root, MODULE)
+                self.assertEqual([], materialized)
+                target = (
+                    root / "R1-comprehensive-review.md"
+                    if mutation_kind == "target-bytes"
+                    else acceptance_dir / "SA-R1.md"
+                )
+                alias = base / "SA-R1-late-set-alias.md"
+                original_preflight = MODULE.preflight_tree_no_reparse
+                calls = 0
+
+                def mutate_after_set_terminal_preflight(*args, **kwargs):
+                    nonlocal calls
+                    snapshot = original_preflight(*args, **kwargs)
+                    calls += 1
+                    if calls == 10:
+                        if mutation_kind == "hardlink":
+                            os.link(target, alias)
+                        elif mutation_kind == "topology":
+                            (root / "late-set-extra.txt").write_text(
+                                "late set topology drift\n", encoding="utf-8"
+                            )
+                        else:
+                            overwrite_same_length_and_restore_mtime(target)
+                    return snapshot
+
+                with mock.patch.object(
+                    MODULE,
+                    "preflight_tree_no_reparse",
+                    side_effect=mutate_after_set_terminal_preflight,
+                ):
+                    errors, expected = MODULE.validate_set(
+                        root, SHARED, require_gate=True
+                    )
+                self.assertEqual(10, calls)
+                self.assertIsNone(expected)
+                self.assertTrue(errors)
+                expected_error = (
+                    "terminal topology closure mismatch"
+                    if mutation_kind == "topology"
+                    else "terminal file identity or bytes closure mismatch"
+                )
+                self.assertTrue(
+                    any(expected_error in error for error in errors),
+                    errors,
+                )
+                if mutation_kind == "hardlink":
+                    self.assertEqual(2, target.stat().st_nlink)
+
+    def test_materializer_rejects_second_set_terminal_hardlink_and_removes_gate(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = base / "round"
+            root.mkdir()
+            fixture = SemanticAcceptanceFixture(root)
+            acceptance_dir = root / MODULE.ACCEPTANCE_DIRECTORY
+            for target_name in fixture.targets:
+                fixture.write_acceptance(target_name, acceptance_dir)
+            remove_ephemeral_sa_view_rules(root)
+            target = acceptance_dir / "SA-R1.md"
+            alias = base / "SA-R1-late-materializer-alias.md"
+            original_preflight = MODULE.preflight_tree_no_reparse
+            calls = 0
+
+            def hardlink_after_second_set_terminal_preflight(*args, **kwargs):
+                nonlocal calls
+                snapshot = original_preflight(*args, **kwargs)
+                calls += 1
+                if calls == 20:
+                    os.link(target, alias)
+                return snapshot
+
+            with mock.patch.object(
+                MODULE,
+                "preflight_tree_no_reparse",
+                side_effect=hardlink_after_second_set_terminal_preflight,
+            ):
+                errors = MATERIALIZER_MODULE.materialize(root, MODULE)
+            self.assertEqual(20, calls)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any(
+                    "terminal file identity or bytes closure mismatch" in error
+                    for error in errors
+                ),
+                errors,
+            )
+            self.assertFalse((root / MODULE.GATE_FILE).exists())
+            self.assertEqual(2, target.stat().st_nlink)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS stream test is Windows-specific")
+    def test_finalized_set_rejects_named_streams_on_pair_and_gate(self) -> None:
+        for target_kind in ("pair", "gate"):
+            with self.subTest(target_kind=target_kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                acceptance_dir = root / MODULE.ACCEPTANCE_DIRECTORY
+                for target in fixture.targets:
+                    fixture.write_acceptance(target, acceptance_dir)
+                remove_ephemeral_sa_view_rules(root)
+                require_gate = target_kind == "gate"
+                if require_gate:
+                    materialized = self.run_materializer(root)
+                    self.assertEqual(
+                        0,
+                        materialized.returncode,
+                        materialized.stdout + materialized.stderr,
+                    )
+                    target = root / MODULE.GATE_FILE
+                else:
+                    target = acceptance_dir / "SA-R2.csv"
+                stream = Path(f"{target}:semantic-set-regression")
+                try:
+                    stream.write_bytes(b"hidden semantic-acceptance stream\n")
+                except OSError as exc:
+                    self.skipTest(
+                        f"fixture volume cannot create NTFS named streams: {exc}"
+                    )
+                errors, _ = MODULE.validate_set(
+                    root, SHARED, require_gate=require_gate
+                )
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any("NTFS named" in error or "unsafe" in error for error in errors),
+                    errors,
+                )
+
+    def test_finalized_set_rejects_late_pair_and_target_identity_replacement(self) -> None:
+        for target_kind in ("pair", "target"):
+            with self.subTest(target_kind=target_kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                fixture = SemanticAcceptanceFixture(root)
+                acceptance_dir = root / MODULE.ACCEPTANCE_DIRECTORY
+                for target in fixture.targets:
+                    fixture.write_acceptance(target, acceptance_dir)
+                remove_ephemeral_sa_view_rules(root)
+                replacement_target = (
+                    acceptance_dir / "SA-R1.md"
+                    if target_kind == "pair"
+                    else root / "R1-comprehensive-review.md"
+                )
+                original_expected_gate = MODULE.expected_gate
+
+                def replace_after_gate_projection(*args, **kwargs):
+                    result = original_expected_gate(*args, **kwargs)
+                    payload = replacement_target.read_bytes()
+                    replacement_target.unlink()
+                    replacement_target.write_bytes(payload)
+                    return result
+
+                with mock.patch.object(
+                    MODULE,
+                    "expected_gate",
+                    side_effect=replace_after_gate_projection,
+                ):
+                    errors, _ = MODULE.validate_set(
+                        root, SHARED, require_gate=False
+                    )
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any(
+                        "identity or bytes changed" in error
+                        or "topology changed" in error
+                        for error in errors
+                    ),
+                    errors,
+                )
+
     def test_round_set_rejects_root_level_actor_output_leaks(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2641,9 +3338,10 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             self.assertEqual([], errors)
             self.assertEqual("FAIL", result["status"])
             cli = self.run_validator(str(root), "R1")
-            self.assertNotEqual(0, cli.returncode)
-            self.assertTrue(cli.stdout.startswith("FAIL\n"), cli.stdout)
-            self.assertIn("semantic acceptance is not PASS", cli.stdout)
+            self.assertEqual(3, cli.returncode)
+            self.assertTrue(cli.stdout.startswith("VALID-FAIL\n"), cli.stdout)
+            self.assertIn("do not promote", cli.stdout)
+            self.assertIn("quarantine", cli.stdout)
 
     def test_acceptance_directory_rejects_extra_or_missing_actor_file(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

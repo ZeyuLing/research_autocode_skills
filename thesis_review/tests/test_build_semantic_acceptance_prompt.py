@@ -101,6 +101,12 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
         arguments_list = list(arguments)
         if (
             arguments_list
+            and arguments_list[0] in {"plan", "verify", "promote"}
+            and "--python-executable" not in arguments_list
+        ):
+            arguments_list.extend(["--python-executable", sys.executable])
+        if (
+            arguments_list
             and arguments_list[0] in {"verify", "promote"}
             and "--expected-process-sha256" not in arguments_list
         ):
@@ -154,6 +160,31 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
         self.assertTrue(result.stdout.startswith("PLANNED\n"), result.stdout)
         return json.loads(result.stdout.splitlines()[1])
 
+    def verify_one_prelaunch(
+        self,
+        view: Path,
+        prompt: Path,
+        target: str,
+        expected_process_hash: str,
+    ) -> dict[str, object]:
+        result = self.run_helper(
+            "verify",
+            "--view-root",
+            str(view),
+            "--prompt",
+            str(prompt),
+            "--target",
+            target,
+            "--expected-process-sha256",
+            expected_process_hash,
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.startswith("VERIFIED\n"), result.stdout)
+        metadata = json.loads(result.stdout.splitlines()[1])
+        self.assertEqual("absent", metadata["sa_output_state"])
+        self.assertRegex(metadata["input_commitment"]["sha256"], r"^[0-9A-F]{64}$")
+        return metadata
+
     def test_plan_is_pre_stage_p_algorithmic_deterministic_and_endpoint_free(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -189,10 +220,42 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     self.assertIn(f"- {private_csv}", prompt)
                     self.assertNotIn(str(nested_md), prompt)
                     self.assertNotIn(str(nested_csv), prompt)
+                    expected_argv = [
+                        str(Path(sys.executable).resolve()),
+                        "-B",
+                        str(
+                            view.resolve()
+                            / "rules"
+                            / "scripts"
+                            / "validate_semantic_acceptance_output.py"
+                        ),
+                        str(view.resolve()),
+                        target,
+                    ]
                     self.assertIn(
-                        f'python -B "{view.resolve() / "rules" / "scripts" / "validate_semantic_acceptance_output.py"}" '
-                        f'"{view.resolve()}" "{target}"',
+                        json.dumps(
+                            expected_argv,
+                            ensure_ascii=False,
+                            separators=(",", ":"),
+                        ),
                         prompt,
+                    )
+                    self.assertIn(
+                        '{"PYTHONDONTWRITEBYTECODE":"1"}',
+                        prompt,
+                    )
+                    self.assertNotIn("\npython -B ", prompt)
+                    self.assertIn(
+                        f"Bound Python executable: {Path(sys.executable).resolve()}",
+                        prompt,
+                    )
+                    self.assertEqual(
+                        str(Path(sys.executable).resolve()),
+                        metadata["python_executable"],
+                    )
+                    self.assertEqual(
+                        digest(Path(sys.executable).resolve()),
+                        metadata["python_executable_identity"]["sha256"],
                     )
                     self.assertIn(
                         f"Do not create or write {view.resolve() / VALIDATOR.ACCEPTANCE_DIRECTORY}",
@@ -220,6 +283,26 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         "No dynamic public endpoint is frozen into this prompt",
                         prompt,
                     )
+                    self.assertIn(
+                        "Judge reasonable support and admissibility, not concurrence.",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "different severity, weight, emphasis, or final recommendation",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "Never rewrite an honest semantic judgment merely to obtain PASS.",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "`VALID-FAIL` with exit 3",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "must never be promoted or used to materialize",
+                        prompt,
+                    )
                     self.assertEqual(
                         [str(private_md), str(private_csv)], metadata["private_outputs"]
                     )
@@ -238,6 +321,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         self.assertFalse(any(item.startswith("page-renders/") for item in opened))
                     if target == "R1":
                         self.assertNotIn("02-page-layout-ledger.csv", opened)
+
                     if target == "AI":
                         self.assertNotIn("01-policy-basis.md", opened)
 
@@ -264,6 +348,151 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     self.assertNotEqual(0, overwrite.returncode)
                     self.assertTrue(overwrite.stdout.startswith("FAIL\n"), overwrite.stdout)
                     self.assertIn("refusing to overwrite", overwrite.stdout)
+
+    def test_python_executable_is_required_and_must_be_the_running_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            prompt_root = base / "prompts"
+            prompt_root.mkdir()
+            prompt = prompt_root / "SA-R1.txt"
+            view = base / "view-R1"
+
+            missing = subprocess.run(
+                [
+                    sys.executable,
+                    "-B",
+                    str(HELPER_PATH),
+                    "plan",
+                    "--process",
+                    str(preplan),
+                    "--view-root",
+                    str(view),
+                    "--target",
+                    "R1",
+                    "--output",
+                    str(prompt),
+                ],
+                text=True,
+                capture_output=True,
+                check=False,
+                env=disabled_bytecode_environment(),
+            )
+            self.assertNotEqual(0, missing.returncode)
+            self.assertIn("--python-executable", missing.stderr)
+            self.assertFalse(prompt.exists())
+
+            fake_python = base / "not-python.exe"
+            fake_python.write_text("not an interpreter", encoding="utf-8")
+            fake = self.run_helper(
+                "plan",
+                "--process",
+                str(preplan),
+                "--view-root",
+                str(view),
+                "--target",
+                "R1",
+                "--output",
+                str(prompt),
+                "--python-executable",
+                str(fake_python),
+            )
+            self.assertNotEqual(0, fake.returncode)
+            self.assertTrue(fake.stdout.startswith("FAIL\n"), fake.stdout)
+            self.assertIn("exact canonical sys.executable", fake.stdout)
+            self.assertFalse(prompt.exists())
+
+    def test_runtime_file_identity_drift_is_rejected(self) -> None:
+        executable = Path(sys.executable).resolve()
+        identity = HELPER.capture_file_identity(executable, "test interpreter")
+        drifted = HELPER.FileIdentity(
+            identity.device,
+            identity.inode,
+            identity.size,
+            identity.mtime_ns + 1,
+            identity.sha256,
+        )
+        with mock.patch.object(
+            HELPER,
+            "capture_file_identity",
+            side_effect=[identity, drifted],
+        ):
+            with self.assertRaises(HELPER.ContractError) as caught:
+                HELPER.validate_bound_python_executable(executable)
+        self.assertIn("same file identity", str(caught.exception))
+
+    def test_plan_never_reports_success_after_prompt_output_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            original_check = HELPER.require_file_identity
+            replaced = False
+
+            def replace_after_python_check(
+                path: Path, expected: object, label: str
+            ) -> None:
+                nonlocal replaced
+                original_check(path, expected, label)
+                if (
+                    label == "bound Python executable"
+                    and prompt.exists()
+                    and not replaced
+                ):
+                    prompt.write_bytes(b"CONCURRENTLY REPLACED PLAN OUTPUT\n")
+                    replaced = True
+
+            with mock.patch.object(
+                HELPER,
+                "require_file_identity",
+                side_effect=replace_after_python_check,
+            ):
+                with self.assertRaises(HELPER.ContractError):
+                    HELPER.plan_prompt(
+                        preplan,
+                        view,
+                        "R1",
+                        prompt,
+                        Path(sys.executable),
+                    )
+            self.assertTrue(replaced)
+
+    def test_governing_docs_preserve_nonconcurrence_and_honest_fail_lifecycle(self) -> None:
+        documents = {
+            name: (SKILL_ROOT / name).read_text(encoding="utf-8")
+            for name in (
+                "SKILL.md",
+                "references/clean-room-orchestration.md",
+                "references/report-template.md",
+            )
+        }
+        for name, text in documents.items():
+            with self.subTest(document=name):
+                self.assertRegex(
+                    text,
+                    r"reasonable[- ]support/admissibility|reasonable support and admissibility",
+                )
+                self.assertIn("VALID-FAIL", text)
+                self.assertRegex(
+                    text,
+                    r"must not promote|never promote|must never be promoted|"
+                    r"without promotion|do not invoke `promote`",
+                )
+                self.assertRegex(
+                    text,
+                    r"must not rewrite|never rewrite|not overwrite or revise|"
+                    r"never promote or rewrite",
+                )
 
     def test_verify_rejects_process_hash_drift_prompt_drift_and_reserved_directory(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -470,10 +699,17 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             stage_p_process_bytes = (
                 round_root / "00-process-parameters.json"
             ).read_bytes()
+            expected_process_hash = digest(
+                round_root / "00-process-parameters.json"
+            )
 
             for target in fixture.targets:
                 view, prompt, plan_metadata = planned[target]
                 copy_private_view(fixture, target, view)
+                prelaunch = self.verify_one_prelaunch(
+                    view, prompt, target, expected_process_hash
+                )
+                input_commitment = prelaunch["input_commitment"]["sha256"]
                 fixture.write_acceptance(target, view)
                 verify = self.run_helper(
                     "verify",
@@ -483,6 +719,8 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     str(prompt),
                     "--target",
                     target,
+                    "--expected-input-commitment-sha256",
+                    input_commitment,
                     "--require-sa-outputs",
                 )
                 self.assertEqual(0, verify.returncode, verify.stdout + verify.stderr)
@@ -502,6 +740,8 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     str(prompt),
                     "--target",
                     target,
+                    "--expected-input-commitment-sha256",
+                    input_commitment,
                 )
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
                 self.assertTrue(result.stdout.startswith("PROMOTED\n"), result.stdout)
@@ -594,6 +834,483 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             self.assertTrue(result.stdout.startswith("VERIFIED\n"), result.stdout)
             verification = json.loads(result.stdout.splitlines()[1])
             self.assertEqual("absent", verification["sa_output_state"])
+
+    @unittest.skipUnless(os.name == "nt", "Windows namespace contract")
+    def test_sa_control_paths_reject_administrative_and_nested_unc_namespaces(self) -> None:
+        for value in (
+            r"\\localhost\C$\audit\round\private-view-R1",
+            r"\\localhost\NestedShare\private-view-R1",
+            r"\\?\C:\audit\round\private-view-R1",
+        ):
+            with self.subTest(path=value):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.resolved(Path(value), must_exist=False)
+                self.assertIn("UNC/device namespace", str(caught.exception))
+
+        with self.assertRaises(HELPER.ContractError) as caught:
+            HELPER.resolved(Path(r"C:\audit\private-view-R1:prompt"), must_exist=False)
+        self.assertIn("alternate data stream", str(caught.exception))
+
+    def test_file_identity_rejects_hardlink_created_after_path_precheck(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "target.txt"
+            alias = base / "alias.txt"
+            target.write_text("frozen bytes", encoding="utf-8")
+            original_open = Path.open
+
+            def link_before_open(path: Path, *args: object, **kwargs: object):
+                if path == target and not alias.exists():
+                    os.link(target, alias)
+                return original_open(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "open", new=link_before_open):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.capture_file_identity(target, "race target")
+            self.assertIn("single-link regular file", str(caught.exception))
+
+    def test_file_identity_rejects_hardlink_created_during_final_stream_check(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "target.txt"
+            alias = base / "alias.txt"
+            target.write_text("frozen bytes", encoding="utf-8")
+            original_stream_check = HELPER.require_no_windows_named_streams
+            calls = 0
+
+            def link_during_second_check(path: Path, label: str) -> None:
+                nonlocal calls
+                calls += 1
+                original_stream_check(path, label)
+                if calls == 2:
+                    os.link(target, alias)
+
+            with mock.patch.object(
+                HELPER,
+                "require_no_windows_named_streams",
+                side_effect=link_during_second_check,
+            ):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.capture_file_identity(target, "race target")
+            self.assertIn("multiply linked", str(caught.exception))
+
+    def test_prelaunch_verify_rejects_hardlinked_view_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+
+            relative = Path("R1-comprehensive-review.md")
+            view_target = view / relative
+            view_target.unlink()
+            os.link(round_root / relative, view_target)
+
+            result = self.run_helper(
+                "verify",
+                "--view-root",
+                str(view),
+                "--prompt",
+                str(prompt),
+                "--target",
+                "R1",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+            self.assertIn("single-link regular file", result.stdout)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS named-stream contract")
+    def test_prelaunch_verify_rejects_named_stream_on_allowlisted_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+
+            target = view / "R1-comprehensive-review.md"
+            Path(f"{target}:prior-review").write_text(
+                "PROHIBITED OLD REVIEW", encoding="utf-8"
+            )
+            result = self.run_helper(
+                "verify",
+                "--view-root",
+                str(view),
+                "--prompt",
+                str(prompt),
+                "--target",
+                "R1",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+            self.assertIn("NTFS named streams", result.stdout)
+
+    def test_promote_rejects_joint_view_and_round_drift_from_prelaunch_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+            prelaunch = self.verify_one_prelaunch(
+                view, prompt, "R1", expected_process_hash
+            )
+            prelaunch_anchor = prelaunch["input_commitment"]["sha256"]
+
+            relative = Path("R1-comprehensive-review.md")
+            changed = (view / relative).read_bytes() + b"\nJOINT POST-LAUNCH DRIFT\n"
+            (view / relative).write_bytes(changed)
+            (round_root / relative).write_bytes(changed)
+            fixture.write_acceptance("R1", view)
+
+            result = self.run_helper(
+                "promote",
+                "--view-root",
+                str(view),
+                "--round-root",
+                str(round_root),
+                "--prompt",
+                str(prompt),
+                "--target",
+                "R1",
+                "--expected-process-sha256",
+                expected_process_hash,
+                "--expected-input-commitment-sha256",
+                prelaunch_anchor,
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+            self.assertIn("prelaunch commitment", result.stdout)
+            self.assertFalse(
+                (round_root / VALIDATOR.ACCEPTANCE_DIRECTORY).exists()
+            )
+
+    def test_first_verify_rejects_late_anchor_after_actor_outputs_exist(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+            fixture.write_acceptance("R1", view)
+
+            result = self.run_helper(
+                "verify",
+                "--view-root",
+                str(view),
+                "--prompt",
+                str(prompt),
+                "--target",
+                "R1",
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
+            self.assertIn("before dispatch", result.stdout)
+            self.assertIn("post-dispatch input baseline", result.stdout)
+
+    def test_prelaunch_verify_rechecks_terminal_closed_view_topology(self) -> None:
+        contamination_kinds = ["file", "directory", "output-pair"]
+        if os.name == "nt":
+            contamination_kinds.append("named-stream")
+        for contamination_kind in contamination_kinds:
+            with self.subTest(contamination=contamination_kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                round_root = base / "round"
+                round_root.mkdir()
+                fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+                preplan = base / "preplan.json"
+                write_process(preplan, stable_preplan_process(fixture))
+                view = base / "view-R1"
+                prompt = base / "prompts" / "SA-R1.txt"
+                prompt.parent.mkdir()
+                metadata = self.plan_one(preplan, view, "R1", prompt)
+                fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                    "prompt_sha256"
+                ]
+                write_process(
+                    round_root / "00-process-parameters.json", fixture.process
+                )
+                expected_process_hash = digest(
+                    round_root / "00-process-parameters.json"
+                )
+                freeze_validator_pair(fixture)
+                copy_private_view(fixture, "R1", view)
+
+                original_capture = HELPER.capture_opened_input_commitment
+                calls = 0
+
+                def contaminate_before_terminal_topology(*args: object, **kwargs: object):
+                    nonlocal calls
+                    calls += 1
+                    result = original_capture(*args, **kwargs)
+                    if calls == 2:
+                        if contamination_kind == "file":
+                            (view / "PROHIBITED-OLD-REVIEW.md").write_text(
+                                "old review", encoding="utf-8"
+                            )
+                        elif contamination_kind == "directory":
+                            (view / "PROHIBITED-CONTEXT").mkdir()
+                        elif contamination_kind == "output-pair":
+                            (view / "SA-R1.md").write_text("late", encoding="utf-8")
+                            (view / "SA-R1.csv").write_text("late", encoding="utf-8")
+                        else:
+                            target = view / "R1-comprehensive-review.md"
+                            Path(f"{target}:old-review").write_text(
+                                "old review", encoding="utf-8"
+                            )
+                    return result
+
+                with mock.patch.object(
+                    HELPER,
+                    "capture_opened_input_commitment",
+                    side_effect=contaminate_before_terminal_topology,
+                ):
+                    with self.assertRaises(HELPER.ContractError):
+                        HELPER.verify_prompt(
+                            view,
+                            prompt,
+                            "R1",
+                            expected_process_hash,
+                            Path(sys.executable),
+                        )
+
+    def test_verify_rejects_external_prompt_replacement_during_final_checks(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+
+            original_capture = HELPER.capture_opened_input_commitment
+            calls = 0
+
+            def replace_prompt_during_final_checks(*args: object, **kwargs: object):
+                nonlocal calls
+                calls += 1
+                result = original_capture(*args, **kwargs)
+                if calls == 2:
+                    prompt.write_bytes(b"CONCURRENTLY REPLACED PROMPT\n")
+                return result
+
+            with mock.patch.object(
+                HELPER,
+                "capture_opened_input_commitment",
+                side_effect=replace_prompt_during_final_checks,
+            ):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.verify_prompt(
+                        view,
+                        prompt,
+                        "R1",
+                        expected_process_hash,
+                        Path(sys.executable),
+                    )
+            self.assertIn("planned SA prompt", str(caught.exception))
+
+    def test_verify_rechecks_inputs_after_terminal_topology(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+
+            original_topology = HELPER.validate_closed_view
+            calls = 0
+
+            def drift_during_terminal_topology(*args: object, **kwargs: object):
+                nonlocal calls
+                calls += 1
+                result = original_topology(*args, **kwargs)
+                if calls == 2:
+                    target = view / "R1-comprehensive-review.md"
+                    before = target.stat()
+                    value = bytearray(target.read_bytes())
+                    value[0] = (value[0] + 1) % 256
+                    target.write_bytes(bytes(value))
+                    os.utime(
+                        target,
+                        ns=(before.st_atime_ns, before.st_mtime_ns),
+                    )
+                return result
+
+            with mock.patch.object(
+                HELPER,
+                "validate_closed_view",
+                side_effect=drift_during_terminal_topology,
+            ):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.verify_prompt(
+                        view,
+                        prompt,
+                        "R1",
+                        expected_process_hash,
+                        Path(sys.executable),
+                    )
+            self.assertIn("terminal prompt verification", str(caught.exception))
+
+    def test_verify_final_closure_rejects_drift_after_second_python_check(self) -> None:
+        for drift_kind in ("extra-file", "input-hardlink"):
+            with self.subTest(drift=drift_kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                round_root = base / "round"
+                round_root.mkdir()
+                fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+                preplan = base / "preplan.json"
+                write_process(preplan, stable_preplan_process(fixture))
+                view = base / "view-R1"
+                prompt = base / "prompts" / "SA-R1.txt"
+                prompt.parent.mkdir()
+                metadata = self.plan_one(preplan, view, "R1", prompt)
+                fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                    "prompt_sha256"
+                ]
+                write_process(round_root / "00-process-parameters.json", fixture.process)
+                expected_process_hash = digest(
+                    round_root / "00-process-parameters.json"
+                )
+                freeze_validator_pair(fixture)
+                copy_private_view(fixture, "R1", view)
+
+                original_check = HELPER.require_file_identity
+                python_checks = 0
+
+                def inject_after_second_python(
+                    path: Path,
+                    expected: object,
+                    label: str,
+                ) -> None:
+                    nonlocal python_checks
+                    original_check(path, expected, label)
+                    if label == "bound Python executable":
+                        python_checks += 1
+                        if python_checks == 2:
+                            if drift_kind == "extra-file":
+                                (view / "PROHIBITED-LATE-TOPOLOGY.md").write_text(
+                                    "late unrelated artifact\n", encoding="utf-8"
+                                )
+                            else:
+                                os.link(
+                                    view / "R1-comprehensive-review.md",
+                                    base / "late-view-input-hardlink.md",
+                                )
+
+                with mock.patch.object(
+                    HELPER,
+                    "require_file_identity",
+                    side_effect=inject_after_second_python,
+                ):
+                    with self.assertRaisesRegex(
+                        HELPER.ContractError,
+                        "topology mismatch|single-link",
+                    ):
+                        HELPER.verify_prompt(
+                            view,
+                            prompt,
+                            "R1",
+                            expected_process_hash,
+                            Path(sys.executable),
+                        )
+                self.assertGreaterEqual(python_checks, 2)
+
+    def test_promote_requires_external_prelaunch_input_commitment(self) -> None:
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(HELPER_PATH),
+                "promote",
+                "--view-root",
+                str(Path.cwd()),
+                "--round-root",
+                str(Path.cwd()),
+                "--prompt",
+                str(HELPER_PATH),
+                "--target",
+                "R1",
+                "--expected-process-sha256",
+                "0" * 64,
+                "--python-executable",
+                sys.executable,
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+            env=disabled_bytecode_environment(),
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("--expected-input-commitment-sha256", result.stderr)
 
     def test_verify_authenticates_staged_validator_pair_before_import(self) -> None:
         for replaced_name in (
@@ -773,6 +1490,78 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             self.assertEqual(external_replacement, first_destination.read_bytes())
             self.assertFalse(second_destination.exists())
 
+    @unittest.skipUnless(os.name == "nt", "by-handle rollback is Windows-specific")
+    def test_file_rollback_preserves_replacement_installed_after_handle_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "owned.txt"
+            target.write_bytes(b"invocation-owned bytes")
+            expected = HELPER.capture_file_identity(target, "owned output")
+            renamed_owned = base / "renamed-owned.txt"
+            replacement = b"concurrent external replacement"
+            original_identity = HELPER.file_identity_from_open_handle
+            injected = False
+
+            def replace_after_handle_identity(*args: object, **kwargs: object):
+                nonlocal injected
+                result = original_identity(*args, **kwargs)
+                if not injected:
+                    injected = True
+                    target.replace(renamed_owned)
+                    target.write_bytes(replacement)
+                return result
+
+            with mock.patch.object(
+                HELPER,
+                "file_identity_from_open_handle",
+                side_effect=replace_after_handle_identity,
+            ):
+                removed = HELPER.unlink_created_file_if_unchanged(
+                    target, expected, "owned output"
+                )
+
+            self.assertTrue(removed)
+            self.assertTrue(injected)
+            self.assertEqual(replacement, target.read_bytes())
+            self.assertFalse(renamed_owned.exists())
+
+    @unittest.skipUnless(os.name == "nt", "by-handle rollback is Windows-specific")
+    def test_directory_rollback_preserves_replacement_after_handle_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            target = base / "owned-directory"
+            target.mkdir()
+            expected = HELPER.capture_directory_identity(target, "owned directory")
+            renamed_owned = base / "renamed-owned-directory"
+            original_identity = HELPER.directory_identity_from_open_descriptor
+            injected = False
+
+            def replace_after_handle_identity(*args: object, **kwargs: object):
+                nonlocal injected
+                result = original_identity(*args, **kwargs)
+                if not injected:
+                    injected = True
+                    target.replace(renamed_owned)
+                    target.mkdir()
+                    (target / "external-marker.txt").write_text(
+                        "concurrent external directory", encoding="utf-8"
+                    )
+                return result
+
+            with mock.patch.object(
+                HELPER,
+                "directory_identity_from_open_descriptor",
+                side_effect=replace_after_handle_identity,
+            ):
+                removed = HELPER.rmdir_created_directory_if_unchanged(
+                    target, expected, "owned directory"
+                )
+
+            self.assertTrue(removed)
+            self.assertTrue(injected)
+            self.assertTrue((target / "external-marker.txt").is_file())
+            self.assertFalse(renamed_owned.exists())
+
     def test_promote_rejects_sa_output_replaced_after_scoped_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
@@ -792,15 +1581,24 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             expected_process_hash = digest(round_root / "00-process-parameters.json")
             freeze_validator_pair(fixture)
             copy_private_view(fixture, "R1", view)
+            prelaunch, _context = HELPER.verify_prompt(
+                view,
+                prompt,
+                "R1",
+                expected_process_hash,
+                Path(sys.executable),
+            )
+            input_commitment = prelaunch["input_commitment"]["sha256"]
             fixture.write_acceptance("R1", view)
 
             original_compare = HELPER.compare_view_and_round_inputs
 
-            def replace_after_pass(*args: object, **kwargs: object) -> None:
-                original_compare(*args, **kwargs)
+            def replace_after_pass(*args: object, **kwargs: object):
+                snapshots = original_compare(*args, **kwargs)
                 source = view / "SA-R1.md"
                 source.unlink()
                 source.write_text("INVALID AFTER PASS", encoding="utf-8")
+                return snapshots
 
             with mock.patch.object(
                 HELPER,
@@ -814,11 +1612,408 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         prompt,
                         "R1",
                         expected_process_hash,
+                        input_commitment,
+                        Path(sys.executable),
                     )
 
             self.assertIn("replaced or changed", str(caught.exception))
             destination = round_root / VALIDATOR.ACCEPTANCE_DIRECTORY / "SA-R1.md"
             self.assertFalse(destination.exists())
+
+    def test_post_copy_input_drift_rolls_back_owned_outputs_and_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+            prelaunch = self.verify_one_prelaunch(
+                view, prompt, "R1", expected_process_hash
+            )
+            input_commitment = prelaunch["input_commitment"]["sha256"]
+            fixture.write_acceptance("R1", view)
+
+            original_check = HELPER.require_unchanged_view_and_round_inputs
+            calls = 0
+
+            def drift_after_copy(*args: object, **kwargs: object) -> None:
+                nonlocal calls
+                calls += 1
+                if calls == 2:
+                    target = view / "R1-comprehensive-review.md"
+                    target.write_bytes(target.read_bytes() + b"\nPOST-COPY DRIFT\n")
+                original_check(*args, **kwargs)
+
+            with mock.patch.object(
+                HELPER,
+                "require_unchanged_view_and_round_inputs",
+                side_effect=drift_after_copy,
+            ):
+                with self.assertRaises(HELPER.ContractError):
+                    HELPER.promote(
+                        view,
+                        round_root,
+                        prompt,
+                        "R1",
+                        expected_process_hash,
+                        input_commitment,
+                        Path(sys.executable),
+                    )
+
+            acceptance_dir = round_root / VALIDATOR.ACCEPTANCE_DIRECTORY
+            self.assertFalse(acceptance_dir.exists())
+            self.assertFalse((round_root / "SA-R1.md").exists())
+            self.assertFalse((round_root / "SA-R1.csv").exists())
+
+    def test_post_copy_destination_replacement_is_never_reported_as_promoted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+            prelaunch = self.verify_one_prelaunch(
+                view, prompt, "R1", expected_process_hash
+            )
+            input_commitment = prelaunch["input_commitment"]["sha256"]
+            fixture.write_acceptance("R1", view)
+
+            original_commitment_check = HELPER.require_opened_input_commitment
+            calls = 0
+            replacement = b"CONCURRENT EXTERNAL REPLACEMENT"
+
+            def replace_after_copy(*args: object, **kwargs: object):
+                nonlocal calls
+                calls += 1
+                if calls == 3:
+                    destination = (
+                        round_root
+                        / VALIDATOR.ACCEPTANCE_DIRECTORY
+                        / "SA-R1.md"
+                    )
+                    destination.unlink()
+                    destination.write_bytes(replacement)
+                return original_commitment_check(*args, **kwargs)
+
+            with mock.patch.object(
+                HELPER,
+                "require_opened_input_commitment",
+                side_effect=replace_after_copy,
+            ):
+                with self.assertRaises(HELPER.ContractError) as caught:
+                    HELPER.promote(
+                        view,
+                        round_root,
+                        prompt,
+                        "R1",
+                        expected_process_hash,
+                        input_commitment,
+                        Path(sys.executable),
+                    )
+
+            self.assertIn("rollback failed closed", str(caught.exception))
+            destination = (
+                round_root / VALIDATOR.ACCEPTANCE_DIRECTORY / "SA-R1.md"
+            )
+            self.assertEqual(replacement, destination.read_bytes())
+
+    def test_post_copy_private_view_contamination_fails_and_rolls_back(self) -> None:
+        contamination_kinds = ["file", "directory"]
+        if os.name == "nt":
+            contamination_kinds.append("named-stream")
+        for contamination_kind in contamination_kinds:
+            with self.subTest(contamination=contamination_kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                round_root = base / "round"
+                round_root.mkdir()
+                fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+                preplan = base / "preplan.json"
+                write_process(preplan, stable_preplan_process(fixture))
+                view = base / "view-R1"
+                prompt = base / "prompts" / "SA-R1.txt"
+                prompt.parent.mkdir()
+                metadata = self.plan_one(preplan, view, "R1", prompt)
+                fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                    "prompt_sha256"
+                ]
+                write_process(
+                    round_root / "00-process-parameters.json", fixture.process
+                )
+                expected_process_hash = digest(
+                    round_root / "00-process-parameters.json"
+                )
+                freeze_validator_pair(fixture)
+                copy_private_view(fixture, "R1", view)
+                prelaunch = self.verify_one_prelaunch(
+                    view, prompt, "R1", expected_process_hash
+                )
+                input_commitment = prelaunch["input_commitment"]["sha256"]
+                fixture.write_acceptance("R1", view)
+
+                original_commitment_check = HELPER.require_opened_input_commitment
+                calls = 0
+
+                def contaminate_after_copy(*args: object, **kwargs: object):
+                    nonlocal calls
+                    calls += 1
+                    if calls == 3:
+                        if contamination_kind == "file":
+                            (view / "PROHIBITED-OLD-REVIEW.md").write_text(
+                                "old review", encoding="utf-8"
+                            )
+                        elif contamination_kind == "directory":
+                            (view / "PROHIBITED-CONTEXT").mkdir()
+                        else:
+                            target = view / "R1-comprehensive-review.md"
+                            Path(f"{target}:old-review").write_text(
+                                "old review", encoding="utf-8"
+                            )
+                    return original_commitment_check(*args, **kwargs)
+
+                with mock.patch.object(
+                    HELPER,
+                    "require_opened_input_commitment",
+                    side_effect=contaminate_after_copy,
+                ):
+                    with self.assertRaises(HELPER.ContractError):
+                        HELPER.promote(
+                            view,
+                            round_root,
+                            prompt,
+                            "R1",
+                            expected_process_hash,
+                            input_commitment,
+                            Path(sys.executable),
+                        )
+
+                self.assertFalse(
+                    (round_root / VALIDATOR.ACCEPTANCE_DIRECTORY).exists()
+                )
+
+    def test_promote_final_closure_rejects_drift_after_fourth_input_check(self) -> None:
+        for drift_kind in ("view-extra-file", "destination-hardlink"):
+            with self.subTest(drift=drift_kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                round_root = base / "round"
+                round_root.mkdir()
+                fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+                preplan = base / "preplan.json"
+                write_process(preplan, stable_preplan_process(fixture))
+                view = base / "view-R1"
+                prompt = base / "prompts" / "SA-R1.txt"
+                prompt.parent.mkdir()
+                metadata = self.plan_one(preplan, view, "R1", prompt)
+                fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                    "prompt_sha256"
+                ]
+                write_process(round_root / "00-process-parameters.json", fixture.process)
+                expected_process_hash = digest(
+                    round_root / "00-process-parameters.json"
+                )
+                freeze_validator_pair(fixture)
+                copy_private_view(fixture, "R1", view)
+                prelaunch = self.verify_one_prelaunch(
+                    view, prompt, "R1", expected_process_hash
+                )
+                input_commitment = prelaunch["input_commitment"]["sha256"]
+                fixture.write_acceptance("R1", view)
+
+                original_check = HELPER.require_opened_input_commitment
+                calls = 0
+
+                def inject_after_fourth_input(*args: object, **kwargs: object):
+                    nonlocal calls
+                    result = original_check(*args, **kwargs)
+                    calls += 1
+                    if calls == 4:
+                        if drift_kind == "view-extra-file":
+                            (view / "PROHIBITED-LATE-TOPOLOGY.md").write_text(
+                                "late unrelated artifact\n", encoding="utf-8"
+                            )
+                        else:
+                            destination = (
+                                round_root
+                                / VALIDATOR.ACCEPTANCE_DIRECTORY
+                                / "SA-R1.md"
+                            )
+                            os.link(destination, base / "late-promoted-hardlink.md")
+                    return result
+
+                with mock.patch.object(
+                    HELPER,
+                    "require_opened_input_commitment",
+                    side_effect=inject_after_fourth_input,
+                ):
+                    with self.assertRaises(HELPER.ContractError):
+                        HELPER.promote(
+                            view,
+                            round_root,
+                            prompt,
+                            "R1",
+                            expected_process_hash,
+                            input_commitment,
+                            Path(sys.executable),
+                        )
+
+                self.assertGreaterEqual(calls, 4)
+                self.assertFalse(
+                    (round_root / VALIDATOR.ACCEPTANCE_DIRECTORY).exists()
+                )
+
+    def test_promote_rechecks_round_input_and_prompt_after_final_round_state(self) -> None:
+        for drift_kind in ("round-input", "prompt"):
+            with self.subTest(drift=drift_kind), tempfile.TemporaryDirectory() as directory:
+                base = Path(directory)
+                round_root = base / "round"
+                round_root.mkdir()
+                fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+                preplan = base / "preplan.json"
+                write_process(preplan, stable_preplan_process(fixture))
+                view = base / "view-R1"
+                prompt = base / "prompts" / "SA-R1.txt"
+                prompt.parent.mkdir()
+                metadata = self.plan_one(preplan, view, "R1", prompt)
+                fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                    "prompt_sha256"
+                ]
+                write_process(
+                    round_root / "00-process-parameters.json", fixture.process
+                )
+                expected_process_hash = digest(
+                    round_root / "00-process-parameters.json"
+                )
+                freeze_validator_pair(fixture)
+                copy_private_view(fixture, "R1", view)
+                prelaunch = self.verify_one_prelaunch(
+                    view, prompt, "R1", expected_process_hash
+                )
+                input_commitment = prelaunch["input_commitment"]["sha256"]
+                fixture.write_acceptance("R1", view)
+
+                original_round_check = HELPER.require_round_promotion_state
+                calls = 0
+
+                def drift_after_final_round_check(*args: object, **kwargs: object):
+                    nonlocal calls
+                    calls += 1
+                    result = original_round_check(*args, **kwargs)
+                    if calls == 2:
+                        if drift_kind == "round-input":
+                            target = round_root / "R1-comprehensive-review.md"
+                            target.write_bytes(target.read_bytes() + b"\nLATE DRIFT\n")
+                        else:
+                            prompt.write_bytes(b"LATE PROMPT DRIFT\n")
+                    return result
+
+                with mock.patch.object(
+                    HELPER,
+                    "require_round_promotion_state",
+                    side_effect=drift_after_final_round_check,
+                ):
+                    with self.assertRaises(HELPER.ContractError):
+                        HELPER.promote(
+                            view,
+                            round_root,
+                            prompt,
+                            "R1",
+                            expected_process_hash,
+                            input_commitment,
+                            Path(sys.executable),
+                        )
+
+                self.assertFalse(
+                    (round_root / VALIDATOR.ACCEPTANCE_DIRECTORY).exists()
+                )
+
+    def test_promote_rejects_valid_fail_pair_without_any_destination_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            view = base / "view-R1"
+            prompt = base / "prompts" / "SA-R1.txt"
+            prompt.parent.mkdir()
+            metadata = self.plan_one(preplan, view, "R1", prompt)
+            fixture.process["actor_prompt_sha256"]["SA-R1"] = metadata[
+                "prompt_sha256"
+            ]
+            write_process(round_root / "00-process-parameters.json", fixture.process)
+            expected_process_hash = digest(round_root / "00-process-parameters.json")
+            freeze_validator_pair(fixture)
+            copy_private_view(fixture, "R1", view)
+            prelaunch, _context = HELPER.verify_prompt(
+                view,
+                prompt,
+                "R1",
+                expected_process_hash,
+                Path(sys.executable),
+            )
+            input_commitment = prelaunch["input_commitment"]["sha256"]
+            fixture.write_acceptance("R1", view)
+
+            csv_path = view / "SA-R1.csv"
+            rows = SEMANTIC_TEST.MODULE.read_csv_rows(csv_path, [])
+            rows[0]["AcceptanceDisposition"] = "fail"
+            SEMANTIC_TEST.write_csv(csv_path, SEMANTIC_TEST.MODULE.CSV_COLUMNS, rows)
+            markdown_path = view / "SA-R1.md"
+            markdown_path.write_text(
+                markdown_path.read_text(encoding="utf-8")
+                .replace("Overall semantic acceptance: PASS", "Overall semantic acceptance: FAIL")
+                .replace("Acceptance failure count: 0", "Acceptance failure count: 1"),
+                encoding="utf-8",
+            )
+
+            errors, result = SEMANTIC_TEST.MODULE.validate_actor(
+                view,
+                "R1",
+                SEMANTIC_TEST.SHARED,
+                enforce_closed_view=True,
+            )
+            self.assertEqual([], errors)
+            self.assertEqual("FAIL", result["status"])
+            acceptance_dir = round_root / VALIDATOR.ACCEPTANCE_DIRECTORY
+            self.assertFalse(acceptance_dir.exists())
+            with self.assertRaises(HELPER.ContractError) as caught:
+                HELPER.promote(
+                    view,
+                    round_root,
+                    prompt,
+                    "R1",
+                    expected_process_hash,
+                    input_commitment,
+                    Path(sys.executable),
+                )
+            self.assertIn("status is not PASS", str(caught.exception))
+            self.assertFalse(acceptance_dir.exists())
+            self.assertFalse((round_root / "SA-R1.md").exists())
+            self.assertFalse((round_root / "SA-R1.csv").exists())
 
 
 if __name__ == "__main__":

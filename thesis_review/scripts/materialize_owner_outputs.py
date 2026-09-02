@@ -384,6 +384,7 @@ def atomic_replace_text(
     text: str,
     *,
     allow_create: bool = False,
+    published_snapshot_out: list[Any] | None = None,
 ) -> str | None:
     """Atomically publish one owned projection, optionally creating it once."""
 
@@ -401,6 +402,8 @@ def atomic_replace_text(
     elif not safe_regular_file(module, path, errors):
         return "; ".join(errors)
     temporary_path: Path | None = None
+    temporary_identity: tuple[int, int] | None = None
+    payload = text.encode("utf-8")
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -415,6 +418,12 @@ def atomic_replace_text(
             handle.flush()
             os.fsync(handle.fileno())
             temporary_path = Path(handle.name)
+        if published_snapshot_out is not None:
+            temporary_metadata = temporary_path.lstat()
+            temporary_identity = (
+                int(temporary_metadata.st_dev),
+                int(temporary_metadata.st_ino),
+            )
         if missing:
             # Link publication is atomic and fails closed if another entry
             # appeared after the absence check. Removing the temporary name
@@ -424,6 +433,26 @@ def atomic_replace_text(
         else:
             temporary_path.replace(path)
         temporary_path = None
+        if published_snapshot_out is not None:
+            publication_errors: list[str] = []
+            published = module.capture_helper_input_snapshot(
+                path, f"published-output/{path.name}", publication_errors
+            )
+            if publication_errors or published is None:
+                return (
+                    f"could not bind published identity for {path.name}: "
+                    + "; ".join(publication_errors)
+                )
+            if (
+                temporary_identity is None
+                or (published.device, published.inode) != temporary_identity
+                or published.content != payload
+            ):
+                return (
+                    f"published pathname identity/bytes changed before "
+                    f"{path.name} could be committed"
+                )
+            published_snapshot_out.append(published)
         return None
     except OSError as exc:
         return f"could not atomically replace {path.name}: {exc}"
@@ -433,6 +462,186 @@ def atomic_replace_text(
                 temporary_path.unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def capture_owned_output_backups(
+    module: Any, paths: Iterable[Path], errors: list[str]
+) -> dict[Path, bytes]:
+    """Capture exact pre-write Chair bytes for failure-path rollback."""
+
+    backups: dict[Path, bytes] = {}
+    for path in paths:
+        snapshot = module.capture_helper_input_snapshot(
+            path, f"owned-output/{path.name}", errors
+        )
+        if snapshot is not None:
+            backups[path] = snapshot.content
+    return backups
+
+
+def rollback_owned_outputs(
+    module: Any,
+    backups: dict[Path, bytes],
+    published: dict[Path, Any],
+    errors: list[str],
+) -> None:
+    """Restore only identities published by this invocation, through handles.
+
+    A pathname-level replace here could overwrite an unrelated concurrent
+    object.  Instead, bind an ``O_RDWR`` handle to the exact committed inode,
+    re-read its expected published bytes, restore through that handle, and then
+    prove the authoritative pathname still names the same inode.  Any mismatch
+    is preserved untouched and leaves the invocation failed.
+    """
+
+    for path, expected in published.items():
+        payload = backups[path]
+        descriptor: int | None = None
+        opened_after: os.stat_result | None = None
+        try:
+            before = path.lstat()
+            streams, stream_error = module._ntfs_named_streams(path)
+            if stream_error is not None or streams:
+                detail = stream_error or f"NTFS named streams present: {streams}"
+                errors.append(
+                    f"Chair rollback refused for {path.name}: {detail}"
+                )
+                continue
+            if module._helper_stat_identity(before) != (
+                expected.device,
+                expected.inode,
+                expected.mode,
+                expected.link_count,
+                expected.size,
+                expected.mtime_ns,
+                expected.file_attributes,
+            ):
+                errors.append(
+                    f"Chair rollback refused for {path.name}: authoritative "
+                    "pathname no longer names this invocation's published object"
+                )
+                continue
+            flags = os.O_RDWR | getattr(os, "O_BINARY", 0)
+            flags |= getattr(os, "O_NOFOLLOW", 0)
+            descriptor = os.open(path, flags)
+            opened_before = os.fstat(descriptor)
+            if module._helper_stat_identity(opened_before) != (
+                expected.device,
+                expected.inode,
+                expected.mode,
+                expected.link_count,
+                expected.size,
+                expected.mtime_ns,
+                expected.file_attributes,
+            ):
+                errors.append(
+                    f"Chair rollback refused for {path.name}: opened handle is "
+                    "not this invocation's published object"
+                )
+                continue
+            chunks: list[bytes] = []
+            while True:
+                chunk = os.read(descriptor, 1024 * 1024)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            if b"".join(chunks) != expected.content:
+                errors.append(
+                    f"Chair rollback refused for {path.name}: published bytes "
+                    "changed concurrently"
+                )
+                continue
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            os.ftruncate(descriptor, 0)
+            cursor = 0
+            while cursor < len(payload):
+                written = os.write(descriptor, payload[cursor:])
+                if written <= 0:
+                    raise OSError("zero-byte write while restoring owned output")
+                cursor += written
+            os.fsync(descriptor)
+            opened_after = os.fstat(descriptor)
+            if (
+                int(opened_after.st_dev) != expected.device
+                or int(opened_after.st_ino) != expected.inode
+                or not stat.S_ISREG(opened_after.st_mode)
+                or int(opened_after.st_nlink) != 1
+            ):
+                errors.append(
+                    f"Chair rollback handle identity changed for {path.name}"
+                )
+                continue
+        except OSError as exc:
+            errors.append(f"Chair rollback failed for {path.name}: {exc}")
+            continue
+        finally:
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        if opened_after is None:
+            continue
+        try:
+            pathname_after = path.lstat()
+        except OSError as exc:
+            errors.append(
+                f"Chair rollback could not rebind authoritative pathname "
+                f"{path.name}: {exc}"
+            )
+            continue
+        if (
+            int(pathname_after.st_dev) != int(opened_after.st_dev)
+            or int(pathname_after.st_ino) != int(opened_after.st_ino)
+        ):
+            errors.append(
+                f"Chair rollback did not restore authoritative pathname "
+                f"{path.name}: it was replaced or moved concurrently"
+            )
+            continue
+        verification_errors: list[str] = []
+        restored = module.capture_helper_input_snapshot(
+            path, f"rolled-back-output/{path.name}", verification_errors
+        )
+        if (
+            verification_errors
+            or restored is None
+            or restored.content != payload
+            or (restored.device, restored.inode)
+            != (expected.device, expected.inode)
+        ):
+            errors.append(
+                f"Chair rollback could not verify exact restored bytes for "
+                f"{path.name}: {verification_errors}"
+            )
+
+
+def verify_declared_helper_commitment(
+    module: Any,
+    root: Path,
+    directory_snapshots: Iterable[Any],
+    input_snapshots: Iterable[Any],
+    errors: list[str],
+) -> bool:
+    """Jointly close helper directory topology and exact helper leaf inputs."""
+
+    directories = list(directory_snapshots)
+    inputs = list(input_snapshots)
+    if not directories and not inputs:
+        return True
+    if not module.verify_helper_directory_chain_snapshot(
+        root, directories, errors
+    ):
+        return False
+    if not module.verify_declared_helper_snapshot_set(root, inputs, errors):
+        return False
+    if not module.verify_helper_directory_chain_snapshot(
+        root, directories, errors
+    ):
+        return False
+    # End the successful closure on the exact opened leaf set.  The preceding
+    # directory recheck ensures those final leaf opens used the committed path.
+    return module.verify_declared_helper_snapshot_set(root, inputs, errors)
 
 
 def role_contract(process: dict[str, Any], actor_id: str) -> tuple[str, ...] | None:
@@ -604,6 +813,7 @@ def materialize_chair(
     root: Path,
     process: dict[str, Any],
     errors: list[str],
+    helper_inputs: list[str],
 ) -> dict[Path, str]:
     reviewer_count = reviewer_count_for_process(process)
     needed = {
@@ -650,7 +860,10 @@ def materialize_chair(
         filename: (root / filename).read_text(encoding="utf-8")
         for filename in needed if filename.endswith(".md")
     }
-    opened = module.canonical_stage_opened_inputs(process, reviewer_count, "C", root)
+    opened = [
+        *module.canonical_stage_opened_inputs(process, reviewer_count, "C"),
+        *helper_inputs,
+    ]
     allowed_endpoints = module.ordered_unique([
         *module.governing_rule_public_endpoint_sequence(process),
         *module.bibliography_ledger_public_endpoint_sequence(bibliography_ledger),
@@ -1051,7 +1264,39 @@ def materialize_summary(
     }
 
 
-def materialize(root: Path, actor_id: str) -> list[str]:
+def normalize_declared_helper_inputs(
+    module: Any, values: Iterable[str], errors: list[str]
+) -> list[str]:
+    """Validate frozen Stage-O helper arguments without opening helper files."""
+
+    normalized: list[str] = []
+    for index, value in enumerate(values):
+        if not isinstance(value, str) or not value.strip() or value != value.strip():
+            errors.append(
+                f"helper input {index} must be a nonempty trimmed relative path"
+            )
+            continue
+        item = value.replace("\\", "/")
+        path = Path(item)
+        if (
+            path.is_absolute()
+            or len(path.parts) != 2
+            or path.parts[0] != "helpers"
+            or not module.is_neutral_portable_basename(path.parts[1])
+        ):
+            errors.append(
+                f"helper input {value!r} must be exactly helpers/<portable-basename>"
+            )
+            continue
+        normalized.append(item)
+    if len(normalized) != len(set(normalized)):
+        errors.append("helper inputs must be duplicate-free")
+    return normalized
+
+
+def materialize(
+    root: Path, actor_id: str, helper_inputs: Iterable[str] = ()
+) -> list[str]:
     module = load_validator_cached()
     errors: list[str] = []
     if module.is_link_or_reparse(root) or not root.is_dir():
@@ -1060,11 +1305,35 @@ def materialize(root: Path, actor_id: str) -> list[str]:
     if not safe_regular_file(module, process_path, errors):
         return errors
     try:
-        process = json.loads(process_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        process = module.parse_strict_json_object(
+            process_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         return [f"cannot read 00-process-parameters.json: {exc}"]
     if not isinstance(process, dict):
         return ["00-process-parameters.json root must be an object"]
+    prompt_map = process.get("actor_prompt_sha256")
+    validated_process, _, _, _, _, _ = module.validate_process(
+        root,
+        errors,
+        enforce_single_reviewer_pdf=False,
+        validate_governing_file_bytes=False,
+        validate_frozen_pdf_bytes=False,
+        stage_v_present_override=(
+            isinstance(prompt_map, dict) and "V" in prompt_map
+        ),
+        process_override=process,
+    )
+    if errors:
+        return errors
+    process = validated_process
+    declared_helpers = normalize_declared_helper_inputs(
+        module, helper_inputs, errors
+    )
+    if actor_id != "C" and declared_helpers:
+        errors.append("--helper-input is supported only for Chair actor C")
+    if errors:
+        return errors
     contract = role_contract(process, actor_id)
     if contract is None:
         return [
@@ -1074,13 +1343,100 @@ def materialize(root: Path, actor_id: str) -> list[str]:
         ]
 
     if "chair" in contract:
-        prepared = materialize_chair(module, root, process, errors)
+        reviewer_count = reviewer_count_for_process(process)
+        initial_helper_directory_snapshots = (
+            module.capture_helper_directory_chain_snapshot(root, errors)
+            if declared_helpers else []
+        )
+        if errors or (
+            declared_helpers and not initial_helper_directory_snapshots
+        ):
+            return errors
+        initial_helper_snapshots = (
+            module.capture_declared_helper_snapshot_set(
+                root, declared_helpers, errors
+            )
+            if declared_helpers else []
+        )
+        if errors or len(initial_helper_snapshots) != len(declared_helpers):
+            return errors
+        if initial_helper_snapshots and not module.verify_helper_directory_chain_snapshot(
+            root, initial_helper_directory_snapshots, errors
+        ):
+            return errors
+        canonical_helpers = module.validate_helper_bundle(
+            root,
+            str(process.get("selected_pdf_sha256", "")).upper(),
+            process,
+            reviewer_count,
+            errors,
+            declared_inputs=declared_helpers,
+            required_recipient="C",
+        )
         if errors:
             return errors
+        if canonical_helpers != declared_helpers:
+            return [
+                "declared helper input sequence does not equal the validated "
+                "canonical Chair projection"
+            ]
+        prepared = materialize_chair(
+            module,
+            root,
+            process,
+            errors,
+            canonical_helpers,
+        )
+        if errors:
+            return errors
+        output_backups = capture_owned_output_backups(
+            module, prepared.keys(), errors
+        )
+        if errors or len(output_backups) != len(prepared):
+            return errors
+        # The parsing pass above intentionally closes its handles.  Jointly
+        # re-read the committed directory chain and helper leaves immediately
+        # before the first Chair write, and again after the last write.
+        if not verify_declared_helper_commitment(
+            module,
+            root,
+            initial_helper_directory_snapshots,
+            initial_helper_snapshots,
+            errors,
+        ):
+            return errors
+        published_outputs: dict[Path, Any] = {}
         for path, text in prepared.items():
-            write_error = atomic_replace_text(module, path, text)
+            published_snapshot: list[Any] = []
+            write_error = atomic_replace_text(
+                module,
+                path,
+                text,
+                published_snapshot_out=published_snapshot,
+            )
+            if len(published_snapshot) == 1:
+                published_outputs[path] = published_snapshot[0]
             if write_error:
-                return [write_error]
+                errors.append(write_error)
+                rollback_owned_outputs(
+                    module, output_backups, published_outputs, errors
+                )
+                return errors
+        if not verify_declared_helper_commitment(
+            module,
+            root,
+            initial_helper_directory_snapshots,
+            initial_helper_snapshots,
+            errors,
+        ):
+            errors.append(
+                "declared helper commitment changed while Chair outputs were "
+                "published; materialization was rolled back"
+            )
+            rollback_owned_outputs(
+                module, output_backups, published_outputs, errors
+            )
+            return errors
         return []
     if "summary" in contract:
         prepared = materialize_summary(module, root, process, errors)
@@ -1234,12 +1590,24 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("round_root", type=Path)
     parser.add_argument("actor_id", choices=("R3", "R4", "R5", "C", "S"))
+    parser.add_argument(
+        "--helper-input",
+        action="append",
+        default=[],
+        dest="helper_inputs",
+        help=(
+            "exact helpers/<portable-basename> Chair input; repeat in canonical "
+            "provenance/output order and omit for non-Chair actors"
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    errors = materialize(args.round_root.absolute(), args.actor_id)
+    errors = materialize(
+        args.round_root.absolute(), args.actor_id, args.helper_inputs
+    )
     if errors:
         print("FAIL")
         for error in errors:

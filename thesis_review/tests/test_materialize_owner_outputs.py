@@ -29,6 +29,11 @@ STAGE_S_FILES = {
     "93-current-actionable-items.csv",
     "93-current-ai-actionable-items.csv",
 }
+CHAIR_MATERIALIZED_FILES = (
+    "90-chair-synthesis.md",
+    "91-revision-ledger.md",
+    "92-new-evidence-or-experiments.md",
+)
 
 
 def load_materializer_module():
@@ -77,6 +82,22 @@ def changed_files(
 
 
 class MaterializeOwnerOutputsTests(unittest.TestCase):
+    def install_stage_s_rule_inputs(self, root: Path) -> None:
+        shutil.copy2(SKILL_ROOT / "SKILL.md", root / "SKILL.md")
+        for filename in (
+            "clean-room-orchestration.md",
+            "report-template.md",
+        ):
+            shutil.copy2(SKILL_ROOT / "references" / filename, root / filename)
+        scripts = root / "rules" / "scripts"
+        scripts.mkdir(parents=True, exist_ok=True)
+        for filename in (
+            "validate_review_bundle.py",
+            "materialize_owner_outputs.py",
+            "validate_summary_output.py",
+        ):
+            shutil.copy2(SKILL_ROOT / "scripts" / filename, scripts / filename)
+
     def build_r5_fixture(self, root: Path) -> None:
         harness = fixture_module.ValidateReviewBundleTests(
             methodName="test_complete_fixture_passes"
@@ -90,10 +111,22 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
         )
 
     def run_materializer(
-        self, root: Path, actor_id: str = "R5"
+        self,
+        root: Path,
+        actor_id: str = "R5",
+        helper_inputs: list[str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
+        command = [
+            sys.executable,
+            "-B",
+            str(MATERIALIZER),
+            str(root),
+            actor_id,
+        ]
+        for helper_input in helper_inputs or []:
+            command.extend(("--helper-input", helper_input))
         return subprocess.run(
-            [sys.executable, "-B", str(MATERIALIZER), str(root), actor_id],
+            command,
             text=True,
             capture_output=True,
             check=False,
@@ -526,6 +559,7 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
             process, academic_rows, ai_rows, evidence_rows = (
                 self.build_adversarial_chair_fixture(root)
             )
+            self.install_stage_s_rule_inputs(root)
 
             # Preserve the complete fixture's intentionally stale Stage-S
             # templates, then respect the actual C-before-S stage boundary.
@@ -619,6 +653,7 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
                 harness.build_bundle(root)
                 if degree == "doctorate":
                     harness.convert_bundle_to_doctorate(root)
+                self.install_stage_s_rule_inputs(root)
 
                 from_template = self.run_materializer(root, "S")
                 self.assertEqual(
@@ -679,6 +714,853 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
             self.assertEqual(
                 "must remain unchanged\n", sentinel.read_text(encoding="utf-8")
             )
+
+    def test_stage_s_materializer_rejects_duplicate_process_keys_without_mutation(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            harness.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process_text = process_path.read_text(encoding="utf-8")
+            duplicated = process_text.replace(
+                '"round_id": "fixture"',
+                '"round_id": "fixture", "round_id": "fixture"',
+                1,
+            )
+            self.assertNotEqual(process_text, duplicated)
+            self.assertEqual(duplicated.count('"round_id"'), 2)
+            process_path.write_text(
+                duplicated,
+                encoding="utf-8",
+            )
+            before = file_hashes(root)
+            result = self.run_materializer(root, "S")
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("duplicate JSON key 'round_id'", result.stdout)
+            self.assertEqual(before, file_hashes(root))
+
+    def test_all_materializer_roles_reject_process_schema_drift_without_mutation(
+        self,
+    ) -> None:
+        cases = (
+            ("R5", True, "unexpected", "process envelope schema mismatch"),
+            ("C", False, "wrong-type", "physical_page_count must be a positive integer"),
+            ("S", False, "invalid-enum", "review_mode must be one of"),
+        )
+        for actor_id, doctorate, mutation, expected_error in cases:
+            with self.subTest(actor=actor_id), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = fixture_module.ValidateReviewBundleTests(
+                    methodName="test_complete_fixture_passes"
+                )
+                harness.build_bundle(root)
+                if doctorate:
+                    harness.convert_bundle_to_doctorate(root)
+                process_path = root / "00-process-parameters.json"
+                process = json.loads(process_path.read_text(encoding="utf-8"))
+                if mutation == "unexpected":
+                    process["unexpected_field"] = "must fail closed"
+                elif mutation == "wrong-type":
+                    process["physical_page_count"] = "4"
+                else:
+                    process["review_mode"] = "invalid-review-mode"
+                process_path.write_text(
+                    json.dumps(process, ensure_ascii=False, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                before = file_hashes(root)
+                result = self.run_materializer(root, actor_id)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(expected_error, result.stdout)
+                self.assertEqual(before, file_hashes(root))
+
+    def test_chair_ignores_undeclared_nonrecipient_helper_without_opening_it(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(
+                root, digest, recipients=["R1"]
+            )
+            provenance = root / "helpers/H01-provenance.json"
+            original_open = Path.open
+
+            def guarded_open(path: Path, *args, **kwargs):
+                if path.absolute() == provenance.absolute():
+                    raise AssertionError(
+                        "Chair materializer opened an undeclared R1 helper"
+                    )
+                return original_open(path, *args, **kwargs)
+
+            before = file_hashes(root)
+            with mock.patch.object(Path, "open", guarded_open):
+                errors = MATERIALIZER_MODULE.materialize(root, "C")
+            self.assertEqual([], errors)
+            after = file_hashes(root)
+            self.assertTrue(
+                changed_files(before, after).issubset(
+                    {
+                        "90-chair-synthesis.md",
+                        "91-revision-ledger.md",
+                        "92-new-evidence-or-experiments.md",
+                    }
+                ),
+                changed_files(before, after),
+            )
+            self.assertEqual(
+                before["helpers/H01-provenance.json"],
+                after["helpers/H01-provenance.json"],
+            )
+            self.assertEqual(
+                before["helpers/H01-pages.txt"],
+                after["helpers/H01-pages.txt"],
+            )
+
+    def test_chair_rejects_invalid_declared_helper_without_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            provenance_path = root / "helpers/H01-provenance.json"
+            provenance_text = provenance_path.read_text(encoding="utf-8")
+            provenance_path.write_text(
+                provenance_text.replace(
+                    '"recipient_stages": ["C"]',
+                    '"recipient_stages": ["C"], "recipient_stages": ["C"]',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            before = file_hashes(root)
+            result = self.run_materializer(
+                root,
+                "C",
+                ["helpers/H01-provenance.json", "helpers/H01-pages.txt"],
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn(
+                "duplicate JSON key 'recipient_stages'", result.stdout
+            )
+            self.assertEqual(before, file_hashes(root))
+
+    def test_chair_never_opens_an_undeclared_provenance_output(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            undeclared_output = root / "helpers/H01-pages.txt"
+            original_open = Path.open
+
+            def guarded_open(path: Path, *args, **kwargs):
+                if path.absolute() == undeclared_output.absolute():
+                    raise AssertionError(
+                        "Chair materializer opened an undeclared helper output"
+                    )
+                return original_open(path, *args, **kwargs)
+
+            before = file_hashes(root)
+            with mock.patch.object(Path, "open", guarded_open):
+                errors = MATERIALIZER_MODULE.materialize(
+                    root,
+                    "C",
+                    ["helpers/H01-provenance.json"],
+                )
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("refusing to inspect undeclared" in error for error in errors),
+                errors,
+            )
+            self.assertEqual(before, file_hashes(root))
+
+    def test_chair_rejects_reordered_or_hardlinked_declared_helpers_without_mutation(
+        self,
+    ) -> None:
+        with self.subTest(case="reordered"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            before = file_hashes(root)
+            result = self.run_materializer(
+                root,
+                "C",
+                ["helpers/H01-pages.txt", "helpers/H01-provenance.json"],
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("ascending Hxx order", result.stdout)
+            self.assertEqual(before, file_hashes(root))
+
+        with self.subTest(case="hardlinked-output"), tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            output = root / "helpers/H01-pages.txt"
+            sentinel = root / "external-helper-source.txt"
+            sentinel.write_bytes(output.read_bytes())
+            output.unlink()
+            os.link(sentinel, output)
+            before = file_hashes(root)
+            result = self.run_materializer(
+                root,
+                "C",
+                ["helpers/H01-provenance.json", "helpers/H01-pages.txt"],
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("single-link regular files", result.stdout)
+            self.assertEqual(before, file_hashes(root))
+
+    def test_chair_rejects_hardlinked_provenance_without_writing_outputs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            provenance = root / "helpers/H01-provenance.json"
+            sentinel = root / "external-helper-provenance.json"
+            sentinel.write_bytes(provenance.read_bytes())
+            provenance.unlink()
+            os.link(sentinel, provenance)
+            chair_before = {
+                filename: hashlib.sha256((root / filename).read_bytes()).hexdigest()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+
+            result = self.run_materializer(
+                root,
+                "C",
+                ["helpers/H01-provenance.json", "helpers/H01-pages.txt"],
+            )
+
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("single-link regular files", result.stdout)
+            self.assertEqual(
+                chair_before,
+                {
+                    filename: hashlib.sha256(
+                        (root / filename).read_bytes()
+                    ).hexdigest()
+                    for filename in CHAIR_MATERIALIZED_FILES
+                },
+            )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS ADS is Windows-specific")
+    def test_chair_rejects_named_stream_on_each_declared_helper_without_writing_outputs(
+        self,
+    ) -> None:
+        for relative in (
+            "helpers/H01-provenance.json",
+            "helpers/H01-pages.txt",
+        ):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                harness = fixture_module.ValidateReviewBundleTests(
+                    methodName="test_complete_fixture_passes"
+                )
+                digest = harness.build_bundle(root)
+                harness.install_helper_fixture(root, digest, recipients=["C"])
+                stream_path = Path(f"{root / relative}:untrusted")
+                try:
+                    stream_path.write_text("must not be hidden\n", encoding="utf-8")
+                except OSError as exc:
+                    self.skipTest(f"test volume does not support NTFS ADS: {exc}")
+                chair_before = {
+                    filename: hashlib.sha256(
+                        (root / filename).read_bytes()
+                    ).hexdigest()
+                    for filename in CHAIR_MATERIALIZED_FILES
+                }
+
+                result = self.run_materializer(
+                    root,
+                    "C",
+                    ["helpers/H01-provenance.json", "helpers/H01-pages.txt"],
+                )
+
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("NTFS named streams", result.stdout)
+                self.assertEqual(
+                    chair_before,
+                    {
+                        filename: hashlib.sha256(
+                            (root / filename).read_bytes()
+                        ).hexdigest()
+                        for filename in CHAIR_MATERIALIZED_FILES
+                    },
+                )
+
+    def test_chair_rechecks_helper_snapshot_before_any_output_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            chair_before = {
+                filename: hashlib.sha256((root / filename).read_bytes()).hexdigest()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+            original_materialize_chair = MATERIALIZER_MODULE.materialize_chair
+
+            def mutate_after_parse(*args, **kwargs):
+                prepared = original_materialize_chair(*args, **kwargs)
+                with (root / "helpers/H01-pages.txt").open("ab") as handle:
+                    handle.write(b"\npost-validation mutation\n")
+                return prepared
+
+            with mock.patch.object(
+                MATERIALIZER_MODULE,
+                "materialize_chair",
+                side_effect=mutate_after_parse,
+            ):
+                errors = MATERIALIZER_MODULE.materialize(
+                    root,
+                    "C",
+                    ["helpers/H01-provenance.json", "helpers/H01-pages.txt"],
+                )
+
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("identity/hash set changed" in error for error in errors),
+                errors,
+            )
+            self.assertEqual(
+                chair_before,
+                {
+                    filename: hashlib.sha256(
+                        (root / filename).read_bytes()
+                    ).hexdigest()
+                    for filename in CHAIR_MATERIALIZED_FILES
+                },
+            )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS junction test is Windows-specific")
+    def test_chair_rejects_helpers_junction_before_first_helper_leaf_open(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as external,
+        ):
+            root = Path(directory)
+            external_root = Path(external)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            helpers = root / "helpers"
+            real_helpers = external_root / "real-helpers"
+            helpers.rename(real_helpers)
+            created = subprocess.run(
+                ["cmd", "/c", "mklink", "/J", str(helpers), str(real_helpers)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if created.returncode != 0:
+                real_helpers.rename(helpers)
+                self.skipTest(f"could not create NTFS junction: {created.stderr}")
+            chair_before = {
+                filename: (root / filename).read_bytes()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+            original_capture = (
+                MATERIALIZER_MODULE.load_validator_cached()
+                .capture_declared_helper_snapshot_set
+            )
+            leaf_capture_called = False
+
+            def read_then_wash_junction(*args, **kwargs):
+                nonlocal leaf_capture_called
+                leaf_capture_called = True
+                snapshots = original_capture(*args, **kwargs)
+                helpers.rmdir()
+                real_helpers.rename(helpers)
+                return snapshots
+
+            try:
+                with mock.patch.object(
+                    MATERIALIZER_MODULE.load_validator_cached(),
+                    "capture_declared_helper_snapshot_set",
+                    side_effect=read_then_wash_junction,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+                self.assertTrue(errors)
+                self.assertFalse(
+                    leaf_capture_called,
+                    "a helper leaf was opened before the junction preflight",
+                )
+                self.assertTrue(
+                    any("directory chain" in error for error in errors),
+                    errors,
+                )
+                self.assertEqual(
+                    chair_before,
+                    {
+                        filename: (root / filename).read_bytes()
+                        for filename in CHAIR_MATERIALIZED_FILES
+                    },
+                )
+            finally:
+                if helpers.exists() and helpers.is_junction():
+                    helpers.rmdir()
+                if real_helpers.exists() and not helpers.exists():
+                    real_helpers.rename(helpers)
+
+    @unittest.skipUnless(os.name == "nt", "NTFS ADS is Windows-specific")
+    def test_chair_rejects_helpers_directory_ads_before_first_leaf_open(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            stream = Path(f"{root / 'helpers'}:hidden-directory-stream")
+            try:
+                stream.write_text("hidden\n", encoding="utf-8")
+            except OSError as exc:
+                self.skipTest(f"test volume does not support directory ADS: {exc}")
+            leaf_capture_called = False
+            validator = MATERIALIZER_MODULE.load_validator_cached()
+            original_capture = validator.capture_declared_helper_snapshot_set
+
+            def record_leaf_capture(*args, **kwargs):
+                nonlocal leaf_capture_called
+                leaf_capture_called = True
+                return original_capture(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    validator,
+                    "capture_declared_helper_snapshot_set",
+                    side_effect=record_leaf_capture,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+                self.assertTrue(errors)
+                self.assertFalse(leaf_capture_called)
+                self.assertTrue(
+                    any("directory-chain component" in error for error in errors),
+                    errors,
+                )
+            finally:
+                try:
+                    stream.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    @unittest.skipUnless(os.name == "nt", "NTFS junction test is Windows-specific")
+    def test_chair_rejects_junction_in_round_root_ancestor_chain_before_leaf_open(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as actual_directory,
+            tempfile.TemporaryDirectory() as alias_directory,
+        ):
+            actual_parent = Path(actual_directory) / "actual-parent"
+            actual_root = actual_parent / "round"
+            actual_root.mkdir(parents=True)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(actual_root)
+            harness.install_helper_fixture(actual_root, digest, recipients=["C"])
+            alias_parent = Path(alias_directory) / "alias-parent"
+            created = subprocess.run(
+                [
+                    "cmd", "/c", "mklink", "/J",
+                    str(alias_parent), str(actual_parent),
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            if created.returncode != 0:
+                self.skipTest(f"could not create NTFS junction: {created.stderr}")
+            alias_root = alias_parent / "round"
+            leaf_capture_called = False
+            validator = MATERIALIZER_MODULE.load_validator_cached()
+            original_capture = validator.capture_declared_helper_snapshot_set
+
+            def record_leaf_capture(*args, **kwargs):
+                nonlocal leaf_capture_called
+                leaf_capture_called = True
+                return original_capture(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    validator,
+                    "capture_declared_helper_snapshot_set",
+                    side_effect=record_leaf_capture,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        alias_root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+                self.assertTrue(errors)
+                self.assertFalse(leaf_capture_called)
+                self.assertTrue(
+                    any("directory chain" in error for error in errors),
+                    errors,
+                )
+            finally:
+                alias_parent.rmdir()
+
+    def test_chair_write_interval_helper_hardlink_or_replacement_fails_and_rolls_back(
+        self,
+    ) -> None:
+        for mutation in ("hardlink", "same-bytes-replacement"):
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as directory,
+                tempfile.TemporaryDirectory() as external,
+            ):
+                root = Path(directory)
+                external_root = Path(external)
+                harness = fixture_module.ValidateReviewBundleTests(
+                    methodName="test_complete_fixture_passes"
+                )
+                digest = harness.build_bundle(root)
+                harness.install_helper_fixture(root, digest, recipients=["C"])
+                helper = root / "helpers/H01-pages.txt"
+                chair_before = {
+                    filename: (root / filename).read_bytes()
+                    for filename in CHAIR_MATERIALIZED_FILES
+                }
+                original_atomic = MATERIALIZER_MODULE.atomic_replace_text
+                first_write = True
+
+                def inject_at_first_write(*args, **kwargs):
+                    nonlocal first_write
+                    if first_write:
+                        first_write = False
+                        if mutation == "hardlink":
+                            os.link(helper, external_root / "late-helper-alias.txt")
+                        else:
+                            replacement = external_root / "replacement.txt"
+                            replacement.write_bytes(helper.read_bytes())
+                            os.replace(replacement, helper)
+                    return original_atomic(*args, **kwargs)
+
+                with mock.patch.object(
+                    MATERIALIZER_MODULE,
+                    "atomic_replace_text",
+                    side_effect=inject_at_first_write,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+
+                self.assertFalse(first_write, "the exact write-interval hook was unused")
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any("rolled back" in error for error in errors),
+                    errors,
+                )
+                self.assertEqual(
+                    chair_before,
+                    {
+                        filename: (root / filename).read_bytes()
+                        for filename in CHAIR_MATERIALIZED_FILES
+                    },
+                )
+
+    def test_chair_rollback_never_overwrites_concurrent_output_replacement(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as external,
+        ):
+            root = Path(directory)
+            external_root = Path(external)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            helper = root / "helpers/H01-pages.txt"
+            helper_alias = external_root / "late-helper-alias.txt"
+            chair_before = {
+                filename: (root / filename).read_bytes()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+            protected_paths: list[Path] = []
+            replacement_payload = b"concurrent external replacement\n"
+            replacement = external_root / "replacement.md"
+            replacement.write_bytes(replacement_payload)
+            original_atomic = MATERIALIZER_MODULE.atomic_replace_text
+            first_write = True
+
+            def replace_after_first_published_snapshot(*args, **kwargs):
+                nonlocal first_write
+                write_error = original_atomic(*args, **kwargs)
+                if first_write and write_error is None:
+                    first_write = False
+                    published_path = args[1]
+                    protected_paths.append(published_path)
+                    os.replace(replacement, published_path)
+                    os.link(helper, helper_alias)
+                return write_error
+
+            with mock.patch.object(
+                MATERIALIZER_MODULE,
+                "atomic_replace_text",
+                side_effect=replace_after_first_published_snapshot,
+            ):
+                errors = MATERIALIZER_MODULE.materialize(
+                    root,
+                    "C",
+                    [
+                        "helpers/H01-provenance.json",
+                        "helpers/H01-pages.txt",
+                    ],
+                )
+
+            self.assertFalse(first_write, "the post-publication hook was unused")
+            self.assertTrue(errors)
+            self.assertTrue(
+                any(
+                    "rollback refused" in error
+                    and "no longer names" in error
+                    for error in errors
+                ),
+                errors,
+            )
+            self.assertEqual(1, len(protected_paths))
+            protected_path = protected_paths[0]
+            self.assertEqual(replacement_payload, protected_path.read_bytes())
+            for filename in CHAIR_MATERIALIZED_FILES:
+                path = root / filename
+                if path != protected_path:
+                    self.assertEqual(chair_before[filename], path.read_bytes())
+
+    @unittest.skipUnless(os.name == "nt", "NTFS ADS is Windows-specific")
+    def test_chair_write_interval_helper_ads_fails_and_rolls_back(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            helper = root / "helpers/H01-pages.txt"
+            stream = Path(f"{helper}:late-materialization")
+            try:
+                stream.write_text("probe\n", encoding="utf-8")
+                stream.unlink()
+            except OSError as exc:
+                self.skipTest(f"test volume does not support NTFS ADS: {exc}")
+            chair_before = {
+                filename: (root / filename).read_bytes()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+            original_atomic = MATERIALIZER_MODULE.atomic_replace_text
+            first_write = True
+
+            def inject_at_first_write(*args, **kwargs):
+                nonlocal first_write
+                if first_write:
+                    first_write = False
+                    stream.write_text("late hidden bytes\n", encoding="utf-8")
+                return original_atomic(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    MATERIALIZER_MODULE,
+                    "atomic_replace_text",
+                    side_effect=inject_at_first_write,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+                self.assertFalse(first_write, "the exact write-interval hook was unused")
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any("named streams" in error for error in errors),
+                    errors,
+                )
+                self.assertTrue(
+                    any("rolled back" in error for error in errors),
+                    errors,
+                )
+                self.assertEqual(
+                    chair_before,
+                    {
+                        filename: (root / filename).read_bytes()
+                        for filename in CHAIR_MATERIALIZED_FILES
+                    },
+                )
+            finally:
+                try:
+                    stream.unlink(missing_ok=True)
+                except OSError:
+                    pass
+
+    @unittest.skipUnless(os.name == "nt", "NTFS junction test is Windows-specific")
+    def test_chair_write_interval_helpers_junction_fails_and_rolls_back(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as external,
+        ):
+            root = Path(directory)
+            external_root = Path(external)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            helpers = root / "helpers"
+            real_helpers = external_root / "real-helpers"
+            chair_before = {
+                filename: (root / filename).read_bytes()
+                for filename in CHAIR_MATERIALIZED_FILES
+            }
+            original_atomic = MATERIALIZER_MODULE.atomic_replace_text
+            first_write = True
+            junction_created = False
+
+            def inject_at_first_write(*args, **kwargs):
+                nonlocal first_write, junction_created
+                if first_write:
+                    first_write = False
+                    helpers.rename(real_helpers)
+                    created = subprocess.run(
+                        [
+                            "cmd", "/c", "mklink", "/J",
+                            str(helpers), str(real_helpers),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                    if created.returncode != 0:
+                        real_helpers.rename(helpers)
+                        raise unittest.SkipTest(
+                            f"could not create NTFS junction: {created.stderr}"
+                        )
+                    junction_created = True
+                return original_atomic(*args, **kwargs)
+
+            try:
+                with mock.patch.object(
+                    MATERIALIZER_MODULE,
+                    "atomic_replace_text",
+                    side_effect=inject_at_first_write,
+                ):
+                    errors = MATERIALIZER_MODULE.materialize(
+                        root,
+                        "C",
+                        [
+                            "helpers/H01-provenance.json",
+                            "helpers/H01-pages.txt",
+                        ],
+                    )
+                self.assertFalse(first_write, "the exact write-interval hook was unused")
+                self.assertTrue(junction_created)
+                self.assertTrue(errors)
+                self.assertTrue(
+                    any("rolled back" in error for error in errors),
+                    errors,
+                )
+                self.assertEqual(
+                    chair_before,
+                    {
+                        filename: (root / filename).read_bytes()
+                        for filename in CHAIR_MATERIALIZED_FILES
+                    },
+                )
+            finally:
+                if helpers.exists() and helpers.is_junction():
+                    helpers.rmdir()
+                if real_helpers.exists() and not helpers.exists():
+                    real_helpers.rename(helpers)
+
+    def test_chair_uses_exact_explicit_valid_helper_projection(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            harness = fixture_module.ValidateReviewBundleTests(
+                methodName="test_complete_fixture_passes"
+            )
+            digest = harness.build_bundle(root)
+            harness.install_helper_fixture(root, digest, recipients=["C"])
+            helper_inputs = [
+                "helpers/H01-provenance.json",
+                "helpers/H01-pages.txt",
+            ]
+            result = self.run_materializer(root, "C", helper_inputs)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            process = json.loads(
+                (root / "00-process-parameters.json").read_text(encoding="utf-8")
+            )
+            expected_opened = [
+                *fixture_module.VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                    process, 3, "C"
+                ),
+                *helper_inputs,
+            ]
+            for filename, label in (
+                ("90-chair-synthesis.md", "Chair input-receipt/access declaration"),
+                ("91-revision-ledger.md", "Input-receipt/access declaration"),
+                ("92-new-evidence-or-experiments.md", "Input-receipt/access declaration"),
+            ):
+                _receipt, parsed = self.parsed_receipt(root / filename, label)
+                self.assertEqual(expected_opened, parsed["opened"], filename)
+
+            before_second = file_hashes(root)
+            second = self.run_materializer(root, "C", helper_inputs)
+            self.assertEqual(0, second.returncode, second.stdout + second.stderr)
+            self.assertEqual(before_second, file_hashes(root))
 
     def test_chair_and_stage_s_materializers_do_not_enumerate_root_or_read_forbidden_stage_files(
         self,

@@ -317,6 +317,44 @@ R5 owns only the doctoral exhaustive page-ledger deliverable and its 100-percent
 
 Every reviewer has a mandatory read-only scoped gate before freeze and exit. Ordinary reviewers use `validate_reviewer_output.py`; doctoral R4 and R5 use their ledger-aware owner gates; master's R3 uses the combined page/bibliography/citation owner gate. The exact commands, actor-specific script insertions, and owned-output boundaries are closed in `references/ledger-validation.md` and `references/report-template.md`. The three ledger owners write all semantic judgments to their authoritative owned CSVs first, then, in that same fresh actor turn, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> <actor-id>` at least once after the final CSV write and again after every subsequent owned-CSV change. Its first nonempty stdout line must be `MATERIALIZED`. This deterministic pre-freeze step rebuilds only the actor-owned `02`/`03`/`04` Markdown tables and derives duplicate-free public-endpoint receipt lists; it never changes a semantic CSV value, disposition, finding, grade, packet artifact, or peer output. Do not hand-copy deterministic table rows or endpoint lists after materialization. The reviewer then repeats its read-only scoped gate in the same fresh turn until exit `0` and first nonempty stdout `PASS`, correcting only its own current outputs and rematerializing after any CSV edit. It must never edit the Stage-P packet, process envelope, frozen PDF, governing inputs, staged rules, or another actor's artifact. An upstream/frozen-input defect stops the actor and returns control to Stage O for a new global retry. Materializer and validator code/output are mechanical rule infrastructure, never thesis or citation evidence, and MATERIALIZED/PASS never replace semantic or visual sign-off.
 
+Stage O must not hand-write or merely hash-bind an R-stage prompt. Before the
+final process envelope exists, run the canonical Stage-R plan command beginning
+with `"<absolute-bundled-python>" -B scripts/build_reviewer_prompt.py plan` for
+every degree-appropriate reviewer with required `--process`, `--round-root`,
+`--actor`, `--output`, `--python-executable`, and `--scratch-dir` values. Repeat
+`--helper-input helpers/<portable-basename>` once per planned recipient helper input in exact
+`Hxx-provenance.json` then declared-output order. Freeze every helper
+provenance/output basename, output order, and recipient assignment before the
+process seal; any post-seal change requires a complete new retry. Place each
+returned prompt hash in `actor_prompt_sha256`. After the final process is sealed
+and Stage P/helpers have frozen the actual inputs, but immediately before each
+reviewer dispatch, run the verify command beginning with
+`"<same-absolute-bundled-python>" -B scripts/build_reviewer_prompt.py verify`
+with required `--run-root`,
+`--round-root`, `--prompt`, `--actor`, `--expected-process-sha256`,
+`--expected-seal-sha256`, `--python-executable`, `--scratch-dir`, and the same
+repeated helper sequence. The helper binds the Python path/hash and an empty,
+deterministically named, actor-private scratch directory; verifies the real
+process seal, frozen PDF/governing bytes, helper projection, and staged
+validators; reruns the byte-identical staged Stage-P validator with that Python,
+`-B`, `PYTHONDONTWRITEBYTECODE=1`, and the empty actor scratch as its working
+directory to require first-line `PASS`; and reconstructs exact JSON argument-
+vector reviewer gate commands beginning with that Python path and `-B`.
+Dispatch only the already-planned byte-identical prompt after first-line
+`VERIFIED` with exit `0`. This reconstruction guarantees that every actual reviewer prompt contains the six-question evidence
+self-check, whole-PDF remedy/counter-evidence search, minimum-residual finding
+rule, and downgrade-to-Question-or-delete rule. A prompt that merely has a
+matching hash but differs from the canonical rendering is invalid and triggers
+a clean retry.
+
+All Stage-R control paths use canonical local spellings and reject UNC/device
+namespaces, reparse traversal, hardlinks, NTFS 8.3 aliases, and NTFS named or
+alternate data streams. Every actual opened file and parent directory remains
+single-link/named-stream-free and identity/byte stable. Verification binds the
+complete metadata-only current-round topology before its first Stage-P gate and
+rechecks it after the final scratch check, so a late file, directory, link,
+stale review, or other added entry invalidates dispatch.
+
 For the doctoral bibliography/layout owner specifically, R5 may correct only its current `R5-comprehensive-review.md`, `02`, `03`, authorized page renders, and declarations inside those R5-owned Markdown artifacts before freeze. `NeighborPagesChecked` and `Evidence` may use only existing current-round `Pnnnn` values as explicit page cross-references; the primary-key column remains unique, and `Pnnnn` is still forbidden in other columns and prose. R5 records every additional redirect, failed official route, or fallback actually opened in `EvidenceNote` with the closed marker `accessed endpoint: <URL>` so the materializer can derive the complete receipt without guessing. R5 must never edit the Stage-P packet, process envelope, frozen PDF, staged rules, or any other actor's output. If its gate identifies such an upstream defect, R5 must stop and report failure; Stage O treats it as a global-retry condition.
 
 R5 page evidence is normalized before diversity checks: page IDs/numbers,
@@ -370,10 +408,26 @@ The acceptor supplies its own non-template basis and verifies target anchors,
 claims, dispositions, and grade consistency directly from its permitted current
 PDF/source evidence.
 
+Semantic acceptance applies a **reasonable-support/admissibility** standard,
+not a concurrence standard and not a second vote on the thesis. A reviewer item
+may pass even when the acceptor would assign a different severity, evidentiary
+weight, emphasis, or final recommendation, provided concrete permitted evidence
+reasonably supports the observation, the inference stays within that evidence,
+decisive counter-evidence was not omitted, and the requested action is
+proportionate. A normal scholarly difference in weighting is not by itself a
+semantic failure. The acceptor fails an item only when it lacks reasonable
+support, exceeds the permitted evidence, omits decisive counter-evidence, is
+internally inconsistent, or is not checkable within the closed authority. It
+must never rewrite an honest judgment merely to obtain `PASS`.
+
 A passing reviewer-finding row uses one compact canonical JSON object with the
-exact ordered keys `premise_class`, `target_premise`,
-`supporting_pdf_evidence`, `whole_pdf_resolution`, `residual_gap`, and
-`action_delta`. The last three values are closed subobjects. This record binds
+exact ordered keys `assessment_standard`, `premise_class`, `target_premise`,
+`supporting_pdf_evidence`, `whole_pdf_resolution`, `residual_gap`,
+`action_delta`, and `admissibility_result`. The three structured values are
+closed subobjects. Both marker fields use the exact reasonable-support values
+defined in `report-template.md`; the residual status records reasonable
+support for retaining the bounded concern, not the acceptor's concurrence.
+This record binds
 the target `Observation`, distinguishes an explicit positive defect, bounded
 inference, or absence after a real whole-PDF search, records responsive text or
 a concrete unsuccessful search, identifies the residual defect, and states the
@@ -384,9 +438,26 @@ projection keys `gate_disposition_profile`, `actionable_finding_profile`,
 the independent comparison auditable; they do not let a validator decide the
 truth of a scholarly proposition by keyword.
 
-Before freezing, each acceptor runs
-`python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>`
-to `PASS`. After all pairs are copied into the closed round, Stage O runs
+Passing reviewer `gate` and `question` rows also use their exact closed
+canonical JSON contracts from `report-template.md`. A Gate row binds the target
+disposition, decisive evidence, and related finding IDs before recording an
+independent PDF assessment. A Question row binds all four target cells and then
+records the acceptor's whole-PDF unresolved check. Generic prose is not a valid
+substitute for either contract.
+
+Before freezing, each acceptor runs the prompt's exact JSON argument vector
+`["<bound-python-executable>","-B","<exact-SA-view>/rules/scripts/validate_semantic_acceptance_output.py","<exact-SA-view>","<target>"]`
+with the exact environment override `{"PYTHONDONTWRITEBYTECODE":"1"}` and no
+shell or `PATH` lookup
+to one of two closed outcomes. `PASS` with exit `0` freezes a mechanically valid,
+semantically admissible private pair that Stage O may promote. `VALID-FAIL` with
+exit `3` freezes a mechanically valid private pair
+containing at least one honest semantic failure. Stage O records and verifies
+the failed pair's hashes outside every substantive allowlist, quarantines the
+entire retry, and must not promote, overwrite, or return the pair to the
+acceptor for a more favorable judgment. Any other output/exit combination is a
+mechanical or staged-input failure and also stops the retry. After all passing
+pairs are copied into the closed round, Stage O runs
 `python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set`,
 then `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>`
 to `MATERIALIZED`, and finally reruns the set gate with `--require-gate` to
@@ -412,13 +483,40 @@ target view and supplies the required
 Verification loads the validator staged in that view, recomputes the
 algorithmic allowlist and exact prompt bytes, and requires the final process
 bytes to match both this external anchor and the separate SHA-256 commitment
-frozen by Stage P in `00-manifest.md` without changing either artifact. After
-scoped `PASS`, Stage O must use `promote` with that same required external
-process hash for the validated byte-identical SA pair only. A prompt/process/
-seal-hash mismatch, reserved-directory output, overwrite attempt, input-byte
-drift, or scoped failure is fatal.
+frozen by Stage P in `00-manifest.md` without changing either artifact. This
+prelaunch verification occurs before either SA output exists and returns an
+`input_commitment.sha256` over every opened input's relative path, single-link
+identity, metadata, and bytes. Stage O retains that value only in external
+orchestration state. After scoped `PASS`, Stage O must use `promote` with both
+the same required external process hash and
+`--expected-input-commitment-sha256 <externally-retained-prelaunch-value>` for
+the validated byte-identical SA pair only; promotion never recomputes a new
+baseline from post-dispatch state. A prompt/process/seal-hash mismatch,
+reserved-directory output, overwrite attempt, input identity/byte drift, or
+scoped failure is fatal.
 
-Any semantic `FAIL`, missing/duplicate unit, contamination, target-hash drift, or
+Stage O invokes every `plan`, `verify`, and `promote` operation as
+`"<absolute-bundled-python>" -B scripts/build_semantic_acceptance_prompt.py ...
+--python-executable <same-absolute-bundled-python>`. The supplied executable
+must be the builder's exact canonical `sys.executable` with the same file
+identity; a launcher name, `PATH` lookup, WindowsApps alias, non-Python file,
+different interpreter, or runtime drift is fatal. The planned prompt records
+that path and SHA-256 and renders every validator invocation as an exact JSON
+argument vector beginning with that path and `-B`, plus the exact
+`PYTHONDONTWRITEBYTECODE=1` environment override. Because the exact prompt hash
+is committed by the final process envelope and seal, verification and promotion
+close the complete SA lifecycle over the same runtime.
+
+On Windows, all SA builder control paths use canonical local drive-letter
+spellings. UNC paths (including administrative and arbitrary nested shares),
+device namespaces, symlink/reparse traversal, hardlinks, NTFS 8.3 aliases, and
+NTFS named/alternate data streams are rejected. Every object in the closed SA
+view is checked for named streams that ordinary directory enumeration cannot
+show. The private view and prompt and the private view and finalized
+round also use one drive-letter namespace, preventing a mapped/substituted drive
+from disguising an overlap.
+
+Any semantic `VALID-FAIL`, missing/duplicate unit, contamination, target-hash drift, or
 scoped SA failure invalidates the entire retry after target freeze. The acceptor
 must not patch the target and Stage O must not rerun only that reviewer. Encode
 any general rule repair in the canonical skill/tests, quarantine the retry, and
@@ -443,7 +541,7 @@ Launch the chair as a new Stage-C actor with no inherited conversation and no ro
 
 The chair must also record a fresh-context declaration. It cannot use user explanations, rebuttal arguments, remembered implementation facts, prior summaries, or old review conclusions to accept or reject a finding. Before testing evidentiary sufficiency, the chair applies a submission-obligation gate: does the requested information have to be visible in the thesis or a verified formal submission attachment, and does its absence impair a claim that the PDF actually makes? A request for hidden code, logs, hashes, manifests, commands, private member lists, or other non-submitted author-side material that fails this gate is rejected as outside the thesis-review obligation; it is not labeled `not verifiable`, does not become an open revision row, and is not projected as an unresolved question. Use `not verifiable from the submitted PDF` only for an otherwise in-scope thesis question that the permitted evidence cannot decide. Every current reviewer `S0`--`S3` finding must enter exactly one chair disposition: supported/deduplicated findings appear through a canonical duplicate-free `91.SourceReviewerFindingIDs` list, while a submission-obligation rejection is preserved only by its original `Rn-Fxx` ID in a direct `Status=rejected` Chair decision row. The two paths are mutually exclusive, so no finding may disappear or be adjudicated twice. Rejected, disputed, and not-verifiable decisions remain in the chair's decision table, while Stage S projects only the statuses specified in `references/report-template.md`.
 
-The Chair writes its semantic adjudication first, with `91-revision-ledger.csv`, `91-ai-actionable-ledger.csv`, `92-new-evidence-or-experiments.csv`, and the non-projection Chair prose as authoritative sources. Before freeze and after every such source edit, the same fresh Chair actor runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C` to `MATERIALIZED`. This rebuilds the deterministic `90`--`92` tables, canonical allowlist, and one identical closed Chair receipt across all three Markdown artifacts without changing any semantic CSV or Chair decision. The Chair then runs `python rules/scripts/validate_chair_output.py <exact-round-root>` until the first nonempty stdout line is `PASS` with exit `0`. This pre-Stage-S mode validates every frozen upstream artifact and all Chair-owned `90`--`92` outputs while forbidding `93`, `94`, and `95`; the Chair may correct only its own current outputs and must rematerialize after a source edit. Any upstream failure triggers Stage O's clean global retry rather than a downstream patch.
+The Chair writes its semantic adjudication first, with `91-revision-ledger.csv`, `91-ai-actionable-ledger.csv`, `92-new-evidence-or-experiments.csv`, and the non-projection Chair prose as authoritative sources. Before freeze and after every such source edit, the same fresh Chair actor runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` to `MATERIALIZED`. Stage O must freeze the repeated flags in the exact Chair prompt and repeat them once per C-recipient helper path in canonical Hxx/provenance/output order; omit all flags when C has no helper. The materializer opens only those declared paths, validates their complete provenance/hash/recipient closure before any write, never discovers or opens sibling R/AI helper files, and rebuilds the deterministic `90`--`92` tables, canonical allowlist, and one identical closed Chair receipt without changing any semantic CSV or Chair decision. The Chair then runs `python rules/scripts/validate_chair_output.py <exact-round-root>` until the first nonempty stdout line is `PASS` with exit `0`. This pre-Stage-S mode validates every frozen upstream artifact and all Chair-owned `90`--`92` outputs while forbidding `93`, `94`, and `95`; the Chair may correct only its own current outputs and must rematerialize after a source edit. Any upstream failure triggers Stage O's clean global retry rather than a downstream patch.
 
 Keep the frozen AI-style judgment separate from the reviewer verdict distribution and academic/defense categories. The chair carries every unresolved `AI-Fxx` with impact `material` or `local` into a separate AI-actionable section and sidecar of the revision ledger, without assigning `S0--S4`, `W/E/N/P`, or changing the defense grade. It must repeat that this is not an AI-use, authorship, plagiarism, or misconduct determination. Optional AI findings remain separate and optional.
 
@@ -457,7 +555,7 @@ After the chair freezes `90-chair-synthesis.md`, `91-revision-ledger.md`, `91-re
 
 The summary is a traceable compression, not another adjudication. It must reproduce every individual and chair conclusion exactly, including each reviewer's decision regime/source, persona emphasis and whole-thesis rationale, the AI assessor's exact rationale, and the chair's decision regime/source and exact rationale; report the AI-style judgment separately; list exactly the current open adjudicated items in `91-revision-ledger.csv`; copy the chair's optional-suggestion and limitation sections without rephrasing; project every unresolved/not-verifiable/disputed Chair decision; project every current N-remedy evidence item; and bind every row to current finding IDs and exact PDF anchors. Every projected source field must occur exactly once under its documented `##` section; a duplicate authoritative section or duplicate same-named field inside it invalidates the bundle, and a lookalike label elsewhere cannot redirect the projection. Its H1 and nine H2 sections, nine identity bullets, canonical ordered input allowlist, table-only conclusion/current-item/unresolved sections, and fourteen reconciliation bullets are closed schemas: no extra section, reorder, duplicate basename, appendix, or stray prose is allowed. The actor table order is `R1...Rn, AI, Chair`; the academic, AI, and N rows preserve their authoritative source order; and the reconciliation `Statement` has the exact canonical non-invention value. The current academic and AI action CSVs are lossless open-row projections of their `91` masters, not abbreviated summaries. It must not introduce, omit, soften, escalate, or merge findings; write a new “decisive basis”; mention old resolved issues; or use user explanations, source-sync facts, repository knowledge, previous assistant summaries, or new web research. The validator must reconcile the complete actor table field-by-field, exact round/retry/prompt/input identity, every Markdown/CSV row set, issue counts, and current PDF identity before the summary can be relayed.
 
-Before Stage S freezes or exits, the same fresh summarizer runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to `MATERIALIZED`. Stage S is a deterministic projection actor: this command rebuilds both open-row `93` CSV subsets and every mechanically copied table, section, count, allowlist, and receipt in `93-user-facing-summary.md` from the closed current-round inputs; it introduces no adjudication. It then runs `python rules/scripts/validate_summary_output.py <exact-round-root>` until exit `0` and first nonempty stdout `PASS`, correcting only its three `93` outputs and rematerializing after any change. These two scoped steps never open the frozen PDF, Stage-P packet, `02`--`04`, helpers, or prior rounds. After S freezes, Stage O—not S—runs the complete bundle validator and writes `95-bundle-validation.md`; only a complete PASS authorizes delivery.
+Before Stage S freezes or exits, the same fresh summarizer runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to `MATERIALIZED`. Stage S is a deterministic projection actor: this command rebuilds both open-row `93` CSV subsets and every mechanically copied table, section, count, allowlist, and receipt in `93-user-facing-summary.md` from the closed current-round inputs; it introduces no adjudication. It then runs `python rules/scripts/validate_summary_output.py <exact-round-root>` until exit `0` and first nonempty stdout `PASS`, correcting only its three `93` outputs and rematerializing after any change. The scoped gate binds the process parse to the identical process member of one complete stable-handle snapshot, and every later CSV/Markdown semantic check consumes those captured bytes rather than reopening a mutable pathname. Every opened Stage-S source and all three outputs remain named-stream-free single-link regular files with stable identity and bytes through the terminal PASS check. These two scoped steps never open the frozen PDF, Stage-P packet, `02`--`04`, helpers, or prior rounds. After S freezes, Stage O—not S—runs the complete bundle validator and writes `95-bundle-validation.md`; only a complete PASS authorizes delivery.
 
 For questions about the current PDF's independent blind review, relay the frozen current-round `93-user-facing-summary.md` rather than reconstructing an answer from conversation memory. For a longitudinal question such as whether prior items remain open or whether an iterative loop is finished, present current `93` and, if run, `94-post-freeze-prior-issue-closure.md` in two separate blocks without merging or re-adjudicating them. A conversation-aware orchestrator may add only a minimal operational wrapper and artifact links.
 

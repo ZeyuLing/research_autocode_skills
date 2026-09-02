@@ -133,8 +133,10 @@ def preflight_exact_inputs(
         )
         return None
     try:
-        process = json.loads(process_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+        process = module.parse_strict_json_object(
+            process_path.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
         errors.append(f"cannot safely preflight 00-process-parameters.json: {exc}")
         return None
     if not isinstance(process, dict):

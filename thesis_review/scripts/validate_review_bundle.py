@@ -15,6 +15,7 @@ import hashlib
 import importlib.util
 import json
 import math
+import os
 import re
 import stat
 import struct
@@ -4290,6 +4291,423 @@ def is_link_or_reparse(path: Path) -> bool:
         return False
 
 
+def is_single_link_regular_file(path: Path) -> bool:
+    """Return true only for one non-reparse, named-stream-free file identity."""
+
+    try:
+        metadata = path.lstat()
+    except OSError:
+        return False
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    structurally_safe = bool(
+        stat.S_ISREG(metadata.st_mode)
+        and not stat.S_ISLNK(metadata.st_mode)
+        and not (
+            attributes
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+        and metadata.st_nlink == 1
+        and not is_link_or_reparse(path)
+    )
+    if not structurally_safe:
+        return False
+    streams, stream_error = _ntfs_named_streams(path)
+    return stream_error is None and not streams
+
+
+class HelperInputSnapshot(NamedTuple):
+    """Stable bytes and pathname identity for one declared helper input."""
+
+    relative_path: str
+    device: int
+    inode: int
+    mode: int
+    link_count: int
+    size: int
+    mtime_ns: int
+    file_attributes: int
+    sha256: str
+    content: bytes
+
+
+class HelperDirectorySnapshot(NamedTuple):
+    """Identity commitment for one named directory on the helper path chain."""
+
+    absolute_path: str
+    device: int
+    inode: int
+    mode: int
+    link_count: int
+    file_attributes: int
+
+
+def _helper_stat_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return the identity fields shared by ``lstat`` and ``fstat``."""
+
+    return (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_mode),
+        int(metadata.st_nlink),
+        int(metadata.st_size),
+        int(getattr(metadata, "st_mtime_ns", int(metadata.st_mtime * 1e9))),
+        int(getattr(metadata, "st_file_attributes", 0)),
+    )
+
+
+def _helper_directory_identity(metadata: os.stat_result) -> tuple[int, ...]:
+    """Return stable structural identity fields for a directory component."""
+
+    return (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_mode),
+        int(metadata.st_nlink),
+        int(getattr(metadata, "st_file_attributes", 0)),
+    )
+
+
+def _helper_directory_chain(root: Path) -> list[Path]:
+    """Return the exact absolute ancestor chain through ``root/helpers``."""
+
+    absolute_root = Path(os.path.abspath(root))
+    ancestors: list[Path] = []
+    cursor = absolute_root
+    while True:
+        ancestors.append(cursor)
+        parent = cursor.parent
+        if parent == cursor:
+            break
+        cursor = parent
+    ancestors.reverse()
+    return [*ancestors, absolute_root / "helpers"]
+
+
+def capture_helper_directory_chain_snapshot(
+    root: Path, errors: list[str]
+) -> list[HelperDirectorySnapshot]:
+    """Commit the non-aliased directory chain before any helper leaf is read.
+
+    This deliberately names each component instead of enumerating ``helpers``
+    or any ancestor.  A pre-existing junction must therefore be rejected before
+    a helper file can be opened, and a later replacement cannot be washed back
+    without changing the retained directory identity commitment.
+    """
+
+    snapshots: list[HelperDirectorySnapshot] = []
+    for component in _helper_directory_chain(root):
+        try:
+            before = component.lstat()
+        except OSError as exc:
+            errors.append(
+                "cannot inspect declared helper directory-chain component "
+                f"{component}: {exc}"
+            )
+            return []
+        attributes = int(getattr(before, "st_file_attributes", 0))
+        link_count_safe = (
+            int(before.st_nlink) == 1
+            if os.name == "nt"
+            else int(before.st_nlink) >= 1
+        )
+        if (
+            not stat.S_ISDIR(before.st_mode)
+            or stat.S_ISLNK(before.st_mode)
+            or bool(
+                attributes
+                & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+            )
+            or is_link_or_reparse(component)
+            or not link_count_safe
+        ):
+            errors.append(
+                "declared helper directory chain must contain only non-aliased "
+                "directory components with a safe link count; invalid="
+                f"{component}"
+            )
+            return []
+        streams, stream_error = _ntfs_named_streams(component)
+        if stream_error is not None:
+            errors.append(
+                "cannot inspect named streams on declared helper directory-chain "
+                f"component {component}: {stream_error}"
+            )
+            return []
+        if streams:
+            errors.append(
+                "declared helper directory-chain component must not carry NTFS "
+                f"named streams; path={component}, observed={streams}"
+            )
+            return []
+        try:
+            after = component.lstat()
+        except OSError as exc:
+            errors.append(
+                "cannot re-inspect declared helper directory-chain component "
+                f"{component}: {exc}"
+            )
+            return []
+        if _helper_directory_identity(before) != _helper_directory_identity(after):
+            errors.append(
+                "declared helper directory-chain component changed during "
+                f"snapshot: {component}"
+            )
+            return []
+        snapshots.append(
+            HelperDirectorySnapshot(
+                str(component), *_helper_directory_identity(after)
+            )
+        )
+    return snapshots
+
+
+def verify_helper_directory_chain_snapshot(
+    root: Path,
+    expected: Iterable[HelperDirectorySnapshot],
+    errors: list[str],
+) -> bool:
+    """Require the complete helper directory chain to retain its identity."""
+
+    expected_list = list(expected)
+    error_count_before_capture = len(errors)
+    observed = capture_helper_directory_chain_snapshot(root, errors)
+    if len(errors) != error_count_before_capture:
+        return False
+    if observed != expected_list:
+        errors.append(
+            "declared helper directory identity/topology changed after its "
+            "pre-read commitment; refusing downstream materialization"
+        )
+        return False
+    return True
+
+
+def _ntfs_named_streams(path: Path) -> tuple[list[str], str | None]:
+    """Enumerate non-default NTFS streams without opening any stream bytes.
+
+    A neutral basename prevents an actor from declaring ``name:stream``, but a
+    named stream can still be attached to the otherwise-neutral base file.
+    ``FindFirstStreamW`` is the only reliable way to observe those streams from
+    Python without invoking another process.  Filesystems that explicitly do
+    not implement streams are safe for this purpose and return an empty list.
+    """
+
+    if os.name != "nt":
+        return [], None
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class WIN32_FIND_STREAM_DATA(ctypes.Structure):
+            _fields_ = [
+                ("StreamSize", ctypes.c_longlong),
+                ("cStreamName", wintypes.WCHAR * 296),
+            ]
+
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        find_first = kernel32.FindFirstStreamW
+        find_first.argtypes = [
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            ctypes.POINTER(WIN32_FIND_STREAM_DATA),
+            wintypes.DWORD,
+        ]
+        find_first.restype = wintypes.HANDLE
+        find_next = kernel32.FindNextStreamW
+        find_next.argtypes = [
+            wintypes.HANDLE,
+            ctypes.POINTER(WIN32_FIND_STREAM_DATA),
+        ]
+        find_next.restype = wintypes.BOOL
+        find_close = kernel32.FindClose
+        find_close.argtypes = [wintypes.HANDLE]
+        find_close.restype = wintypes.BOOL
+
+        data = WIN32_FIND_STREAM_DATA()
+        handle = find_first(str(path), 0, ctypes.byref(data), 0)
+        invalid_handle = wintypes.HANDLE(-1).value
+        if handle == invalid_handle:
+            error = ctypes.get_last_error()
+            # ERROR_HANDLE_EOF: no streams; ERROR_INVALID_FUNCTION and
+            # ERROR_NOT_SUPPORTED: the volume cannot carry NTFS ADS.
+            if error in {1, 38, 50}:
+                return [], None
+            return [], f"FindFirstStreamW failed with Windows error {error}"
+        streams: list[str] = []
+        try:
+            while True:
+                name = str(data.cStreamName)
+                if name and name.casefold() != "::$data":
+                    streams.append(name)
+                if find_next(handle, ctypes.byref(data)):
+                    continue
+                error = ctypes.get_last_error()
+                if error == 38:  # ERROR_HANDLE_EOF
+                    break
+                return [], f"FindNextStreamW failed with Windows error {error}"
+        finally:
+            find_close(handle)
+        return sorted(streams), None
+    except (AttributeError, OSError, TypeError, ValueError) as exc:
+        return [], f"cannot enumerate NTFS named streams: {exc}"
+
+
+def capture_helper_input_snapshot(
+    path: Path, relative_path: str, errors: list[str]
+) -> HelperInputSnapshot | None:
+    """Read one helper through a stable handle and bind bytes to its pathname.
+
+    The pre-open ``lstat``, handle ``fstat`` values, post-read ``fstat``, and
+    post-close ``lstat`` must all identify the same single-link regular file.
+    The hash and any JSON parsing therefore refer to the exact bytes read from
+    that handle rather than to a later pathname lookup.
+    """
+
+    try:
+        before = path.lstat()
+    except OSError as exc:
+        errors.append(f"{relative_path}: cannot inspect helper input: {exc}")
+        return None
+    streams, stream_error = _ntfs_named_streams(path)
+    if stream_error is not None:
+        errors.append(f"{relative_path}: {stream_error}")
+        return None
+    if streams:
+        errors.append(
+            f"{relative_path}: helper input must not carry NTFS named streams; "
+            f"observed={streams}"
+        )
+        return None
+    if not is_single_link_regular_file(path):
+        errors.append(
+            f"{relative_path}: declared helper inputs must be non-aliased "
+            "single-link regular files"
+        )
+        return None
+
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(path, flags)
+        opened_before = os.fstat(descriptor)
+        if (
+            _helper_stat_identity(before) != _helper_stat_identity(opened_before)
+            or not stat.S_ISREG(opened_before.st_mode)
+            or opened_before.st_nlink != 1
+        ):
+            errors.append(
+                f"{relative_path}: helper pathname changed while its handle "
+                "was opened"
+            )
+            return None
+        chunks: list[bytes] = []
+        while True:
+            chunk = os.read(descriptor, 1024 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+        opened_after = os.fstat(descriptor)
+        if _helper_stat_identity(opened_before) != _helper_stat_identity(opened_after):
+            errors.append(
+                f"{relative_path}: helper input changed while its bytes were read"
+            )
+            return None
+        content = b"".join(chunks)
+    except OSError as exc:
+        errors.append(f"{relative_path}: cannot read helper input safely: {exc}")
+        return None
+    finally:
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+
+    try:
+        after = path.lstat()
+    except OSError as exc:
+        errors.append(
+            f"{relative_path}: cannot re-inspect helper input after read: {exc}"
+        )
+        return None
+    streams_after, stream_error_after = _ntfs_named_streams(path)
+    if stream_error_after is not None:
+        errors.append(f"{relative_path}: {stream_error_after}")
+        return None
+    if streams_after:
+        errors.append(
+            f"{relative_path}: helper input must not carry NTFS named streams; "
+            f"observed={streams_after}"
+        )
+        return None
+    if (
+        _helper_stat_identity(before) != _helper_stat_identity(after)
+        or not is_single_link_regular_file(path)
+    ):
+        errors.append(
+            f"{relative_path}: helper pathname identity changed during snapshot"
+        )
+        return None
+    identity = _helper_stat_identity(opened_after)
+    return HelperInputSnapshot(
+        relative_path,
+        *identity,
+        hashlib.sha256(content).hexdigest().upper(),
+        content,
+    )
+
+
+def capture_declared_helper_snapshot_set(
+    root: Path, declared_inputs: Iterable[str], errors: list[str]
+) -> list[HelperInputSnapshot]:
+    """Capture an exact ordered helper set without probing sibling files.
+
+    The directory-chain preflight intentionally precedes the first leaf open.
+    Its retained identity is checked again after the last leaf closes, so a
+    junction or directory replacement cannot serve bytes and then disappear
+    within this capture operation.
+    """
+
+    directory_snapshots = capture_helper_directory_chain_snapshot(root, errors)
+    if not directory_snapshots:
+        return []
+    snapshots: list[HelperInputSnapshot] = []
+    for relative_path in declared_inputs:
+        snapshot = capture_helper_input_snapshot(
+            root / Path(relative_path), relative_path, errors
+        )
+        if snapshot is not None:
+            snapshots.append(snapshot)
+    verify_helper_directory_chain_snapshot(root, directory_snapshots, errors)
+    return snapshots
+
+
+def verify_declared_helper_snapshot_set(
+    root: Path,
+    expected: Iterable[HelperInputSnapshot],
+    errors: list[str],
+) -> bool:
+    """Re-read the complete ordered set and require byte/identity stability."""
+
+    expected_list = list(expected)
+    error_count_before_capture = len(errors)
+    observed = capture_declared_helper_snapshot_set(
+        root,
+        [snapshot.relative_path for snapshot in expected_list],
+        errors,
+    )
+    if len(errors) != error_count_before_capture:
+        return False
+    if observed != expected_list:
+        errors.append(
+            "declared helper input identity/hash set changed after validation; "
+            "refusing downstream materialization"
+        )
+        return False
+    return True
+
+
 def validate_write_report_destination(
     root: Path, requested_report: Path, errors: list[str]
 ) -> Path | None:
@@ -4367,38 +4785,91 @@ def atomic_write_validation_report(path: Path, text: str) -> str | None:
 
 
 def preflight_reparse_boundary(root: Path, errors: list[str]) -> bool:
-    """Refuse link-like entries before any round artifact is opened."""
+    """Refuse every aliased or hidden-stream entry before opening artifacts."""
 
-    if is_link_or_reparse(root):
-        errors.append("round directory itself is a symlink/junction/reparse point")
-        return False
-    try:
-        root_entries = list(root.iterdir())
-    except OSError as exc:
-        errors.append(f"cannot enumerate round directory for boundary preflight: {exc}")
-        return False
     invalid: list[str] = []
-    for entry in root_entries:
-        if is_link_or_reparse(entry):
-            invalid.append(entry.name)
+    stack: list[tuple[Path, str]] = [(root, ".")]
+    while stack:
+        directory, relative_directory = stack.pop()
+        try:
+            metadata = directory.lstat()
+        except OSError as exc:
+            errors.append(
+                f"cannot inspect {relative_directory!r} for boundary preflight: {exc}"
+            )
             continue
-        if entry.is_dir():
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        if (
+            not stat.S_ISDIR(metadata.st_mode)
+            or stat.S_ISLNK(metadata.st_mode)
+            or bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0))
+            or is_link_or_reparse(directory)
+        ):
+            invalid.append(relative_directory)
+            continue
+        streams, stream_error = _ntfs_named_streams(directory)
+        if stream_error is not None:
+            errors.append(
+                f"cannot inspect named streams on {relative_directory!r}: "
+                f"{stream_error}"
+            )
+            continue
+        if streams:
+            invalid.append(f"{relative_directory} [NTFS named streams: {streams}]")
+            continue
+        try:
+            entries = list(directory.iterdir())
+        except OSError as exc:
+            errors.append(
+                f"cannot enumerate {relative_directory!r} for boundary preflight: {exc}"
+            )
+            continue
+        for entry in entries:
             try:
-                children = list(entry.iterdir())
-            except OSError as exc:
+                relative = entry.relative_to(root).as_posix()
+                entry_metadata = entry.lstat()
+            except (OSError, ValueError) as exc:
+                errors.append(f"cannot inspect round entry {entry}: {exc}")
+                continue
+            entry_attributes = int(
+                getattr(entry_metadata, "st_file_attributes", 0)
+            )
+            if (
+                stat.S_ISLNK(entry_metadata.st_mode)
+                or bool(
+                    entry_attributes
+                    & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+                )
+                or is_link_or_reparse(entry)
+            ):
+                invalid.append(relative)
+                continue
+            entry_streams, entry_stream_error = _ntfs_named_streams(entry)
+            if entry_stream_error is not None:
                 errors.append(
-                    f"cannot enumerate {entry.name!r} for boundary preflight: {exc}"
+                    f"cannot inspect named streams on {relative!r}: "
+                    f"{entry_stream_error}"
                 )
                 continue
-            invalid.extend(
-                f"{entry.name}/{child.name}"
-                for child in children
-                if is_link_or_reparse(child)
-            )
+            if entry_streams:
+                invalid.append(
+                    f"{relative} [NTFS named streams: {entry_streams}]"
+                )
+                continue
+            if stat.S_ISDIR(entry_metadata.st_mode):
+                stack.append((entry, relative))
+            elif (
+                not stat.S_ISREG(entry_metadata.st_mode)
+                or int(entry_metadata.st_nlink) != 1
+            ):
+                invalid.append(
+                    f"{relative} [not a single-link regular file]"
+                )
     if invalid:
         errors.append(
-            "closed current-round boundary contains symlink/junction/reparse "
-            f"entries: {sorted(invalid)}"
+            "closed current-round boundary contains symlink/junction/reparse, "
+            "hardlink, special, or named-stream entries: "
+            f"{sorted(invalid)}"
         )
         return False
     return not errors
@@ -4502,6 +4973,32 @@ def read_closed_semantic_gate(path: Path, errors: list[str]) -> dict[str, Any] |
     if not isinstance(payload, dict):
         errors.append(f"{path.name}: gate root must be one JSON object")
         return None
+    return payload
+
+
+def parse_strict_json_object(value: str) -> dict[str, Any]:
+    """Parse one JSON object while rejecting duplicate keys at every depth.
+
+    Scoped validators and materializers preflight the process envelope before
+    passing it back to this module as ``process_override``.  They must share the
+    same duplicate-key semantics as the full validator; otherwise JSON's
+    last-key-wins behavior can make a scoped gate or materializer accept bytes
+    that the full gate later rejects.
+    """
+
+    def reject_duplicate_keys(
+        pairs: list[tuple[str, Any]],
+    ) -> dict[str, Any]:
+        parsed: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in parsed:
+                raise ValueError(f"duplicate JSON key {key!r}")
+            parsed[key] = item
+        return parsed
+
+    payload = json.loads(value, object_pairs_hook=reject_duplicate_keys)
+    if not isinstance(payload, dict):
+        raise ValueError("JSON root must be an object")
     return payload
 
 
@@ -7242,13 +7739,16 @@ def helper_inputs_for_recipient(root: Path | None, actor_id: str) -> list[str]:
         return []
     projected: list[str] = []
     for provenance_path in sorted(helpers.glob("H??-provenance.json")):
-        if is_link_or_reparse(provenance_path) or not provenance_path.is_file():
+        if not is_single_link_regular_file(provenance_path):
             continue
         try:
-            data = json.loads(provenance_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            continue
-        if not isinstance(data, dict):
+            data = parse_strict_json_object(
+                provenance_path.read_text(encoding="utf-8")
+            )
+        except (OSError, json.JSONDecodeError, ValueError):
+            # Do not project any recipient authorization from ambiguous bytes.
+            # ``validate_helper_bundle`` reports the strict-JSON diagnostic in
+            # the canonical FAIL result later in the same validation pass.
             continue
         recipients = data.get("recipient_stages")
         if not isinstance(recipients, list) or actor_id not in recipients:
@@ -11624,34 +12124,123 @@ def validate_helper_bundle(
     process: dict[str, Any],
     reviewer_count: int,
     errors: list[str],
-) -> None:
+    *,
+    declared_inputs: Iterable[str] | None = None,
+    required_recipient: str | None = None,
+) -> list[str]:
+    """Validate either the complete helper bundle or one explicit actor subset.
+
+    The complete Stage-O/full-bundle mode enumerates ``helpers/``.  A scoped
+    actor must instead pass ``declared_inputs`` from its frozen operational
+    prompt.  That branch opens only those exact paths and never probes sibling
+    helper files; ``required_recipient`` additionally binds every provenance
+    record and the canonical provenance/output order to that actor.
+    """
+
     helpers = root / "helpers"
-    if not helpers.exists():
-        return
-    if is_link_or_reparse(helpers) or not helpers.is_dir():
-        errors.append("helpers exists but is not a directory")
-        return
-    entries = list(helpers.iterdir())
-    if not entries:
-        errors.append("helpers: empty directory must be omitted")
-        return
-    files = sorted(
-        path for path in entries
-        if path.is_file() and not is_link_or_reparse(path)
-    )
-    invalid_entries = sorted(
-        path.name for path in entries
-        if is_link_or_reparse(path) or not path.is_file()
-    )
-    if invalid_entries:
-        errors.append(
-            "helpers: only in-root regular files are allowed; invalid="
-            f"{invalid_entries}"
+    scoped = declared_inputs is not None
+    normalized_declared: list[str] = []
+    if scoped:
+        for index, value in enumerate(declared_inputs or []):
+            if (
+                not isinstance(value, str)
+                or not value.strip()
+                or value != value.strip()
+            ):
+                errors.append(
+                    f"helper input {index} must be a nonempty trimmed path"
+                )
+                continue
+            normalized = value.replace("\\", "/")
+            relative = Path(normalized)
+            if (
+                relative.is_absolute()
+                or len(relative.parts) != 2
+                or relative.parts[0] != "helpers"
+                or not is_neutral_portable_basename(relative.parts[1])
+            ):
+                errors.append(
+                    f"helper input {value!r} must be exactly "
+                    "helpers/<portable-basename>"
+                )
+                continue
+            normalized_declared.append(normalized)
+        if len(normalized_declared) != len(set(normalized_declared)):
+            errors.append("helper inputs must be duplicate-free")
+        if errors or not normalized_declared:
+            return []
+        if is_link_or_reparse(helpers) or not helpers.is_dir():
+            errors.append(
+                "declared helper inputs require one safe helpers directory"
+            )
+            return []
+        files = [root / Path(relative) for relative in normalized_declared]
+        invalid_entries = sorted(
+            path.name
+            for path in files
+            if not is_single_link_regular_file(path)
         )
-    provenance_files = [
-        path for path in files
-        if re.fullmatch(r"H\d{2}-provenance\.json", path.name)
-    ]
+        if invalid_entries:
+            errors.append(
+                "declared helper inputs must be non-aliased single-link "
+                "regular files; invalid="
+                f"{invalid_entries}"
+            )
+            return []
+        provenance_files = sorted(
+            (
+                path for path in files
+                if re.fullmatch(r"H\d{2}-provenance\.json", path.name)
+            ),
+            key=lambda path: path.name,
+        )
+    else:
+        if not helpers.exists():
+            return []
+        if is_link_or_reparse(helpers) or not helpers.is_dir():
+            errors.append("helpers exists but is not a directory")
+            return []
+        entries = list(helpers.iterdir())
+        if not entries:
+            errors.append("helpers: empty directory must be omitted")
+            return []
+        files = sorted(
+            path for path in entries
+            if is_single_link_regular_file(path)
+        )
+        invalid_entries = sorted(
+            path.name for path in entries
+            if not is_single_link_regular_file(path)
+        )
+        if invalid_entries:
+            errors.append(
+                "helpers: only in-root non-aliased single-link regular files "
+                "are allowed; invalid="
+                f"{invalid_entries}"
+            )
+        provenance_files = [
+            path for path in files
+            if re.fullmatch(r"H\d{2}-provenance\.json", path.name)
+        ]
+    snapshot_relatives = (
+        list(normalized_declared)
+        if scoped
+        else [f"helpers/{path.name}" for path in files]
+    )
+    helper_snapshot_error_count = len(errors)
+    helper_snapshots = capture_declared_helper_snapshot_set(
+        root, snapshot_relatives, errors
+    )
+    if (
+        len(errors) != helper_snapshot_error_count
+        or len(helper_snapshots) != len(snapshot_relatives)
+    ):
+        return []
+    snapshots_by_relative = {
+        snapshot.relative_path: snapshot for snapshot in helper_snapshots
+    }
+    recipient_projection: list[str] = []
+    scoped_projection_cursor = 0
     registered: Counter[str] = Counter()
     registered_portable_names: dict[str, str] = {}
     process_prompt_hashes = {
@@ -11664,18 +12253,37 @@ def validate_helper_bundle(
     helper_allowed_opened = canonical_stage_opened_inputs(
         process, reviewer_count, "R1"
     )
+    # Stage P is the neutral packet builder and has no upstream helper inputs.
+    # A helper that names P would therefore be unconsumed while falsely
+    # claiming an allowed recipient.  Keep the provenance recipient set aligned
+    # with ``canonical_stage_opened_inputs()``, which returns before helper
+    # projection for P.
     allowed_recipients = {
-        "P", "AI", "C",
+        "AI", "C",
         *(f"R{index}" for index in range(1, reviewer_count + 1)),
     }
     for provenance_path in provenance_files:
+        provenance_relative = f"helpers/{provenance_path.name}"
+        if scoped:
+            if (
+                scoped_projection_cursor >= len(normalized_declared)
+                or normalized_declared[scoped_projection_cursor]
+                != provenance_relative
+            ):
+                errors.append(
+                    "declared scoped helper sequence must place provenance "
+                    "records in ascending Hxx order and immediately before "
+                    f"their outputs; expected {provenance_relative!r} at "
+                    f"position {scoped_projection_cursor}"
+                )
+                continue
+            scoped_projection_cursor += 1
         try:
-            data = json.loads(provenance_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            data = parse_strict_json_object(
+                snapshots_by_relative[provenance_relative].content.decode("utf-8")
+            )
+        except (KeyError, OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"{provenance_path.name}: invalid provenance JSON: {exc}")
-            continue
-        if not isinstance(data, dict):
-            errors.append(f"{provenance_path.name}: provenance root must be an object")
             continue
         keys = set(data)
         if keys != HELPER_PROVENANCE_KEYS:
@@ -11763,6 +12371,21 @@ def validate_helper_bundle(
                 f"{provenance_path.name}: recipient_stages contains a duplicate "
                 "or non-current substantive stage"
             )
+        include_for_required_recipient = bool(
+            required_recipient is not None
+            and isinstance(recipient_stages, list)
+            and required_recipient in recipient_stages
+        )
+        if scoped and required_recipient is not None:
+            if not include_for_required_recipient:
+                errors.append(
+                    f"{provenance_path.name}: declared scoped helper must name "
+                    f"{required_recipient} in recipient_stages"
+                )
+            else:
+                recipient_projection.append(
+                    f"helpers/{provenance_path.name}"
+                )
         if (
             received_blocks == ["operational prompt"]
             and isinstance(opened_inputs, list)
@@ -11811,6 +12434,20 @@ def validate_helper_bundle(
                     f"{provenance_path.name}: outputs[{index}].file must be a neutral sidecar basename"
                 )
                 continue
+            output_relative = f"helpers/{filename}"
+            if scoped:
+                if (
+                    scoped_projection_cursor >= len(normalized_declared)
+                    or normalized_declared[scoped_projection_cursor]
+                    != output_relative
+                ):
+                    errors.append(
+                        f"{provenance_path.name}: output {filename!r} is not "
+                        "the next exact declared scoped helper input; refusing "
+                        "to inspect undeclared or reordered output bytes"
+                    )
+                    continue
+                scoped_projection_cursor += 1
             registered[filename] += 1
             filename_key = portable_basename_key(filename)
             prior_spelling = registered_portable_names.get(filename_key)
@@ -11821,13 +12458,19 @@ def validate_helper_bundle(
                 )
             else:
                 registered_portable_names[filename_key] = filename
+            if include_for_required_recipient:
+                recipient_projection.append(output_relative)
             output_path = helpers / filename
             declared_hash = str(output.get("sha256") or "").upper()
-            if not output_path.is_file():
-                errors.append(f"{provenance_path.name}: missing helper output {filename}")
+            output_snapshot = snapshots_by_relative.get(output_relative)
+            if output_snapshot is None:
+                errors.append(
+                    f"{provenance_path.name}: helper output {filename} must be "
+                    "an exact declared non-aliased single-link regular file"
+                )
             elif not HEX64_RE.fullmatch(declared_hash):
                 errors.append(f"{provenance_path.name}: invalid hash for {filename}")
-            elif sha256(output_path) != declared_hash:
+            elif output_snapshot.sha256 != declared_hash:
                 errors.append(f"{provenance_path.name}: hash mismatch for {filename}")
     non_provenance = {
         path.name for path in files
@@ -11846,6 +12489,25 @@ def validate_helper_bundle(
             errors.append(f"helpers: registered output is absent: {filename}")
         if count > 1:
             errors.append(f"helpers: {filename} is multiply registered ({count})")
+    if scoped:
+        if scoped_projection_cursor != len(normalized_declared):
+            errors.append(
+                "declared scoped helper sequence contains an unconsumed or "
+                "misordered path; "
+                f"consumed={scoped_projection_cursor}, "
+                f"declared={len(normalized_declared)}"
+            )
+        if (
+            required_recipient is not None
+            and recipient_projection != normalized_declared
+        ):
+            errors.append(
+                "declared scoped helper sequence must exactly equal the canonical "
+                f"{required_recipient}-recipient provenance/output projection; "
+                f"declared={normalized_declared}, canonical={recipient_projection}"
+            )
+    verify_declared_helper_snapshot_set(root, helper_snapshots, errors)
+    return recipient_projection if scoped else []
 
 
 def manifest_process_projection(process: dict[str, Any]) -> dict[str, str]:
@@ -12207,19 +12869,9 @@ def validate_process(
 ) -> tuple[dict[str, Any], Path, str, int, int, list[tuple[float, float]]]:
     if process_override is None:
         process_path = root / "00-process-parameters.json"
-        def reject_duplicate_keys(
-            pairs: list[tuple[str, Any]],
-        ) -> dict[str, Any]:
-            value: dict[str, Any] = {}
-            for key, item in pairs:
-                if key in value:
-                    raise ValueError(f"duplicate JSON key {key!r}")
-                value[key] = item
-            return value
         try:
-            process = json.loads(
-                process_path.read_text(encoding="utf-8"),
-                object_pairs_hook=reject_duplicate_keys,
+            process = parse_strict_json_object(
+                process_path.read_text(encoding="utf-8")
             )
         except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
             errors.append(f"cannot read 00-process-parameters.json: {exc}")

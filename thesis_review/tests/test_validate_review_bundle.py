@@ -1674,6 +1674,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 fields = reviewer_profile["findings"][unit_id]
                 anchor = f"physical p.{page}, exact target finding and supporting passage"
                 basis = json.dumps({
+                    "assessment_standard": SEMANTIC_MODULE.REASONABLE_SUPPORT_STANDARD,
                     "premise_class": "explicit-positive",
                     "target_premise": fields["Observation"],
                     "supporting_pdf_evidence": f"physical p.{page}, the exact observed passage supports the bounded finding",
@@ -1684,14 +1685,33 @@ class ValidateReviewBundleTests(unittest.TestCase):
                         "detail": "The responsive passage was reviewed in the context of the complete frozen PDF.",
                     },
                     "residual_gap": {
-                        "status": "present",
-                        "detail": "The target report's bounded local concern remains after the whole-PDF comparison.",
+                        "status": SEMANTIC_MODULE.REASONABLY_SUPPORTED,
+                        "detail": "A reasonable reviewer could retain the target report's bounded local concern after the whole-PDF comparison even if another reviewer would weight it differently.",
                     },
                     "action_delta": {
                         "status": "same-as-target-required-action",
                         "detail": fields["Required action"],
                         "independent_reason": "Independent PDF inspection leaves the target action necessary without broadening it.",
                     },
+                    "admissibility_result": SEMANTIC_MODULE.REASONABLY_SUPPORTED,
+                }, ensure_ascii=False, separators=(",", ":"))
+            elif unit_type == "question":
+                page = report_anchors[(unit_type, unit_id)]
+                question = reviewer_profile["questions"][unit_id]
+                anchor = f"physical p.{page}, exact target-unit passage"
+                basis = json.dumps({
+                    "assessment_standard": SEMANTIC_MODULE.REASONABLE_SUPPORT_STANDARD,
+                    "target_question": question["target_question"],
+                    "target_why_unresolved": question["target_why_unresolved"],
+                    "target_needed_evidence": question["target_needed_evidence"],
+                    "target_page": question["target_page"],
+                    "whole_pdf_resolution": {
+                        "status": "responsive-passages-reviewed",
+                        "pages": [question["target_page"]],
+                        "search_concepts": ["the bounded uncertainty and its terminology throughout the frozen PDF"],
+                        "detail": "The responsive passages were checked across the frozen PDF and leave the bounded clarification reasonably open.",
+                    },
+                    "admissibility_result": SEMANTIC_MODULE.REASONABLY_SUPPORTED,
                 }, ensure_ascii=False, separators=(",", ":"))
             elif (unit_type, unit_id) in report_anchors:
                 page = report_anchors[(unit_type, unit_id)]
@@ -1701,11 +1721,32 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     f"bounded {unit_type} conclusion against its cited passage."
                 )
             elif unit_type == "gate":
-                anchor = "physical p.1-3, gate-specific thesis evidence"
-                basis = (
-                    f"Independent inspection for {unit_id} compares that exact "
-                    "criterion with concrete thesis passages and the target disposition."
-                )
+                gate = reviewer_profile["gates"][unit_id]
+                gate_concept = {
+                    "Gate-A": "problem formulation and research significance",
+                    "Gate-B": "technical correctness and methodological validity",
+                    "Gate-C": "novelty and contribution boundaries",
+                    "Gate-D": "experimental design and comparative evidence",
+                    "Gate-E": "claim calibration and inferential support",
+                    "Gate-F": "thesis organization and cross-chapter continuity",
+                    "Gate-G": "terminology clarity and scholarly expression",
+                    "Gate-H": "citation attachment and bibliographic integrity",
+                    "Gate-I": "submission readiness and defense risk",
+                }[unit_id]
+                anchor = gate["target_decisive_evidence"]
+                basis = json.dumps({
+                    "assessment_standard": SEMANTIC_MODULE.REASONABLE_SUPPORT_STANDARD,
+                    "gate_id": unit_id,
+                    "target_disposition": gate["target_disposition"],
+                    "target_decisive_evidence": gate["target_decisive_evidence"],
+                    "target_related_finding_ids": gate["target_related_finding_ids"],
+                    "independent_pdf_assessment": {
+                        "supporting_pdf_evidence": f"{gate['target_decisive_evidence']}, independently checked for {gate_concept}",
+                        "counterevidence_reviewed": f"physical p.2, neighboring passages bearing on {gate_concept} were checked for a responsive qualification.",
+                        "admissibility_reason": f"The cited {gate_concept} evidence makes this bounded Gate disposition reasonably supportable even if another reviewer would assign different weight.",
+                    },
+                    "admissibility_result": SEMANTIC_MODULE.REASONABLY_SUPPORTED,
+                }, ensure_ascii=False, separators=(",", ":"))
             elif unit_type == "verdict":
                 anchor = "physical p.1-3, target verdict and decisive thesis evidence"
                 basis = json.dumps({
@@ -6912,6 +6953,46 @@ class ValidateReviewBundleTests(unittest.TestCase):
             result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_helper_cannot_name_stage_p_as_recipient(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.install_helper_fixture(root, digest, recipients=["P"])
+            self.assert_fails(
+                root,
+                "recipient_stages contains a duplicate or non-current "
+                "substantive stage",
+            )
+
+    def test_helper_provenance_duplicate_json_key_fails_with_canonical_report(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            digest = self.build_bundle(root)
+            self.install_helper_fixture(root, digest)
+            provenance_path = root / "helpers/H01-provenance.json"
+            provenance_text = provenance_path.read_text(encoding="utf-8")
+            provenance_path.write_text(
+                provenance_text.replace(
+                    '"tool": "fixture"',
+                    '"tool": "fixture", "tool": "fixture"',
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            result = self.run_validator(root)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertTrue(
+                result.stdout.startswith(
+                    "# Mechanical thesis-review bundle validation\n"
+                ),
+                result.stdout,
+            )
+            self.assertIn("- Result: **FAIL**", result.stdout)
+            self.assertIn("duplicate JSON key 'tool'", result.stdout)
+            self.assertNotIn("Traceback", result.stderr)
+
     def test_helper_receipt_must_exactly_project_structured_arrays(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6964,10 +7045,40 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 self.assert_fails(
                     root,
                     "closed current-round boundary contains "
-                    "symlink/junction/reparse entries: ['page-renders']",
+                    "symlink/junction/reparse, hardlink, special, or "
+                    "named-stream entries",
                 )
             finally:
                 render_dir.rmdir()
+
+    def test_complete_gate_rejects_hardlinked_round_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory, tempfile.TemporaryDirectory() as external:
+            root = Path(directory)
+            self.build_bundle(root)
+            os.link(
+                root / "R1-comprehensive-review.md",
+                Path(external) / "R1-hardlink-alias.md",
+            )
+            self.assert_fails(
+                root,
+                "not a single-link regular file",
+            )
+
+    @unittest.skipUnless(os.name == "nt", "NTFS stream test is Windows-specific")
+    def test_complete_gate_rejects_named_stream_on_round_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            target = root / "00-page-inventory.csv"
+            stream = Path(f"{target}:full-gate-regression")
+            try:
+                stream.write_bytes(b"hidden full-gate stream\n")
+            except OSError as exc:
+                self.skipTest(f"fixture volume cannot create NTFS streams: {exc}")
+            self.assert_fails(
+                root,
+                "NTFS named streams",
+            )
 
     def test_helper_hash_mismatch_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
