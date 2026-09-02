@@ -79,7 +79,7 @@ deleted, overwritten, or regenerated in place.
 
 For each substantive stage, require both:
 
-- a **fresh-context declaration** whose own single-line value states that the actor received no inherited substantive user/thread/task turns beyond system/developer instructions and the exact operational prompt; the required canonical sentence remains unchanged and cannot be supplied elsewhere in the report as compensation. The infrastructure-metadata and same-clean-turn-compaction rules above define what is not a substantive inherited turn. In Codex multi-agent execution, use `fork_turns: "none"`, and use an equivalent empty-context process elsewhere;
+- a **fresh-context declaration** whose own single-line value states that the actor received no inherited substantive user/thread/task turns beyond system/developer instructions and the exact operational prompt; the required canonical sentence remains unchanged and cannot be supplied elsewhere in the report as compensation. The infrastructure-metadata and same-clean-turn-compaction rules above define what is not a substantive inherited turn. In Codex multi-agent execution, Stage O launches that process with `fork_turns: "none"`, and uses an equivalent empty-context process elsewhere. The launched process itself is the process-bound actor; `fork_turns: "none"` describes Stage O's completed launch and is not an instruction for the actor to create another task. Its exact operational prompt carries the one contract rendered by `scripts/actor_prompt_contract.py` and must prohibit every collaboration API and Codex task/thread API named there; creating, forking, messaging, handing off, continuing, waiting on, inspecting, listing, opening, sharing, mutating, or activating another task/thread or actor; starting another model process through a shell; and relaying the prompt, assigned role, summaries, extracted content, or derived instructions to another actor/model/process. An attempted re-delegation fails actor identity and exact-prompt transport, so Stage O quarantines the complete retry;
 - an **input-receipt and access declaration** whose own mechanically parsed single-line value uses this closed clause order exactly once: `received=[operational prompt]; opened=[...]; public_endpoints=[...]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated`. Duplicate keys, reordered or unknown clauses, trailing additions, and compensating prose elsewhere are invalid. It lists every local artifact opened in the actor's exact canonical order and every public endpoint accessed. Every artifact also records exact `Actor ID`, `Review round ID`, and `Review retry ID`. The operational-prompt SHA-256 is process-bound to that actor, not merely shape-checked.
 
 The validator derives the canonical local allowlists rather than trusting prose. P opens the process envelope, `SKILL.md`, the ten required reference files in their documented order, the full and P-scoped validators, process-bound governing files, and the frozen PDF; P has no helper inputs and may not probe `helpers/`. Each R actor opens the ordinary rule/PDF prefix, its role-specific scoped-validator insertion, the seven current packet/policy/inventory artifacts, and no peer output. Doctoral R4/R5 and master's R3 use ledger-aware insertions that place the staged `materialize_owner_outputs.py` immediately after the full validator and before the shared/role scoped gates; every other R actor uses the ordinary reviewer gate. AI opens only the process envelope, `SKILL.md`, clean-room/report/AI rules, the full and AI-scoped validators, frozen PDF, manifest, page inventory, and registered AI-recipient helper sidecars. Each `SA-*` actor opens only the rule/PDF/packet subset required for its target, the frozen target output and owned ledgers/renders if any, its scoped SA validator, and the authoritative public endpoints needed to check that target; it sees no peer report or prior-round artifact. C opens the complete current rule/PDF/packet prefix, `rules/scripts/validate_review_bundle.py`, `rules/scripts/materialize_owner_outputs.py`, `rules/scripts/validate_semantic_acceptance_output.py`, `rules/scripts/validate_chair_output.py`, `02`--`04`, every current R report, the current AI report, the hash-only `06-semantic-acceptance-gate.json`, and registered C-recipient helper sidecars; it never opens individual SA reasons. S opens only the full validator, materializer, Stage-S scoped validator, and exact current summary-source sequence; it does not open the PDF, packet, ledgers `02`--`04`, helpers, SA files/gate, or prior artifacts. The materializer always runs inside the current fresh actor, reads only that actor's closed allowlist, and writes only the actor's explicitly owned deterministic projections before freeze: reviewer-owner Markdown; Chair `90`--`92` Markdown; or the three derived `93` outputs. A missing, extra, duplicated, reordered, or substring-only basename invalidates the stage. Public endpoints are a duplicate-free subset of that actor's current policy/citation authority; AI and S use `[none]`.
@@ -124,9 +124,9 @@ Stage P's manifest is a navigation packet, not a preliminary review. Its process
 
 ## 4. Filesystem isolation
 
-Create a new, uniquely named and identity-neutral round directory for each frozen PDF. Copy the exact PDF bytes to an identity-neutral filename, verify the copy's checksum, and give substantive actors only that frozen path rather than the original workspace path. Never write a new round into an old round or copy old reports forward. The validated round root is closed: it contains only the process envelope, frozen PDF, hash-bound governing files, documented current-round artifacts, `page-renders/`, optional registered `helpers/`, the exact `06-semantic-acceptance/` file set plus its hash-only root gate, optional Stage-V `stage-v-inputs/` plus `94`, and the mechanical `95` report. Each SA runs first in a separate target-specific neutral view containing only its allowlist; after its scoped gate passes, Stage O byte-copies the frozen SA output into the closed round. An unexpected file, old report, extra directory, symlink, NTFS junction, mount/reparse point, or special entry at the root or inside an allowed subdirectory invalidates the bundle before any artifact is opened, even if no actor claims to have opened it. Give every concurrent actor exact input paths and a private scratch/output path; do not ask it to discover inputs by listing the round parent. A later-stage actor receives an explicit allowlist of current-round files and must not enumerate neighboring files. After all clean artifacts are frozen, Stage O may mechanically copy the complete bundle to a user-facing storage location; that destination is not reviewer evidence.
+Stage O creates a new, uniquely named and identity-neutral round directory for each frozen PDF. It copies the exact PDF bytes to an identity-neutral filename, verifies the copy's checksum, and gives substantive actors only that frozen path rather than the original workspace path. Stage O never writes a new round into an old round or copies old reports forward. The validated round root is closed: it contains only the process envelope, frozen PDF, hash-bound governing files, documented current-round artifacts, `page-renders/`, optional registered `helpers/`, the exact `06-semantic-acceptance/` file set plus its hash-only root gate, optional Stage-V `stage-v-inputs/` plus `94`, and the mechanical `95` report. Each SA runs first in a separate target-specific neutral view containing only its allowlist; after its scoped gate passes, Stage O byte-copies the frozen SA output into the closed round. An unexpected file, old report, extra directory, symlink, NTFS junction, mount/reparse point, or special entry at the root or inside an allowed subdirectory invalidates the bundle before any artifact is opened, even if no actor claims to have opened it. Stage O gives every concurrent actor exact input paths and a private scratch/output path; it never asks an actor to discover inputs by listing the round parent. A later-stage actor receives an explicit allowlist of current-round files and must not enumerate neighboring files. After all clean artifacts are frozen, Stage O may mechanically copy the complete bundle to a user-facing storage location; that destination is not reviewer evidence.
 
-Before launch, record the frozen PDF SHA-256 and page count, set or treat the frozen copy as immutable, and record the exact task-prompt bytes and their SHA-256, fresh-context launch mode, actor/retry ID, input allowlist, output path, and start time in an orchestration log outside the packet. The same external log stores the exact metadata SHA-256 returned by `initialize`, the precomputed final-process SHA-256 supplied to `seal-process`, the returned seal SHA-256, and the successful `verify-process-seal` result immediately preceding Stage P. Launch the actor with those exact prompt bytes; recomputing a different prompt after dispatch is invalid. The bundle validator can prove that artifacts and the process envelope agree on the declared hash, but cannot observe API/task transport; the orchestrator's exact-byte launch and seal-hash record is therefore an explicit process trust boundary, never thesis evidence. Every PDF-opening actor recomputes the PDF checksum at start and end. Stage S does not open the PDF and instead copies the frozen identity from the process/current sources into its required identity fields. PDF-derived sidecars record their own hash plus the source PDF hash. After every substantive stage, verify mechanically that:
+Before launch, Stage O records the frozen PDF SHA-256 and page count, sets or treats the frozen copy as immutable, and records the exact task-prompt bytes and their SHA-256, fresh-context launch mode, actor/retry ID, input allowlist, output path, and start time in an orchestration log outside the packet. The same external log stores the exact metadata SHA-256 returned by `initialize`, the precomputed final-process SHA-256 supplied to `seal-process`, the returned seal SHA-256, and the successful `verify-process-seal` result immediately preceding Stage P. Stage O launches the actor with those exact prompt bytes; recomputing a different prompt after dispatch is invalid. The bundle validator can prove that artifacts and the process envelope agree on the declared hash, but cannot observe API/task transport. The launcher-owned exact-byte record, disabled collaboration capability or equivalent no-child attestation, and, for Codex CLI, a passing complete-JSONL `validate_actor_transport.py` check therefore form the explicit process trust boundary; they are never thesis evidence. Every PDF-opening actor recomputes the PDF checksum at start and end. Stage S does not open the PDF and instead copies the frozen identity from the process/current sources into its required identity fields. PDF-derived sidecars record their own hash plus the source PDF hash. After every substantive stage, verify mechanically that:
 
 Dispatch is the last message Stage O sends to that actor. Do not send progress
 checks, reminders, corrections, cleanup instructions, or other operational
@@ -152,8 +152,8 @@ Every Stage-H helper actually used writes one `Hxx-provenance.json` containing: 
 ## 5. Independent semantic acceptance
 
 After every R/AI target has passed its own scoped gate and been frozen in the
-closed current round, but before the Chair is launched, start one different
-fresh `SA-<target>` actor for each target.
+closed current round, but before the Chair is launched, Stage O starts one
+different fresh `SA-<target>` actor for each target.
 Stage SA is process quality control, not another reviewer: it does not create,
 edit, merge, grade, reject, or adjudicate thesis findings. It asks only whether
 the frozen target output is semantically supported, complete for its mandatory
@@ -236,7 +236,7 @@ Before freeze and after every semantic Chair-source edit, the Chair runs `python
 
 ## 7. Clean user-facing synthesis
 
-The final current-PDF problem summary is a formal stage of the skill, not free-form commentary by the orchestration process. Run Stage S in another fresh context after the chair freezes `90-chair-synthesis.md`, both `91` CSV masters and the `91` Markdown projection, and both `92` Markdown/CSV artifacts.
+The final current-PDF problem summary is a formal stage of the skill, not free-form commentary by the orchestration process. Stage O runs Stage S in another fresh context after the chair freezes `90-chair-synthesis.md`, both `91` CSV masters and the `91` Markdown projection, and both `92` Markdown/CSV artifacts.
 
 The summary must:
 
@@ -332,6 +332,111 @@ Exit status `3` with `commit_identity_failure` or
 may already have committed and requires Stage-O inspection and quarantine of
 the named run. It must never be treated as an ordinary unexecuted failure, as
 permission to delete/recreate the seal, or as permission to reuse the retry.
+
+Prompt construction and transport are closed rather than advisory. Stage O
+uses `build_reviewer_prompt.py` for every R actor and
+`build_semantic_acceptance_prompt.py` for every SA actor. For P, each H helper,
+AI, C, S, and optional V, Stage O first writes only a role-specific prompt body
+outside the run and then binds it with:
+
+```text
+"<absolute-bundled-python>" -B scripts/build_bound_actor_prompt.py --actor <P|Hxx|AI|C|S|V> --body <absolute-external-role-body> --output <absolute-external-final-prompt>
+```
+
+The general builder rejects its closed high-confidence actor-control patterns
+in the body and adds the one canonical process-bound no-redelegation contract from
+`scripts/actor_prompt_contract.py`. R and SA prompt builders import that same
+renderer; no builder carries a private copy. Static pattern matching is a
+fail-fast aid, not a proof that free-form natural language contains no possible
+paraphrase: the canonical contract remains authoritative, requires the actor to
+stop on any later conflict, and the transport gate rejects any actual
+re-delegation attempt. After the final role body is
+immutable and immediately before dispatch, Stage O reconstructs and verifies
+the exact bytes with:
+
+```text
+"<absolute-bundled-python>" -B scripts/build_bound_actor_prompt.py --mode verify --actor <P|Hxx|AI|C|S|V> --body <absolute-external-role-body> --output <absolute-external-final-prompt> --expected-body-sha256 <build-returned-body-sha256> --expected-prompt-sha256 <build-returned-prompt-sha256>
+```
+
+The first nonempty stdout line must be `VERIFIED`. Stage O stores the hashes
+returned by `build` in the bundle-external orchestration record and supplies
+those exact external anchors to `verify`; reconstructing a newly coordinated
+body/prompt pair cannot replace them. A manually assembled final prompt, a
+post-build edit, a body edit after build, or an R/SA prompt passed through the
+general builder is invalid.
+
+When Codex CLI is the launcher, the accepted actor argv is the following closed
+grammar:
+
+```text
+<absolute-codex-executable> [--search] exec <closed-exec-items-in-any-order> -
+```
+
+`<closed-exec-items-in-any-order>` contains exactly once each of `--json`,
+`--ephemeral`, `--ignore-user-config`, and `--ignore-rules`; exactly one
+`-C <actor-workspace>` pair; exactly one of `--disable multi_agent`,
+`--disable=multi_agent`, or `-c features.multi_agent=false`; and, optionally,
+at most once each of `--skip-git-repo-check` and
+`--dangerously-bypass-approvals-and-sandbox`. If present, the sole `--search`
+occurs before `exec`. The sole stdin marker `-` is last. No other flag,
+configuration override, positional argument, subcommand, model/profile/image/
+add-directory option, or second `exec` is permitted.
+
+Stage O creates and fixes one unique canonical UUID launch ID, the prompt hash,
+and the exact command before dispatch; it must never mint replacement anchors
+around an existing log. It also creates one
+bundle-external launch record with schema `thesis-review-actor-launch-v1`.
+Before sending prompt bytes, its stable fields bind the actor, launch ID,
+prompt path/byte count/SHA-256, Codex executable path/SHA-256, exact argv plus
+canonical argv SHA-256, cwd, actor workspace, PID, and intended JSONL path.
+After process exit, Stage O completes that same launcher-owned record with the
+integer process exit code, exact JSONL byte count/SHA-256, and the one thread ID
+emitted by `thread.started`; no actor writes or opens this record.
+
+The record is one JSON object with exactly these fields and no extensions:
+`schema`, `actor`, `launch_id`, `prompt_path`, `prompt_bytes`,
+`prompt_sha256`, `executable_path`, `executable_sha256`, `argv`,
+`argv_sha256`, `cwd`, `workspace`, `pid`, `exit_code`, `log_path`,
+`log_bytes`, `log_sha256`, and `thread_id`. Paths and hashes are strings;
+`argv` is the ordered string array; byte counts, PID, and exit code are JSON
+integers. `argv_sha256` is SHA-256 over the UTF-8 bytes of that exact ordered
+array serialized as JSON with `ensure_ascii=false`, no whitespace, and `,`/`:`
+separators—for example, Python
+`json.dumps(argv, ensure_ascii=False, separators=(",", ":")).encode("utf-8")`.
+This encoding is part of the schema rather than a launcher choice.
+
+After the actor exits
+and before accepting any owned output, run:
+
+```text
+"<absolute-bundled-python>" -B scripts/validate_actor_transport.py --log <absolute-external-actor-jsonl> --actor <actor-id> --launch-record <absolute-external-launch-record> --expected-prompt-sha256 <64-hex> --expected-launch-id <canonical-UUID>
+```
+
+The first nonempty stdout line must be `PASS`. The validator requires process
+exit code zero, the closed current JSONL event schema, coherent item lifecycles,
+and exactly one ordered `thread.started`, `turn.started`, and successful terminal
+`turn.completed`, with `turn.completed` as the final newline-terminated JSONL
+event. It treats only the closed, consecutive, monotonic WebSocket reconnect
+sequence followed immediately by the one HTTPS-fallback notice and then a
+nonempty completed agent message as recovered transport. Truncation; malformed
+or blank events; unrecovered top-level stream/turn errors or error-item events;
+launch/log/thread/prompt/argv binding drift; any collaboration or task/thread-
+tool event; and any recognized shell or local-program attempt to start a nested
+model client invalidate the actor and quarantine the whole retry. A terminal
+failed command or MCP item is not itself a transport failure when its schema and
+lifecycle are complete, the actor handles it locally, and the overall turn later
+succeeds; it never excuses a prohibited delegation or nested-model attempt. An
+attempted wait or message remains fatal even when no child output was produced.
+The check proves consistency
+against the launcher-owned record and the pre-dispatch UUID/prompt/argv anchors;
+it is not an independent operating-system attestation of PID or launch
+freshness. A malicious launcher that forges the record, expected arguments, and
+log together is outside this trust boundary. These limitations must not be
+recast as thesis evidence or reviewer confidence. Another launcher must disable
+collaboration/task-management tools or supply equivalent launcher-owned
+no-child/no-forwarding transport evidence. Prompt/output hashes do not by
+themselves prove the consumer process; if the runtime exposes neither tool
+disablement nor transport evidence, do not claim a complete independent round.
 
 For every required SA target, run
 `scripts/build_semantic_acceptance_prompt.py plan` before Stage P against a

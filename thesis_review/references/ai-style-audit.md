@@ -19,7 +19,7 @@ If the assessor encounters a factual, citation, integrity, or technical problem,
 
 ## 2. Independence and evidence
 
-Follow `clean-room-orchestration.md`. Launch the AI-style assessor in a fresh context with no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt. In Codex multi-agent execution, use `fork_turns: "none"`. The assessor is independent of R1--R5 and the chair. Before freezing `05-ai-style-assessment.md`, the assessor must not read, receive, or recall:
+Follow `clean-room-orchestration.md`. Stage O has already launched the current AI-style assessor in a fresh context with no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt. The assessor performs the assignment in that same process and must not launch, message, fork, hand off, or otherwise delegate to another actor or task. The assessor is independent of R1--R5 and the chair. Before freezing `05-ai-style-assessment.md`, the assessor must not read, receive, or recall:
 
 - user explanations, corrections, rebuttals, desired interpretations, or claimed facts outside the PDF;
 - earlier assistant answers, issue tables, status reports, or messages from another current/completed task;
@@ -138,4 +138,4 @@ create a new style finding. Any failed or unchecked unit invalidates the retry.
 
 The chair copies every unresolved `material` or `local` style remedy into the separate AI-actionable ledger without translating it to `S0--S4` or changing the defense grade. Any such open finding blocks a claim that the thesis has completed final prose-polish review, regardless of the overall signal label. The judgment remains separate from the R1--R5 category/recommendation distribution and does not by itself change the academic, defense, or integrity conclusion.
 
-After prose edits, run the assessor again on the newly frozen PDF without showing it the previous assessment. Compare current and prior AI reports only in a separately labeled Stage-V longitudinal style comparison after the current R reports, chair outputs, and Stage-S summary are frozen. Never expose the prior AI report to the current chair or use the comparison to alter current grades, findings, revision ledger, or clean summary.
+After prose edits produce a newly frozen PDF, Stage O launches a fresh assessor without showing it the previous assessment. Compare current and prior AI reports only in a separately labeled Stage-V longitudinal style comparison after the current R reports, chair outputs, and Stage-S summary are frozen. Never expose the prior AI report to the current chair or use the comparison to alter current grades, findings, revision ledger, or clean summary.

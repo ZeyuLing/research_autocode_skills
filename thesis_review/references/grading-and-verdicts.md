@@ -4,7 +4,7 @@ Every panel reviewer must issue one explicit operational defense conclusion base
 
 ## Authority and required output
 
-Choose exactly one decision regime before reviewers start:
+Stage O chooses exactly one decision regime before launching reviewers:
 
 1. `institutional` — use the current institution or school review form when its categories, wording, and consequences are verified. Record the exact source and reproduce the official category and recommendation faithfully. Do not force an A/B/C/D translation unless the governing form itself defines that mapping.
 2. `skill-default` — when no binding category scheme is available, use the A/B/C/D scheme below.
@@ -58,7 +58,7 @@ Each reviewer assigns the conclusion after completing the common whole-thesis as
 
 ## Chair adjudication
 
-The chair starts in the fresh Stage-C context defined by `clean-room-orchestration.md` and reports every frozen current-round reviewer category and recommendation individually. Under the skill-default regime it must not average letters or convert them to points.
+Stage O starts the chair in the fresh Stage-C context defined by `clean-room-orchestration.md`; the chair reports every frozen current-round reviewer category and recommendation individually. Under the skill-default regime it must not average letters or convert them to points.
 
 After evidence reconciliation, the chair issues a separate overall category and defense recommendation under the same decision regime. Under the skill-default regime, the chair applies the highest-adjudicated-severity mapping above rather than the arithmetic mean, median, or majority label. If it differs from the majority or from a severe minority opinion, the chair must identify the evidence and severity decision that explains the difference.
 

@@ -93,7 +93,7 @@ Inspect every visible pagination symptom in the PDF, including abnormal whitespa
 
 Do not open the LaTeX/DOCX source or search for `[H]`, `\FloatBarrier`, `\clearpage`, `\newpage`, `\pagebreak`, `\afterpage`, or `\ContinuedFloat` during blind review. A visible symptom may be reported, but its source-level cause must be recorded as `not verifiable from the PDF`. Do not claim that a specific forcing command caused the defect.
 
-During a separately requested direct-edit task, the editor may diagnose and change source constructs. That work is not reviewer evidence. The subsequent independent re-review starts again from the newly frozen PDF and judges only the visible result.
+During a separately requested direct-edit task, the editor may diagnose and change source constructs. That work is not reviewer evidence. Stage O starts the subsequent independent re-review from the newly frozen PDF; that review judges only the visible result.
 
 ## 5. Figure and table continuation gate
 

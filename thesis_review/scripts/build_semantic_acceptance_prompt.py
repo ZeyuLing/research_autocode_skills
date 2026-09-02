@@ -29,10 +29,17 @@ from pathlib import Path
 from typing import Any, Iterable, NamedTuple
 
 
+SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, SCRIPT_DIRECTORY)
+
+from actor_prompt_contract import render_bound_actor_contract  # noqa: E402
+
+
 ACCEPTANCE_DIRECTORY = "06-semantic-acceptance"
 TARGET_RE = re.compile(r"(?:R[1-5]|AI)\Z")
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
-PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v4"
+PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v5"
 VERIFICATION_SCHEMA = "thesis-review-semantic-acceptance-verification-v3"
 PROMOTION_SCHEMA = "thesis-review-semantic-acceptance-promotion-v2"
 INPUT_COMMITMENT_SCHEMA = "thesis-review-semantic-acceptance-inputs-v1"
@@ -1252,6 +1259,7 @@ def render_prompt(
         sort_keys=True,
         separators=(",", ":"),
     )
+    bound_contract = render_bound_actor_contract(f"SA-{target}")
     text = f"""Semantic-acceptance operational prompt
 
 Prompt schema: {PROMPT_SCHEMA}
@@ -1270,7 +1278,9 @@ Bound Python SHA-256: {python_identity.sha256}
 Frozen validator commitments (authenticate before importing either file):
 {validator_lines}
 
-Start in a fresh empty task context with fork_turns=none. Follow the staged thesis-review skill and its governing references. Perform only independent semantic acceptance of the frozen {target} target. Do not create, modify, merge, grade, reject, or adjudicate thesis findings. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. No follow-up message will be sent after dispatch.
+{bound_contract}
+
+Follow the staged thesis-review skill and its governing references. Perform only independent semantic acceptance of the frozen {target} target. Do not create, modify, merge, grade, reject, or adjudicate thesis findings. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. No follow-up message will be sent after dispatch.
 
 Acceptance standard:
 Judge reasonable support and admissibility, not concurrence. A target conclusion remains admissible when concrete permitted evidence supports it and its inference and requested action are proportionate, even if you would assign a different severity, weight, emphasis, or final recommendation. Such a reasonable scholarly disagreement is not by itself a failure. Fail a unit only when it lacks reasonable permitted-evidence support, exceeds that evidence, omits decisive counter-evidence, is internally inconsistent, or cannot be checked within the closed authority. Never rewrite an honest semantic judgment merely to obtain PASS.

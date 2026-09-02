@@ -16,6 +16,7 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py"
+ACTOR_CONTRACT_PATH = SKILL_ROOT / "scripts" / "actor_prompt_contract.py"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
 SHARED_VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_review_bundle.py"
 SEMANTIC_TEST_PATH = SKILL_ROOT / "tests" / "test_validate_semantic_acceptance_output.py"
@@ -198,7 +199,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             prompt_root = base / "prompts"
             prompt_root.mkdir()
 
-            for target in ("R1", "R4", "R5", "AI"):
+            for target in ("R1", "R2", "R3", "R4", "R5", "AI"):
                 with self.subTest(target=target):
                     view = base / f"view-{target}"
                     first_prompt = prompt_root / f"SA-{target}.txt"
@@ -208,6 +209,30 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     )
                     self.assertFalse(view.exists())
                     prompt = first_prompt.read_text(encoding="utf-8")
+                    self.assertIn(
+                        "Stage O has already launched this exact process as the fresh "
+                        f"empty-context SA-{target} actor.",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "This process itself is the process-bound actor.", prompt
+                    )
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-BEGIN]"))
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-END]"))
+                    for api_name in (
+                        "spawn_agent",
+                        "followup_task",
+                        "send_message",
+                        "create_thread",
+                        "fork_thread",
+                        "send_message_to_thread",
+                        "handoff_thread",
+                    ):
+                        self.assertIn(api_name, prompt)
+                    self.assertIn(
+                        "Perform the assigned role yourself in this process", prompt
+                    )
+                    self.assertNotIn("fork_turns", prompt)
                     private_md = view.resolve() / f"SA-{target}.md"
                     private_csv = view.resolve() / f"SA-{target}.csv"
                     nested_md = (
@@ -348,6 +373,40 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     self.assertNotEqual(0, overwrite.returncode)
                     self.assertTrue(overwrite.stdout.startswith("FAIL\n"), overwrite.stdout)
                     self.assertIn("refusing to overwrite", overwrite.stdout)
+
+    def test_masters_sa_actor_matrix_receives_bound_no_redelegation_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(
+                round_root, degree="masters"
+            )
+            preplan_path = base / "preplan-process.json"
+            write_process(preplan_path, stable_preplan_process(fixture))
+            prompt_root = base / "prompts"
+            prompt_root.mkdir()
+
+            for target in ("R1", "R2", "R3", "AI"):
+                with self.subTest(target=target):
+                    prompt_path = prompt_root / f"SA-{target}.txt"
+                    self.plan_one(
+                        preplan_path,
+                        base / f"view-{target}",
+                        target,
+                        prompt_path,
+                    )
+                    prompt = prompt_path.read_text(encoding="utf-8")
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-BEGIN]"))
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-END]"))
+                    self.assertEqual(
+                        1,
+                        prompt.count(
+                            "Stage O has already launched this exact process as the "
+                            f"fresh empty-context SA-{target} actor."
+                        ),
+                    )
+                    self.assertNotIn("fork_turns", prompt)
 
     def test_python_executable_is_required_and_must_be_the_running_interpreter(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -816,6 +875,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             drift_tools.mkdir()
             copied_helper = drift_tools / HELPER_PATH.name
             shutil.copy2(HELPER_PATH, copied_helper)
+            shutil.copy2(ACTOR_CONTRACT_PATH, drift_tools / ACTOR_CONTRACT_PATH.name)
             (drift_tools / VALIDATOR_PATH.name).write_text(
                 "raise RuntimeError('live checkout validator must not be imported')\n",
                 encoding="utf-8",

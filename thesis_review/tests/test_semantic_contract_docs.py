@@ -11,6 +11,9 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
 REVIEWER_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_reviewer_prompt.py"
 SA_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py"
+GENERAL_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_bound_actor_prompt.py"
+ACTOR_CONTRACT_HELPER = SKILL_ROOT / "scripts" / "actor_prompt_contract.py"
+TRANSPORT_VALIDATOR = SKILL_ROOT / "scripts" / "validate_actor_transport.py"
 OWNER_MATERIALIZER = SKILL_ROOT / "scripts" / "materialize_owner_outputs.py"
 SKILL_DOC = SKILL_ROOT / "SKILL.md"
 REPORT_TEMPLATE = SKILL_ROOT / "references" / "report-template.md"
@@ -205,6 +208,159 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         self.assertRegex(panels, r"exact\s+pre-freeze commands")
         self.assertIn("actor-private scratch", panels)
         self.assertIn("thesis-specific assertion", panels)
+
+    def test_bound_actor_launch_is_not_redelegated(self) -> None:
+        skill = SKILL_DOC.read_text(encoding="utf-8")
+        clean_room = CLEAN_ROOM.read_text(encoding="utf-8")
+        panels = REVIEWER_PANELS.read_text(encoding="utf-8")
+        ai_style = (SKILL_ROOT / "references" / "ai-style-audit.md").read_text(
+            encoding="utf-8"
+        )
+        reviewer_helper = REVIEWER_PROMPT_HELPER.read_text(encoding="utf-8")
+        sa_helper = SA_PROMPT_HELPER.read_text(encoding="utf-8")
+        general_helper = GENERAL_PROMPT_HELPER.read_text(encoding="utf-8")
+        actor_contract = ACTOR_CONTRACT_HELPER.read_text(encoding="utf-8")
+        transport_validator = TRANSPORT_VALIDATOR.read_text(encoding="utf-8")
+        optional_global_flags = tuple(
+            literal_constant(TRANSPORT_VALIDATOR, "OPTIONAL_GLOBAL_FLAGS")
+        )
+        required_exec_flags = tuple(
+            literal_constant(TRANSPORT_VALIDATOR, "REQUIRED_EXEC_FLAGS")
+        )
+        optional_exec_flags = tuple(
+            literal_constant(TRANSPORT_VALIDATOR, "OPTIONAL_EXEC_FLAGS")
+        )
+        disable_forms = tuple(
+            literal_constant(TRANSPORT_VALIDATOR, "MULTI_AGENT_DISABLE_FORMS")
+        )
+
+        for name, text in (
+            ("SKILL.md", skill),
+            ("clean-room-orchestration.md", clean_room),
+        ):
+            with self.subTest(document=name):
+                self.assertIn("The launched process itself", text)
+                self.assertIn("actor_prompt_contract.py", text)
+                self.assertIn("derived instructions", text)
+                self.assertIn("--disable multi_agent", text)
+                self.assertIn("validate_actor_transport.py", text)
+
+        self.assertNotIn('use `fork_turns: "none"`', panels)
+        self.assertNotIn("Before freezing the report, launch the assessor", panels)
+        self.assertIn("no reviewer or assessor may perform that launch", panels)
+        self.assertNotIn('use `fork_turns: "none"`', ai_style)
+        self.assertIn("Stage O has already launched", ai_style)
+
+        self.assertIn("Stage O has already launched this exact process", actor_contract)
+        self.assertIn("This process itself is the process-bound actor.", actor_contract)
+        self.assertIn("Perform the assigned role yourself", actor_contract)
+        for api_name in (
+            "spawn_agent",
+            "wait_agent",
+            "list_agents",
+            "create_thread",
+            "read_thread",
+            "list_threads",
+            "send_message_to_thread",
+            "share_thread",
+            "wait_threads",
+        ):
+            self.assertIn(api_name, actor_contract)
+
+        for name, source in (
+            ("build_reviewer_prompt.py", reviewer_helper),
+            ("build_semantic_acceptance_prompt.py", sa_helper),
+            ("build_bound_actor_prompt.py", general_helper),
+        ):
+            with self.subTest(helper=name):
+                self.assertIn("from actor_prompt_contract import", source)
+                self.assertIn("render_bound_actor_contract", source)
+                self.assertNotIn(
+                    "Stage O has already launched this exact process as the fresh",
+                    source,
+                )
+                self.assertNotIn(
+                    "Start in a fresh empty task context with fork_turns=none.",
+                    source,
+                )
+
+        self.assertIn("collab_tool_call", transport_validator)
+        self.assertIn("COLLAB_TOOL_NAMES", transport_validator)
+        self.assertIn("exactly one thread.started", transport_validator)
+        self.assertIn("exactly one turn.started", transport_validator)
+        self.assertIn("exactly one successful turn.completed", transport_validator)
+        self.assertIn("--launch-record", transport_validator)
+        self.assertIn("--expected-prompt-sha256", transport_validator)
+        self.assertIn("--expected-launch-id", transport_validator)
+        self.assertIn("nested Codex/model process", transport_validator)
+
+        for name, text in (
+            ("SKILL.md", skill),
+            ("clean-room-orchestration.md", clean_room),
+        ):
+            with self.subTest(transport_document=name):
+                self.assertIn("thesis-review-actor-launch-v1", text)
+                self.assertIn("--ephemeral", text)
+                self.assertIn("--ignore-user-config", text)
+                self.assertIn("--ignore-rules", text)
+                self.assertIn("--expected-prompt-sha256", text)
+                self.assertIn("--expected-launch-id", text)
+                self.assertIn("exit code", text)
+                self.assertRegex(text, r"closed\s+grammar")
+                self.assertIn("No other flag", text)
+                self.assertIn("not an independent operating-system", text)
+                for token in (
+                    *optional_global_flags,
+                    *required_exec_flags,
+                    *optional_exec_flags,
+                    *disable_forms,
+                ):
+                    self.assertIn(token, text)
+
+        self.assertIn("--expected-body-sha256", skill)
+        self.assertIn("--expected-body-sha256", clean_room)
+        self.assertIn("WebSocket", skill)
+        self.assertIn("WebSocket", clean_room)
+
+    def test_actor_visible_rules_do_not_reintroduce_orchestratorless_launches(self) -> None:
+        documents = [SKILL_DOC, *sorted((SKILL_ROOT / "references").glob("*.md"))]
+        forbidden_fragments = (
+            "Stage SA launches one independent semantic acceptor",
+            "Inventory extraction may be delegated",
+            "before the Chair is launched, start one different",
+            "follow `clean-room-orchestration.md` and start each ledger owner",
+            "Use a new empty-context process for Stage P",
+            "Before freezing the report, launch the assessor",
+            "the chair starts in the fresh Stage-C context",
+            "Run a fresh isolated AI-style assessment",
+            "Run one additional isolated prose-style assessment",
+            "Run Stage S in another fresh context",
+            "Run this as Stage S in a new context",
+            "### 3. Run independent reviewers",
+            "In addition, run the standalone AI-style assessor",
+            "### 7. Run independent semantic acceptance before Chair",
+            "Create a new, uniquely named and identity-neutral round directory",
+            "Give every concurrent actor exact input paths",
+            "After the chair freezes its outputs, run the separate clean Stage-S",
+            "After prose edits, run the assessor again",
+        )
+        for path in documents:
+            text = path.read_text(encoding="utf-8")
+            for fragment in forbidden_fragments:
+                with self.subTest(document=path.name, fragment=fragment):
+                    self.assertNotIn(fragment, text)
+
+        panels = REVIEWER_PANELS.read_text(encoding="utf-8")
+        citation = (SKILL_ROOT / "references" / "citation-audit.md").read_text(
+            encoding="utf-8"
+        )
+        grading = (
+            SKILL_ROOT / "references" / "grading-and-verdicts.md"
+        ).read_text(encoding="utf-8")
+        self.assertIn("Stage O starts every reviewer", panels)
+        self.assertIn("A reviewer never launches or delegates to a helper", panels)
+        self.assertIn("Stage O starts each ledger owner", citation)
+        self.assertIn("Stage O starts the chair", grading)
 
     def test_stage_r_cli_and_helper_freeze_documentation_tracks_public_cli(self) -> None:
         helper_source = REVIEWER_PROMPT_HELPER.read_text(encoding="utf-8")

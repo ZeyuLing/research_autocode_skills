@@ -393,6 +393,30 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     fixture = ReviewerPromptFixture(case_root, degree, actor)
                     metadata = fixture.plan()
                     prompt = fixture.prompt_path.read_text(encoding="utf-8")
+                    self.assertIn(
+                        "Stage O has already launched this exact process as the fresh "
+                        f"empty-context {actor} actor.",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "This process itself is the process-bound actor.", prompt
+                    )
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-BEGIN]"))
+                    self.assertEqual(1, prompt.count("[BOUND-ACTOR-CONTRACT-END]"))
+                    for api_name in (
+                        "spawn_agent",
+                        "followup_task",
+                        "send_message",
+                        "create_thread",
+                        "fork_thread",
+                        "send_message_to_thread",
+                        "handoff_thread",
+                    ):
+                        self.assertIn(api_name, prompt)
+                    self.assertIn(
+                        "Perform the assigned role yourself in this process", prompt
+                    )
+                    self.assertNotIn("fork_turns", prompt)
                     self.assertEqual(
                         digest(fixture.prompt_path.read_bytes()), metadata["prompt_sha256"]
                     )
@@ -836,6 +860,78 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 "planned reviewer prompt",
                 must_exist=False,
             )
+
+        with tempfile.TemporaryDirectory() as temporary:
+            local_parent = Path(temporary).resolve()
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "cannot prove physical containment"
+            ):
+                MODULE.is_physically_within(nested_share_path, local_parent)
+
+    @unittest.skipUnless(os.name == "nt", "UNC rejection is Windows-specific")
+    def test_plan_rejects_all_nested_unc_share_control_boundaries(self) -> None:
+        """A share may secretly start below the run; never probe or accept it."""
+
+        with tempfile.TemporaryDirectory(prefix="stage-r-nested-unc-plan-") as temporary:
+            base = Path(temporary)
+            for placement in ("prompt", "python", "scratch"):
+                with self.subTest(placement=placement):
+                    case_root = base / placement
+                    case_root.mkdir()
+                    fixture = ReviewerPromptFixture(case_root, "doctorate", "R1")
+                    share_root = Path(
+                        rf"\\localhost\NestedShareBelowRun-{placement}"
+                    )
+                    prompt = fixture.prompt_path
+                    python = fixture.python_executable
+                    scratch = fixture.scratch_dir
+                    if placement == "prompt":
+                        prompt = share_root / "R1-prompt.txt"
+                    elif placement == "python":
+                        python = share_root / "python.exe"
+                    else:
+                        scratch = share_root / fixture.scratch_dir.name
+                    with self.assertRaisesRegex(
+                        MODULE.ContractError, "UNC/device namespace"
+                    ):
+                        MODULE.plan_prompt(
+                            fixture.preplan_path,
+                            fixture.round_root,
+                            fixture.actor,
+                            prompt,
+                            python,
+                            scratch,
+                        )
+
+    @unittest.skipUnless(os.name == "nt", "UNC rejection is Windows-specific")
+    def test_verify_rejects_all_nested_unc_share_control_boundaries(self) -> None:
+        """Verify repeats the prompt, runtime, and scratch namespace boundary."""
+
+        with tempfile.TemporaryDirectory(prefix="stage-r-nested-unc-verify-") as temporary:
+            base = Path(temporary)
+            for placement in ("prompt", "python", "scratch"):
+                with self.subTest(placement=placement):
+                    case_root = base / placement
+                    case_root.mkdir()
+                    fixture = ReviewerPromptFixture(case_root, "doctorate", "R1")
+                    fixture.plan()
+                    fixture.stage()
+                    share_root = Path(
+                        rf"\\localhost\NestedShareBelowRun-{placement}"
+                    )
+                    overrides: dict[str, Path] = {}
+                    if placement == "prompt":
+                        overrides["prompt_value"] = share_root / "R1-prompt.txt"
+                    elif placement == "python":
+                        overrides["python_executable_value"] = share_root / "python.exe"
+                    else:
+                        overrides["scratch_dir_value"] = (
+                            share_root / fixture.scratch_dir.name
+                        )
+                    with self.assertRaisesRegex(
+                        MODULE.ContractError, "UNC/device namespace"
+                    ):
+                        fixture.verify(**overrides)
 
     def test_helper_plan_to_verify_is_exact_and_ordered(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

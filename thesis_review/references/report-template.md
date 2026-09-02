@@ -464,8 +464,8 @@ observations as paragraphs, tables, or bullets without colon-style field labels.
 
 ## Independent semantic acceptance
 
-Stage SA starts only after every R report, its owner ledgers/renders, and the
-standalone AI report are frozen in the closed current round. Launch one new,
+Stage O starts Stage SA only after every R report, its owner ledgers/renders, and the
+standalone AI report are frozen in the closed current round. Stage O launches one new,
 mutually isolated acceptor for
 each target actor. An acceptor is neither another reviewer nor a Chair: it may
 not add, delete, rewrite, merge, grade, or adjudicate a finding. It decides only
@@ -851,7 +851,7 @@ Within the no-new-experiment table, `E` means existing evidence whose necessary 
 
 ## Clean user-facing summary
 
-Run this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
+Stage O runs this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
 
 Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. Every such source/output is a named-stream-free single-link regular file and retains its identity and bytes through the terminal PASS check. They never open the PDF, Stage-P packet, `02`--`04`, individual semantic-acceptance files, `06-semantic-acceptance-gate.json`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
 

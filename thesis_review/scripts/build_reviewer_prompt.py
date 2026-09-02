@@ -28,7 +28,14 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-PROMPT_SCHEMA = "thesis-review-stage-r-operational-prompt-v2"
+SCRIPT_DIRECTORY = str(Path(__file__).resolve().parent)
+if SCRIPT_DIRECTORY not in sys.path:
+    sys.path.insert(0, SCRIPT_DIRECTORY)
+
+from actor_prompt_contract import render_bound_actor_contract  # noqa: E402
+
+
+PROMPT_SCHEMA = "thesis-review-stage-r-operational-prompt-v3"
 VERIFICATION_SCHEMA = "thesis-review-stage-r-prompt-verification-v2"
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
 ACTOR_RE = re.compile(r"R([1-5])\Z")
@@ -56,6 +63,21 @@ SCRATCH_SCHEMA = "thesis-review-stage-r-actor-scratch-v1"
 
 class ContractError(RuntimeError):
     """Fail-closed error for reviewer-prompt planning or verification."""
+
+
+def uses_windows_unc_or_device_namespace(path: Path) -> bool:
+    """Return whether ``path`` uses a Windows UNC/device namespace.
+
+    A UNC share may be rooted at an arbitrary descendant of the run directory.
+    Its lexical ancestor chain therefore cannot prove that the target is
+    outside the run.  Keep this test independent of filesystem reachability so
+    an unavailable or attacker-controlled share is rejected before any probe.
+    ``WindowsPath`` normalizes forward-slash UNC spellings, but normalizing here
+    as well makes the boundary explicit and robust for path-like callers.
+    """
+
+    spelling = os.fspath(path).replace("/", "\\")
+    return spelling.startswith("\\\\")
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -166,7 +188,7 @@ def absolute_no_alias(
     path = Path(value)
     if not path.is_absolute():
         raise ContractError(f"{label} must be absolute")
-    if os.name == "nt" and os.fspath(path).startswith("\\\\"):
+    if os.name == "nt" and uses_windows_unc_or_device_namespace(path):
         # Windows permits the same local object to be exposed through an
         # arbitrary nested SMB share.  A share root can itself map below the
         # run root, so no lexical ancestor of ``\\host\share\child`` need have
@@ -263,6 +285,19 @@ def is_physically_within(path: Path, parent: Path) -> bool:
     namespace ``\\\\localhost\\C$\\run``.  ``Path.resolve`` preserves those two
     namespaces, while ``os.path.samefile`` correctly identifies the object.
     """
+
+    if os.name == "nt" and (
+        uses_windows_unc_or_device_namespace(path)
+        or uses_windows_unc_or_device_namespace(parent)
+    ):
+        # Do not let a direct caller bypass ``absolute_no_alias`` and interpret
+        # exhaustion at an SMB share root as proof that the candidate is
+        # external.  A nested share root can itself identify a descendant of
+        # ``parent`` even though no visible UNC ancestor is samefile(parent).
+        raise ContractError(
+            "cannot prove physical containment across a UNC/device namespace "
+            "boundary"
+        )
 
     parent_probe = deepest_existing_ancestor(parent, "containment parent")
     if parent_probe != parent:
@@ -850,6 +885,7 @@ def render_prompt(
             gate_commands, start=1
         )
     )
+    bound_contract = render_bound_actor_contract(actor)
     text = f"""Stage-R reviewer operational prompt
 
 Prompt schema: {PROMPT_SCHEMA}
@@ -870,7 +906,9 @@ Scratch identity convention: {SCRATCH_SCHEMA} / {scratch_dir.name}
 Frozen validator commitments:
 {commitment_lines}
 
-Start in a fresh empty task context with fork_turns=none. Perform one independent, holistic, PDF-only review as {actor}. Apply every Gate A--I to the entire frozen thesis before the persona-weighted deep review. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. Do not use conversation history, user explanations, prior reviews, thesis source, Git, sibling papers, code, experiment records, or any other author-side material. No follow-up message will be sent after dispatch.
+{bound_contract}
+
+Perform one independent, holistic, PDF-only review as {actor}. Apply every Gate A--I to the entire frozen thesis before the persona-weighted deep review. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. Do not use conversation history, user explanations, prior reviews, thesis source, Git, sibling papers, code, experiment records, or any other author-side material. No follow-up message will be sent after dispatch.
 
 Round root:
 {round_root}
