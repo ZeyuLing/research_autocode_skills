@@ -233,8 +233,6 @@ class Fixture:
             "--ignore-user-config",
             "--ignore-rules",
             "--approve-for-me",
-            "--sandbox",
-            "workspace-write",
             "-C",
             str(self.workspace.resolve()),
             "-",
@@ -1202,7 +1200,6 @@ class ValidateActorTransportTests(unittest.TestCase):
             "rules": "--ignore-rules",
             "approval": "--approve-for-me",
             "workspace": "-C",
-            "sandbox": "--sandbox",
             "stdin": "-",
         }
         for label, missing in cases.items():
@@ -1255,7 +1252,10 @@ class ValidateActorTransportTests(unittest.TestCase):
             "model": ["--model", "another-model"],
             "sandbox bypass": ["--dangerously-bypass-approvals-and-sandbox"],
             "duplicate approval": ["--approve-for-me"],
+            "explicit workspace sandbox": ["--sandbox", "workspace-write"],
             "danger sandbox": ["--sandbox", "danger-full-access"],
+            "sandbox equals": ["--sandbox=danger-full-access"],
+            "short sandbox": ["-s", "workspace-write"],
         }
         for label, injected in injections.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:

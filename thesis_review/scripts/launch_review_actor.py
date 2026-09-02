@@ -463,8 +463,6 @@ def build_argv(
             "--disable",
             "multi_agent",
             "--skip-git-repo-check",
-            "--sandbox",
-            "workspace-write",
         ]
     )
     argv.extend(["-C", str(workspace), "-"])

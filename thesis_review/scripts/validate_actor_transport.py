@@ -2026,7 +2026,6 @@ def _validate_argv(
     required_flags = {flag: 0 for flag in REQUIRED_EXEC_FLAGS}
     optional_flags = {flag: 0 for flag in OPTIONAL_EXEC_FLAGS}
     workspace_values: list[str] = []
-    sandbox_values: list[str] = []
     disable_modes: list[str] = []
     while cursor < len(argv) - 1:
         token = argv[cursor]
@@ -2044,12 +2043,10 @@ def _validate_argv(
             workspace_values.append(argv[cursor + 1])
             cursor += 2
             continue
-        if token == "--sandbox":
-            if cursor + 1 >= len(argv) - 1:
-                raise TransportError("exact argv --sandbox is missing its value")
-            sandbox_values.append(argv[cursor + 1])
-            cursor += 2
-            continue
+        if token in {"--sandbox", "-s"} or token.startswith("--sandbox="):
+            raise TransportError(
+                "exact argv forbids an explicit sandbox option with --approve-for-me"
+            )
         if token == "--disable":
             if cursor + 1 >= len(argv) - 1 or argv[cursor + 1] != "multi_agent":
                 raise TransportError(
@@ -2098,10 +2095,6 @@ def _validate_argv(
         )
     if len(workspace_values) != 1:
         raise TransportError("exact argv must contain one '-C <workspace>' pair")
-    if sandbox_values != ["workspace-write"]:
-        raise TransportError(
-            "exact argv must contain one '--sandbox workspace-write' pair"
-        )
     argv_workspace = _canonical_existing_path(
         workspace_values[0], label="argv -C workspace", kind="directory"
     )

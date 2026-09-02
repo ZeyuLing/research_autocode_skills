@@ -303,6 +303,8 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 self.assertIn("--ignore-user-config", text)
                 self.assertIn("--ignore-rules", text)
                 self.assertIn("--approve-for-me", text)
+                self.assertIn("supplies the workspace-write sandbox", text)
+                self.assertIn("must not be combined with", text)
                 self.assertIn(
                     "--dangerously-bypass-approvals-and-sandbox", text
                 )

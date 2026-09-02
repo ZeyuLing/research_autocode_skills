@@ -435,9 +435,10 @@ grammar:
 policy-respecting `--approve-for-me`; exactly one
 `-C <actor-workspace>` pair; exactly one of `--disable multi_agent`,
 `--disable=multi_agent`, or `-c features.multi_agent=false`; and, optionally,
-at most once `--skip-git-repo-check`. It also contains exactly one
-`--sandbox workspace-write` pair. The approval flag does not relax that
-sandbox, user-config, or rule isolation;
+at most once `--skip-git-repo-check`. In this Codex CLI, `--approve-for-me`
+supplies the workspace-write sandbox itself and must not be combined with
+`--sandbox`, `--sandbox=...`, or `-s`; this preserves workspace-write isolation
+while avoiding the CLI's mutually exclusive flag error.
 `--dangerously-bypass-approvals-and-sandbox` and every other approval/sandbox
 bypass remain forbidden. If present, the sole `--search`
 occurs before `exec`. The sole stdin marker `-` is last. No other flag,
