@@ -2001,7 +2001,7 @@ def command_bootstrap(args: argparse.Namespace) -> dict[str, Any]:
         retry_preflight = _load_module(
             "manage_review_retry.py", "stage_o_runner_bootstrap_preflight"
         )
-        retry_preflight._validate_pre_stage_p_state(round_root, _process)
+        retry_preflight._validate_pre_stage_p_state(run_root, _process)
         staged = manager.command_stage_round(
             argparse.Namespace(skill_root=Path(config["skill_root"]), round_root=round_root)
         )

@@ -878,6 +878,54 @@ class StageORunnerCommandTests(unittest.TestCase):
                 )
         quarantine.assert_called_once()
 
+    def test_bootstrap_preflight_receives_run_root_not_round_root(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            run_root = Path(temporary) / "run"
+            round_root = run_root / "round"
+            views_root = run_root / "views"
+            round_root.mkdir(parents=True)
+            views_root.mkdir()
+            config = {
+                "run_root": str(run_root),
+                "round_root": str(round_root),
+                "views_root": str(views_root),
+                "skill_root": str(Path(temporary) / "skill"),
+                "workspace": str(Path(temporary)),
+                "process_sha256": digest("process"),
+                "process_seal_sha256": digest("seal"),
+            }
+            process = {"frozen_pdf_file": "thesis.pdf"}
+            begun = {"transition_token": digest("begin")}
+            committed = {"transition_token": digest("commit")}
+            preflight = mock.Mock()
+            preflight.verify_process_seal.return_value = {"status": "verified"}
+            manager = mock.Mock()
+            manager.command_stage_round.return_value = {"files": {}}
+
+            def load_module(filename: str, _module_name: str):
+                return manager if filename == "manage_stage_o_workspace.py" else preflight
+
+            with mock.patch.object(
+                MODULE,
+                "_canonical_bootstrap_config",
+                return_value=(config, process),
+            ), mock.patch.object(
+                MODULE, "_create_event_store", return_value=Path(temporary) / "events"
+            ), mock.patch.object(
+                MODULE,
+                "append_event",
+                side_effect=[
+                    (begun, {}, begun["transition_token"]),
+                    (committed, {}, committed["transition_token"]),
+                ],
+            ), mock.patch.object(MODULE, "_load_module", side_effect=load_module):
+                result = MODULE.command_bootstrap(argparse.Namespace())
+
+            self.assertEqual(result, committed)
+            preflight._validate_pre_stage_p_state.assert_called_once_with(
+                run_root, process
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
