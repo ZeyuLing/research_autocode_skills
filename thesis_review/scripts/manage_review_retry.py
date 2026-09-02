@@ -2,7 +2,7 @@
 """Fail-closed Stage-O run-container publication and quarantine mechanics."""
 from __future__ import annotations
 
-import argparse, contextlib, ctypes, errno, hashlib, json, os, re, stat, sys, types, uuid
+import argparse, contextlib, ctypes, errno, hashlib, json, os, re, stat, sys, time, types, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -14,6 +14,9 @@ PROCESS_SEAL_SCHEMA="thesis-review-stage-o-process-seal-v1"
 PROCESS_SEAL_FILE="process-seal.json"
 PROCESS_PARAMETER_FILE="00-process-parameters.json"
 LOCK_FILE=".thesis-review-retry.lock"
+VERIFY_LOCK_TIMEOUT_SECONDS=30.0
+VERIFY_LOCK_RETRY_SECONDS=0.05
+WINDOWS_LOCK_CONTENTION_CODES=frozenset({32,33})
 STAGING_PREFIX=".thesis-review-staging-"
 QUARANTINE_PREFIX="QUARANTINED-"
 CHILDREN=("round","views","orchestration")
@@ -243,7 +246,27 @@ def _rename_noreplace(source: Path, destination: Path) -> None:
     raise RetryManagementError("no-replace atomic rename unsupported; failing closed")
 
 @contextlib.contextmanager
-def _lock(workspace: Path) -> Iterator[None]:
+def _lock(
+    workspace: Path,
+    *,
+    wait_for_verifier: bool=False,
+    timeout_seconds: float=0.0,
+    retry_seconds: float=VERIFY_LOCK_RETRY_SECONDS,
+) -> Iterator[None]:
+    if wait_for_verifier and (timeout_seconds<=0 or retry_seconds<=0):
+        raise RetryManagementError("verifier lock wait bounds must be positive")
+    deadline=time.monotonic()+timeout_seconds if wait_for_verifier else None
+
+    def retry_contention() -> None:
+        if deadline is None:
+            raise RetryManagementError("workspace kernel lock is held")
+        remaining=deadline-time.monotonic()
+        if remaining<=0:
+            raise RetryManagementError(
+                "workspace kernel lock is held; verifier wait timed out"
+            )
+        time.sleep(min(retry_seconds,remaining))
+
     lock=workspace/LOCK_FILE
     try: lexical_before=os.lstat(lock)
     except FileNotFoundError: lexical_before=None
@@ -268,8 +291,16 @@ def _lock(workspace: Path) -> Iterator[None]:
 
     handle=None
     if sys.platform=="win32":
-        k=_windows_kernel32(); handle=k.CreateFileW(str(lock),0x80000000,0,None,4,0x00200080,None)
-        if handle in (0,-1,ctypes.c_void_p(-1).value): raise RetryManagementError("workspace kernel lock is held")
+        k=_windows_kernel32()
+        while True:
+            handle=k.CreateFileW(str(lock),0x80000000,0,None,4,0x00200080,None)
+            if handle not in (0,-1,ctypes.c_void_p(-1).value): break
+            code=ctypes.get_last_error()
+            if code not in WINDOWS_LOCK_CONTENTION_CODES:
+                raise RetryManagementError(
+                    f"workspace kernel lock acquisition failed ({code})"
+                )
+            retry_contention()
         try:
             os_handle=__import__("msvcrt").open_osfhandle(handle,os.O_RDONLY); handle=None
             with os.fdopen(os_handle,"rb") as stream:
@@ -280,11 +311,27 @@ def _lock(workspace: Path) -> Iterator[None]:
         import fcntl
         fd=os.open(lock,os.O_CREAT|os.O_RDWR|getattr(os,"O_NOFOLLOW",0),0o600)
         try:
-            try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-            except BlockingIOError as exc: raise RetryManagementError("workspace kernel lock is held") from exc
+            while True:
+                try: fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                except BlockingIOError:
+                    retry_contention()
+                    continue
+                break
             validate_open_lock(os.fstat(fd)); yield
         finally: os.close(fd)
     else: raise RetryManagementError("kernel lock unsupported; failing closed")
+
+@contextlib.contextmanager
+def _verification_lock(workspace: Path) -> Iterator[None]:
+    """Bounded contention wait reserved for the pure read-only seal verifier."""
+
+    with _lock(
+        workspace,
+        wait_for_verifier=True,
+        timeout_seconds=VERIFY_LOCK_TIMEOUT_SECONDS,
+        retry_seconds=VERIFY_LOCK_RETRY_SECONDS,
+    ):
+        yield
 
 def _assert_metadata_handle_identity(handle, path: Path, expected: dict) -> None:
     info=os.fstat(handle.fileno())
@@ -781,7 +828,7 @@ def verify_process_seal(args) -> dict:
     workspace=_absolute(args.workspace,"workspace"); run=_absolute(args.run_root,"run-root")
     if not workspace.is_dir(): raise RetryManagementError("workspace must exist")
     _reject_reparse(workspace); _direct_child(run,workspace,"run-root")
-    with _lock(workspace):
+    with _verification_lock(workspace):
         return _verify_process_seal_locked(
             workspace,run,args.expected_process_sha256,args.expected_seal_sha256
         )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-import contextlib, hashlib, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, unittest
+import contextlib, ctypes, hashlib, importlib.util, io, json, os, shutil, subprocess, sys, tempfile, threading, time, types, unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest import mock
 from pypdf import PdfWriter
@@ -9,6 +10,9 @@ sys.dont_write_bytecode = True
 SCRIPT = Path(__file__).parents[1] / "scripts" / "manage_review_retry.py"
 SPEC = importlib.util.spec_from_file_location("manage_review_retry", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC); SPEC.loader.exec_module(MODULE)
+LAUNCHER_SCRIPT = Path(__file__).parents[1] / "scripts" / "launch_review_actor.py"
+LAUNCHER_SPEC = importlib.util.spec_from_file_location("launch_review_actor_for_retry_test", LAUNCHER_SCRIPT)
+LAUNCHER = importlib.util.module_from_spec(LAUNCHER_SPEC); LAUNCHER_SPEC.loader.exec_module(LAUNCHER)
 
 def sha256(path: Path) -> str:
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
@@ -101,6 +105,12 @@ class ManageReviewRetryTests(unittest.TestCase):
             "--expected-process-sha256",process_hash,
             "--expected-seal-sha256",seal_hash,
         ]
+
+    def sealed(self, root: Path):
+        workspace,_,run=self.initialized(root); write_matching_process(run)
+        code,out=self.run_main(self.seal_args(workspace,run)); self.assertEqual(code,0,out)
+        payload=json.loads(out.splitlines()[-1])
+        return workspace,run,payload["process_sha256"],payload["seal_sha256"]
 
     def crashed(self, root):
         workspace = root / "workspace"; workspace.mkdir()
@@ -196,6 +206,103 @@ class ManageReviewRetryTests(unittest.TestCase):
             code,out=self.run_main(verify); self.assertEqual(code,0,out)
             code,out=self.run_main(args); self.assertEqual(code,2,out)
             self.assertIn("already exists",out)
+
+    @unittest.skipUnless(sys.platform in ("win32","linux"),"kernel lock implementation")
+    def test_concurrent_launcher_seal_verifiers_wait_then_all_revalidate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace,run,process_hash,seal_hash=self.sealed(Path(tmp))
+            started=threading.Barrier(7)
+
+            def launcher_verify():
+                started.wait(timeout=5)
+                return LAUNCHER.verify_process_seal_binding(
+                    run,process_hash,seal_hash
+                )
+
+            with mock.patch.object(LAUNCHER,"load_module",return_value=MODULE):
+                with ThreadPoolExecutor(max_workers=6) as pool:
+                    with MODULE._lock(workspace):
+                        futures=[pool.submit(launcher_verify) for _ in range(6)]
+                        started.wait(timeout=5)
+                        time.sleep(0.1)
+                        self.assertTrue(all(not future.done() for future in futures))
+                    results=[future.result(timeout=10) for future in futures]
+            self.assertEqual(6,len(results))
+            self.assertTrue(all(result["process_sha256"]==process_hash for result in results))
+            self.assertTrue(all(result["seal_sha256"]==seal_hash for result in results))
+
+    @unittest.skipUnless(sys.platform in ("win32","linux"),"kernel lock implementation")
+    def test_seal_verifier_lock_wait_times_out_closed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace,run,process_hash,seal_hash=self.sealed(Path(tmp))
+            with MODULE._lock(workspace), mock.patch.object(
+                MODULE,"VERIFY_LOCK_TIMEOUT_SECONDS",0.03
+            ), mock.patch.object(MODULE,"VERIFY_LOCK_RETRY_SECONDS",0.005):
+                code,out=self.run_main(
+                    self.verify_seal_args(workspace,run,process_hash,seal_hash)
+                )
+            self.assertEqual(2,code,out)
+            self.assertIn("workspace kernel lock is held",out)
+            self.assertIn("timed out",out)
+
+    def test_windows_verifier_does_not_retry_non_contention_open_failure(self):
+        class Kernel:
+            def __init__(self):
+                self.CreateFileW=mock.Mock(return_value=ctypes.c_void_p(-1).value)
+                self.CloseHandle=mock.Mock(return_value=1)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Path(tmp).resolve(); kernel=Kernel()
+            with mock.patch.object(MODULE.sys,"platform","win32"), mock.patch.object(
+                MODULE,"_windows_kernel32",return_value=kernel
+            ), mock.patch.object(
+                MODULE.ctypes,"get_last_error",return_value=5,create=True
+            ), mock.patch.object(MODULE.time,"sleep") as sleeper:
+                with self.assertRaisesRegex(
+                    MODULE.RetryManagementError,"acquisition failed \\(5\\)"
+                ):
+                    with MODULE._lock(
+                        workspace,wait_for_verifier=True,timeout_seconds=1.0
+                    ):
+                        pass
+            self.assertEqual(1,kernel.CreateFileW.call_count)
+            sleeper.assert_not_called()
+
+    def test_linux_verifier_retries_only_blocking_lock_contention(self):
+        calls=[]
+
+        def flock(_fd, _flags):
+            calls.append(1)
+            if len(calls)<3:
+                raise BlockingIOError()
+
+        fake_fcntl=types.SimpleNamespace(LOCK_EX=1,LOCK_NB=2,flock=flock)
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace=Path(tmp).resolve()
+            with mock.patch.object(MODULE.sys,"platform","linux"), mock.patch.dict(
+                sys.modules,{"fcntl":fake_fcntl}
+            ), mock.patch.object(MODULE.time,"sleep") as sleeper:
+                with MODULE._lock(
+                    workspace,
+                    wait_for_verifier=True,
+                    timeout_seconds=1.0,
+                    retry_seconds=0.01,
+                ):
+                    pass
+            self.assertEqual(3,len(calls))
+            self.assertEqual(2,sleeper.call_count)
+
+    @unittest.skipUnless(sys.platform in ("win32","linux"),"kernel lock implementation")
+    def test_initialize_lock_contention_remains_fail_fast(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root=Path(tmp); workspace=root/"workspace"; workspace.mkdir()
+            source=root/"source.pdf"; write_pdf(source); run=workspace/"run"
+            with MODULE._lock(workspace), mock.patch.object(MODULE.time,"sleep") as sleeper:
+                code,out=self.run_main(self.init_args(workspace,source,run))
+            self.assertEqual(2,code,out)
+            self.assertIn("workspace kernel lock is held",out)
+            sleeper.assert_not_called()
+            self.assertFalse(run.exists())
 
     def test_process_seal_rejects_every_metadata_projection_mismatch(self):
         mutations={

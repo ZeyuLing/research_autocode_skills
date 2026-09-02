@@ -475,6 +475,16 @@ exit it requires the scratch to remain exactly empty, detects any pending-record
 mutation, completes that same file, freezes terminal outputs, and invokes the
 transport validator. The input leases remain held through actor exit.
 
+Concurrent actors may contend only during the pure read-only process-seal
+verification performed before and after launch. That verifier alone may wait at
+most 30 seconds for the workspace kernel lock with short retries: Windows retries
+only sharing/lock violations, Linux retries only `BlockingIOError`, and every
+other acquisition error fails immediately. Once it acquires the lock, it reruns
+the complete process-seal validation from the beginning. Initialize, seal,
+quarantine, cleanup, and every other mutating operation keep the nonblocking
+fail-fast lock and never wait and then write. The lock is released when each
+seal verification ends and is never held across an actor's execution lifetime.
+
 The record is one JSON object with exactly these fields and no extensions:
 `schema`, `actor`, `launch_id`, `prompt_path`, `prompt_bytes`,
 `prompt_sha256`, `process_sha256`, `process_seal_sha256`,

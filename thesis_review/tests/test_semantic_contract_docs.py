@@ -316,6 +316,9 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 self.assertIn("not an independent operating-system", text)
                 self.assertRegex(text, r"direct\s+WebSocket\s+recovery")
                 self.assertIn("unchanged reason", text)
+                self.assertIn("pure read-only process-seal", text)
+                self.assertRegex(text, r"at\s+most\s+30 seconds")
+                self.assertIn("never held across an actor's execution lifetime", text)
                 for token in (
                     *optional_global_flags,
                     *required_exec_flags,
