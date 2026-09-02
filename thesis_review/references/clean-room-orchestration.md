@@ -500,9 +500,12 @@ The first nonempty stdout line must be `PASS`. The validator requires process
 exit code zero, the closed current JSONL event schema, coherent item lifecycles,
 and exactly one ordered `thread.started`, `turn.started`, and successful terminal
 `turn.completed`, with `turn.completed` as the final newline-terminated JSONL
-event. It treats only the closed, consecutive, monotonic WebSocket reconnect
-sequence followed immediately by the one HTTPS-fallback notice and then a
-nonempty completed agent message as recovered transport. Truncation; malformed
+event. It treats a top-level WebSocket reconnect run as recovered only when the
+events are consecutive, carry one unchanged reason and declared total, advance
+without gaps or repetition through that total, and are followed either
+immediately by a nonempty completed agent message proving direct WebSocket
+recovery or immediately by the one recognized HTTPS-fallback notice with a
+later nonempty completed agent message. Truncation; malformed
 or blank events; unrecovered top-level stream/turn errors or error-item events;
 launch/log/thread/prompt/process/seal/input/output/record binding drift; any collaboration or task/thread-
 tool event; and any recognized shell or local-program attempt to start a nested

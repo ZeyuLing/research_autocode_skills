@@ -145,6 +145,18 @@ def exact_recoverable_smoke_events() -> list[object]:
     ]
 
 
+def exact_direct_recovery_events() -> list[object]:
+    events = clean_events("01a061dc-9061-7eb0-ac70-941d9df2cf07")
+    events[3:3] = [
+        {"type": "error", "message": "Reconnecting... 1/5 (request timed out)"},
+        {"type": "error", "message": "Reconnecting... 2/5 (request timed out)"},
+        {"type": "error", "message": "Reconnecting... 3/5 (request timed out)"},
+        {"type": "error", "message": "Reconnecting... 4/5 (request timed out)"},
+        {"type": "error", "message": "Reconnecting... 5/5 (request timed out)"},
+    ]
+    return events
+
+
 def command_event(
     command: str,
     *,
@@ -352,6 +364,81 @@ class ValidateActorTransportTests(unittest.TestCase):
             self.assertEqual(9, result["events"])
             self.assertEqual(5, result["recoverable_transport_error_events"])
             self.assertEqual(0, result["exit_code"])
+
+    def test_consecutive_reconnects_may_recover_directly_to_agent_message(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), exact_direct_recovery_events())
+            result = fixture.validate()
+            self.assertEqual(10, result["events"])
+            self.assertEqual(5, result["recoverable_transport_error_events"])
+            self.assertEqual(0, result["exit_code"])
+
+    def test_direct_recovery_rejects_gap_duplicate_or_reason_change(self) -> None:
+        replacements = {
+            "gap": "Reconnecting... 4/5 (request timed out)",
+            "duplicate": "Reconnecting... 2/5 (request timed out)",
+            "reason change": "Reconnecting... 3/5 (connection reset)",
+        }
+        for label, message in replacements.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                events = exact_direct_recovery_events()
+                events[5] = {"type": "error", "message": message}
+                fixture = Fixture(Path(directory), events)
+                with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                    fixture.validate()
+
+    def test_direct_recovery_rejects_nonconsecutive_reconnects(self) -> None:
+        events = exact_direct_recovery_events()
+        events.insert(
+            5,
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_gap",
+                    "type": "command_execution",
+                    "command": "python -V",
+                    "aggregated_output": "Python 3\n",
+                    "exit_code": 0,
+                    "status": "completed",
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
+
+    def test_direct_recovery_requires_immediate_nonempty_agent_message(self) -> None:
+        variants: list[tuple[str, list[object]]] = []
+
+        empty = exact_direct_recovery_events()
+        empty[-2]["item"]["text"] = "   "
+        variants.append(("empty", empty))
+
+        missing = exact_direct_recovery_events()
+        del missing[-2]
+        variants.append(("missing", missing))
+
+        ordinary_error = exact_direct_recovery_events()
+        ordinary_error.insert(-2, {"type": "error", "message": "fatal transport error"})
+        variants.append(("ordinary error", ordinary_error))
+
+        for label, events in variants:
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                fixture = Fixture(Path(directory), events)
+                with self.assertRaises(MODULE.TransportError):
+                    fixture.validate()
+
+    def test_direct_recovery_does_not_excuse_top_level_failure(self) -> None:
+        events = exact_direct_recovery_events()
+        events.insert(
+            -1,
+            {"type": "turn.failed", "error": {"message": "fatal transport error"}},
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
 
     def test_recoverable_sequence_without_terminal_event_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

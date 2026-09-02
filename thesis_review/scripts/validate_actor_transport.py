@@ -995,7 +995,7 @@ def validate_item_lifecycle(
         raise TransportError(f"turn.completed leaves unterminated item IDs: {active}")
 
 
-def _recoverable_reconnect(event: dict[str, Any]) -> tuple[int, int] | None:
+def _recoverable_reconnect(event: dict[str, Any]) -> tuple[int, int, str] | None:
     if set(event) != {"type", "message"} or event.get("type") != "error":
         return None
     message = event.get("message")
@@ -1008,7 +1008,7 @@ def _recoverable_reconnect(event: dict[str, Any]) -> tuple[int, int] | None:
     total = int(match.group(2))
     if attempt > total or total > MAX_RECOVERABLE_RECONNECT_ATTEMPTS:
         return None
-    return attempt, total
+    return attempt, total, match.group(3)
 
 
 def _recoverable_fallback(event: dict[str, Any]) -> bool:
@@ -1029,23 +1029,37 @@ def _recoverable_fallback(event: dict[str, Any]) -> bool:
     return isinstance(message, str) and FALLBACK_MESSAGE_RE.fullmatch(message) is not None
 
 
+def _completed_nonempty_agent_message(event: dict[str, Any]) -> bool:
+    if set(event) != {"type", "item"} or event.get("type") != "item.completed":
+        return False
+    item = event.get("item")
+    if not isinstance(item, dict) or item.get("type") != "agent_message":
+        return False
+    text = item.get("text")
+    return isinstance(text, str) and bool(text.strip()) and not failure_evidence(event)
+
+
 def recoverable_transport_error_indices(
     events: Sequence[dict[str, Any]], turn_started_index: int, turn_completed_index: int
 ) -> frozenset[int]:
-    """Recognize only the observed WebSocket-retry-to-HTTPS recovery sequence."""
+    """Recognize one closed WebSocket retry sequence with proven recovery."""
 
     cursor = turn_started_index + 1
+    while cursor < turn_completed_index and _recoverable_reconnect(events[cursor]) is None:
+        cursor += 1
     reconnect_indices: list[int] = []
     attempts: list[int] = []
     total_attempts: int | None = None
+    reconnect_reason: str | None = None
     while cursor < turn_completed_index:
         reconnect = _recoverable_reconnect(events[cursor])
         if reconnect is None:
             break
-        attempt, total = reconnect
+        attempt, total, reason = reconnect
         if total_attempts is None:
             total_attempts = total
-        if total != total_attempts:
+            reconnect_reason = reason
+        if total != total_attempts or reason != reconnect_reason:
             return frozenset()
         reconnect_indices.append(cursor)
         attempts.append(attempt)
@@ -1057,19 +1071,17 @@ def recoverable_transport_error_indices(
         return frozenset()
     if attempts[-1] != total_attempts:
         return frozenset()
-    if cursor >= turn_completed_index or not _recoverable_fallback(events[cursor]):
+    if cursor >= turn_completed_index:
+        return frozenset()
+    if _completed_nonempty_agent_message(events[cursor]):
+        return frozenset(reconnect_indices)
+    if not _recoverable_fallback(events[cursor]):
         return frozenset()
     fallback_index = cursor
 
     post_fallback_agent_message = False
     for event in events[fallback_index + 1 : turn_completed_index]:
-        if event.get("type") != "item.completed":
-            continue
-        item = event.get("item")
-        if not isinstance(item, dict) or item.get("type") != "agent_message":
-            continue
-        text = item.get("text")
-        if isinstance(text, str) and text.strip() and not failure_evidence(event):
+        if _completed_nonempty_agent_message(event):
             post_fallback_agent_message = True
             break
     if not post_fallback_agent_message:

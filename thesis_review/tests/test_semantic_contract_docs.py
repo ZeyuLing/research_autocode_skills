@@ -314,6 +314,8 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 self.assertRegex(text, r"closed\s+grammar")
                 self.assertIn("No other flag", text)
                 self.assertIn("not an independent operating-system", text)
+                self.assertRegex(text, r"direct\s+WebSocket\s+recovery")
+                self.assertIn("unchanged reason", text)
                 for token in (
                     *optional_global_flags,
                     *required_exec_flags,
