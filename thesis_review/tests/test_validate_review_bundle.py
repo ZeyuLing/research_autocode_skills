@@ -5495,6 +5495,36 @@ class ValidateReviewBundleTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("gate content/hash closure mismatch", result.stdout)
 
+    def test_full_gate_requires_none_for_every_sa_public_endpoint(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            acceptance_dir = root / VALIDATOR_MODULE.SEMANTIC_ACCEPTANCE_DIRECTORY
+            for target in ("R1", "R2", "R3", "AI"):
+                self.assertIn(
+                    "public_endpoints=[none]",
+                    (acceptance_dir / f"SA-{target}.md").read_text(
+                        encoding="utf-8"
+                    ),
+                    target,
+                )
+            result = self.run_validator(root)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+            acceptance = acceptance_dir / "SA-R3.md"
+            acceptance.write_text(
+                acceptance.read_text(encoding="utf-8").replace(
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{BIB_ENDPOINT}]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "all SA public_endpoints must be exactly [none]",
+            )
+
     def test_manifest_must_bind_process_hash_and_complete_neutral_structure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -6195,15 +6225,39 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 chair.write_text(text, encoding="utf-8")
                 self.assert_fails(root, needle)
 
+    def test_institutional_regime_rejects_url_only_policy_evidence(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            process_path = root / "00-process-parameters.json"
+            process = json.loads(process_path.read_text(encoding="utf-8"))
+            process["decision_regime_status"] = "verified-institutional"
+            process["governing_rule_urls"] = [
+                "https://example.edu/official-rule"
+            ]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+            self.assert_fails(
+                root,
+                "requires at least one frozen local governing file",
+            )
+
     def test_institutional_regime_projects_official_verdicts(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
             rule_endpoint = "https://example.edu/official-rule"
+            rule_file = root / "official-rule.txt"
+            rule_file.write_text("synthetic frozen official rule", encoding="utf-8")
+            rule_digest = hashlib.sha256(rule_file.read_bytes()).hexdigest().upper()
             process_path = root / "00-process-parameters.json"
             process = json.loads(process_path.read_text(encoding="utf-8"))
             process["decision_regime_status"] = "verified-institutional"
             process["governing_rule_urls"] = [rule_endpoint]
+            process["governing_local_files"] = [{
+                "neutral_file": rule_file.name,
+                "official_title": "Synthetic official rule",
+                "sha256": rule_digest,
+            }]
             process_path.write_text(json.dumps(process), encoding="utf-8")
             manifest = root / "00-manifest.md"
             manifest_text = manifest.read_text(encoding="utf-8")
@@ -6215,25 +6269,16 @@ class ValidateReviewBundleTests(unittest.TestCase):
                 "- Process-parameter file and SHA-256: "
                 f"00-process-parameters.json / {new_process_hash}",
                 manifest_text,
-            ).replace(
-                "decision_regime_status=skill-default ; sources=none",
-                "decision_regime_status=verified-institutional ; "
-                "sources=https://example.edu/official-rule",
-            ).replace(
-                "public_endpoints=[none]",
-                f"public_endpoints=[{rule_endpoint}]",
-                1,
+            )
+            manifest_text = re.sub(
+                r"(?m)^- Governing template/rules: .*$",
+                "- Governing template/rules: "
+                + VALIDATOR_MODULE.manifest_process_projection(process)[
+                    "Governing template/rules"
+                ],
+                manifest_text,
             )
             manifest.write_text(manifest_text, encoding="utf-8")
-            policy = root / "01-policy-basis.md"
-            policy.write_text(
-                policy.read_text(encoding="utf-8").replace(
-                    "public_endpoints=[none]",
-                    f"public_endpoints=[{rule_endpoint}]",
-                    1,
-                ),
-                encoding="utf-8",
-            )
             for index in range(1, 4):
                 path = root / f"R{index}-comprehensive-review.md"
                 text = path.read_text(encoding="utf-8")
@@ -6261,11 +6306,7 @@ class ValidateReviewBundleTests(unittest.TestCase):
                     text = text.replace(old, new, 1)
                 path.write_text(text, encoding="utf-8")
             chair = root / "90-chair-synthesis.md"
-            chair_text = chair.read_text(encoding="utf-8").replace(
-                "public_endpoints=[none]",
-                f"public_endpoints=[{rule_endpoint}]",
-                1,
-            )
+            chair_text = chair.read_text(encoding="utf-8")
             chair_replacements = {
                 "- Decision regime: skill-default": "- Decision regime: institutional",
                 "- Overall official category: N/A": "- Overall official category: Institutional-B",
@@ -6279,19 +6320,49 @@ class ValidateReviewBundleTests(unittest.TestCase):
             for old, new in chair_replacements.items():
                 chair_text = chair_text.replace(old, new)
             chair.write_text(chair_text, encoding="utf-8")
-            for filename in (
-                "91-revision-ledger.md",
-                "92-new-evidence-or-experiments.md",
-            ):
+
+            def refresh_opened(filename: str, actor: str) -> None:
                 path = root / filename
-                path.write_text(
-                    path.read_text(encoding="utf-8").replace(
-                        "public_endpoints=[none]",
-                        f"public_endpoints=[{rule_endpoint}]",
-                        1,
-                    ),
-                    encoding="utf-8",
+                expected = "; ".join(
+                    VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                        process, 3, actor, root
+                    )
                 )
+                updated, count = re.subn(
+                    r"opened=\[[^\]]*\]",
+                    f"opened=[{expected}]",
+                    path.read_text(encoding="utf-8"),
+                    count=1,
+                )
+                self.assertEqual(1, count, filename)
+                path.write_text(updated, encoding="utf-8")
+
+            for filename, actor in (
+                ("00-manifest.md", "P"),
+                ("01-policy-basis.md", "P"),
+                ("R1-comprehensive-review.md", "R1"),
+                ("R2-comprehensive-review.md", "R2"),
+                ("R3-comprehensive-review.md", "R3"),
+                ("02-page-layout-ledger.md", "R3"),
+                ("03-bibliography-audit-ledger.md", "R3"),
+                ("04-citation-claim-audit-ledger.md", "R3"),
+                ("90-chair-synthesis.md", "C"),
+                ("91-revision-ledger.md", "C"),
+                ("92-new-evidence-or-experiments.md", "C"),
+            ):
+                refresh_opened(filename, actor)
+            chair_text = chair.read_text(encoding="utf-8")
+            chair_text = re.sub(
+                r"(?m)^- Exact current-round input allowlist: .*$",
+                "- Exact current-round input allowlist: "
+                + "; ".join(
+                    VALIDATOR_MODULE.canonical_stage_opened_inputs(
+                        process, 3, "C", root
+                    )
+                ),
+                chair_text,
+            )
+            chair.write_text(chair_text, encoding="utf-8")
             summary = root / "93-user-facing-summary.md"
             summary_text = summary.read_text(encoding="utf-8").replace(
                 "| B | 小修后可答辩 | skill-default | high |",
@@ -6300,6 +6371,35 @@ class ValidateReviewBundleTests(unittest.TestCase):
             summary.write_text(summary_text, encoding="utf-8")
             result = self.run_validator(root, refresh_semantic=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            policy = root / "01-policy-basis.md"
+            policy_text = policy.read_text(encoding="utf-8")
+            policy.write_text(
+                policy_text.replace(
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{rule_endpoint}]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "current P authoritative endpoint allowlist",
+            )
+            policy.write_text(policy_text, encoding="utf-8")
+            chair_text = chair.read_text(encoding="utf-8")
+            chair.write_text(
+                chair_text.replace(
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{rule_endpoint}]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            self.assert_fails(
+                root,
+                "current C authoritative endpoint allowlist",
+            )
+            chair.write_text(chair_text, encoding="utf-8")
             r1 = root / "R1-comprehensive-review.md"
             r1_text = r1.read_text(encoding="utf-8")
             r1.write_text(

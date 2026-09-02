@@ -39,9 +39,10 @@ from actor_prompt_contract import render_bound_actor_contract  # noqa: E402
 ACCEPTANCE_DIRECTORY = "06-semantic-acceptance"
 TARGET_RE = re.compile(r"(?:R[1-5]|AI)\Z")
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
+CONTROL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v5"
 VERIFICATION_SCHEMA = "thesis-review-semantic-acceptance-verification-v3"
-PROMOTION_SCHEMA = "thesis-review-semantic-acceptance-promotion-v2"
+PROMOTION_SCHEMA = "thesis-review-semantic-acceptance-promotion-v3"
 INPUT_COMMITMENT_SCHEMA = "thesis-review-semantic-acceptance-inputs-v1"
 PROCESS_COMMITMENT_RE = re.compile(
     r"(?m)^- Process-parameter file and SHA-256: "
@@ -121,6 +122,21 @@ class FileIdentity(NamedTuple):
 class DirectoryIdentity(NamedTuple):
     device: int
     inode: int
+
+
+def load_canonical_module(path: Path, module_name: str) -> types.ModuleType:
+    """Source-load one checked-in Stage-O dependency without bytecode writes."""
+
+    require_safe_regular(path, f"canonical Stage-O module {path.name}")
+    try:
+        source = path.read_bytes().decode("utf-8", errors="strict")
+        module = types.ModuleType(module_name)
+        module.__file__ = str(path)
+        module.__package__ = ""
+        exec(compile(source, str(path), "exec", dont_inherit=True), module.__dict__)
+    except Exception as exc:
+        raise ContractError(f"cannot load canonical Stage-O module {path}: {exc}") from exc
+    return module
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -785,20 +801,26 @@ def safe_relative_name(value: Any, label: str, *, basename_only: bool) -> str:
     return path.as_posix()
 
 
+def require_control_id(value: Any, label: str) -> str:
+    """Accept one closed, prompt-safe round/retry identifier."""
+
+    if not isinstance(value, str) or CONTROL_ID_RE.fullmatch(value) is None:
+        raise ContractError(
+            f"stable process field {label} must match "
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        )
+    return value
+
+
 def stable_process_projection(process: dict[str, Any]) -> dict[str, Any]:
     missing = [field for field in STABLE_PROCESS_FIELDS if field not in process]
     if missing:
         raise ContractError(f"preplan process is missing stable field(s): {missing}")
-    round_id = process.get("round_id")
-    retry_id = process.get("retry_id")
+    round_id = require_control_id(process.get("round_id"), "round_id")
+    retry_id = require_control_id(process.get("retry_id"), "retry_id")
     output_language = process.get("output_language")
-    for label, value in (
-        ("round_id", round_id),
-        ("retry_id", retry_id),
-        ("output_language", output_language),
-    ):
-        if not isinstance(value, str) or not value.strip() or value != value.strip():
-            raise ContractError(f"stable process field {label} must be a nonempty trimmed string")
+    if output_language != "zh-CN":
+        raise ContractError("stable process field output_language must be exactly zh-CN")
     pdf_name = safe_relative_name(
         process.get("frozen_pdf_file"), "frozen_pdf_file", basename_only=True
     )
@@ -1292,7 +1314,7 @@ Open exactly these local files, in this order:
 {opened_lines}
 
 Public-endpoint rule:
-No dynamic public endpoint is frozen into this prompt. At actor launch, derive the permitted endpoint set only from this target's own staged ledgers by applying the frozen validator at {validator_path}; open no endpoint outside that derived target-scoped set.
+Use no public endpoint and do not browse. The receipt must be exactly public_endpoints=[none]. URLs recorded inside the frozen target artifacts are inert target text, not SA endpoint authority; do not open them or represent them as endpoints accessed by SA. The frozen validator enforcing this rule is {validator_path}.
 
 Write exactly these two actor-owned outputs at the private view root:
 - {private_md}
@@ -1315,6 +1337,56 @@ def exclusive_write(path: Path, value: bytes) -> FileIdentity:
     return exclusive_create_bytes(path, value, "prompt output")
 
 
+def validate_sa_view_root(
+    view_root_value: Path,
+    target: str,
+    *,
+    must_exist: bool,
+) -> tuple[Path, Path]:
+    """Bind an SA actor to exactly ``<run>/views/SA-<target>``.
+
+    The ``views`` parent and inferred run already exist in both phases.  The
+    actor directory itself must be wholly absent during planning and a safe
+    directory during verification.  ``lexists`` deliberately catches broken
+    links as well as files, directories, symlinks, and reparse points.
+    """
+
+    if TARGET_RE.fullmatch(target) is None:
+        raise ContractError(f"invalid semantic-acceptance target {target!r}")
+    raw = Path(view_root_value)
+    if not raw.is_absolute():
+        raise ContractError(f"private SA view path must be absolute: {raw}")
+    if not must_exist and os.path.lexists(raw):
+        raise ContractError(
+            "private SA view must be completely absent during prompt planning"
+        )
+    view_root = resolved(raw, must_exist=must_exist)
+    views_root = resolved(view_root.parent, must_exist=True)
+    require_safe_directory(views_root, "SA views parent")
+    if views_root.name != "views":
+        raise ContractError("private SA view direct parent must be named exactly 'views'")
+    run_root = resolved(views_root.parent, must_exist=True)
+    require_safe_directory(run_root, "SA run root")
+    expected = views_root / f"SA-{target}"
+    if (
+        os.path.normcase(os.path.normpath(str(view_root)))
+        != os.path.normcase(os.path.normpath(str(expected)))
+        or view_root.parent != views_root
+        or view_root.name != f"SA-{target}"
+    ):
+        raise ContractError(
+            "private SA view must be exactly the SA-target direct child of "
+            f"<run>/views: expected {expected}"
+        )
+    if must_exist:
+        require_safe_directory(view_root, "private SA view")
+    elif os.path.lexists(view_root) or is_link_or_reparse(view_root):
+        raise ContractError(
+            "private SA view must be completely absent during prompt planning"
+        )
+    return view_root, run_root
+
+
 def plan_prompt(
     process_path_value: Path,
     view_root_value: Path,
@@ -1323,8 +1395,14 @@ def plan_prompt(
     python_executable_value: Path,
 ) -> dict[str, Any]:
     process_path = resolved(process_path_value, must_exist=True)
-    view_root = resolved(view_root_value, must_exist=False)
     output = resolved(output_value, must_exist=False)
+    process = stable_process_projection(
+        read_json_object(process_path, "preplan process envelope")
+    )
+    require_algorithmic_target(process, target)
+    view_root, run_root = validate_sa_view_root(
+        view_root_value, target, must_exist=False
+    )
     require_same_windows_drive(
         view_root, output, "private SA view and planned prompt output"
     )
@@ -1332,9 +1410,6 @@ def plan_prompt(
         raise ContractError("planned prompt output must live outside the private SA view")
     python_executable, python_identity = validate_bound_python_executable(
         python_executable_value
-    )
-    process = stable_process_projection(
-        read_json_object(process_path, "preplan process envelope")
     )
     opened = algorithmic_opened_inputs(process, target)
     validator_commitments = canonical_validator_commitments()
@@ -1360,6 +1435,7 @@ def plan_prompt(
     return {
         "schema": PROMPT_SCHEMA,
         "target": target,
+        "run_root": str(run_root),
         "view_root": str(view_root),
         "prompt_file": str(output),
         "prompt_sha256": digest,
@@ -1370,7 +1446,7 @@ def plan_prompt(
             str(path) for path in private_output_paths(view_root, target)
         ],
         "opened": opened,
-        "public_endpoint_policy": "derive-at-launch-from-target-owned-ledgers",
+        "public_endpoint_policy": "none",
         "validator_sha256": validator_commitments,
     }
 
@@ -1385,7 +1461,9 @@ def verify_prompt(
     require_sa_outputs: bool = False,
     expected_input_commitment_sha256: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    view_root = resolved(view_root_value, must_exist=True)
+    view_root, run_root = validate_sa_view_root(
+        view_root_value, target, must_exist=True
+    )
     prompt_path = resolved(prompt_value, must_exist=True)
     require_safe_directory(view_root, "private SA view")
     require_safe_regular(prompt_path, "planned SA prompt")
@@ -1520,6 +1598,11 @@ def verify_prompt(
             "staged validator could not derive target-scoped public endpoints: "
             + "; ".join(endpoint_errors)
         )
+    if dynamic_endpoints:
+        raise ContractError(
+            "staged validator violates the closed SA no-network contract: "
+            f"derived public endpoints {dynamic_endpoints}"
+        )
     expected_prompt = render_prompt(
         view_root,
         target,
@@ -1580,6 +1663,7 @@ def verify_prompt(
         "schema": VERIFICATION_SCHEMA,
         "target": target,
         "status": "VERIFIED",
+        "run_root": str(run_root),
         "view_root": str(view_root),
         "prompt_file": str(prompt_path),
         "prompt_sha256": digest,
@@ -1599,6 +1683,7 @@ def verify_prompt(
         "shared": shared,
         "process": process,
         "opened": dynamic_opened,
+        "run_root": run_root,
         "view_root": view_root,
         "prompt_path": prompt_path,
         "prompt_identity": prompt_identity,
@@ -1909,6 +1994,11 @@ def promote(
     target: str,
     expected_process_sha256: str,
     expected_input_commitment_sha256: str,
+    launch_record_value: Path,
+    expected_launch_id: str,
+    expected_process_seal_sha256: str,
+    expected_launch_record_sha256: str,
+    expected_output_commitment_sha256: str,
     python_executable_value: Path,
 ) -> dict[str, Any]:
     verification, context = verify_prompt(
@@ -1934,6 +2024,19 @@ def promote(
         view_root / "00-process-parameters.json"
     ) != sha256_file(round_root / "00-process-parameters.json"):
         raise ContractError("private-view and finalized-round process envelopes differ")
+
+    launch_receipt = validate_sa_launch_for_promotion(
+        view_root=view_root,
+        round_root=round_root,
+        process=process,
+        target=target,
+        input_commitment_sha256=expected_input_commitment_sha256,
+        launch_record_path=launch_record_value,
+        expected_launch_id=expected_launch_id,
+        expected_process_seal_sha256=expected_process_seal_sha256,
+        expected_launch_record_sha256=expected_launch_record_sha256,
+        expected_output_commitment_sha256=expected_output_commitment_sha256,
+    )
 
     sources = private_output_paths(view_root, target)
     validated_source_identities = tuple(
@@ -2094,6 +2197,13 @@ def promote(
             "expected_input_commitment_sha256": (
                 expected_input_commitment_sha256.upper()
             ),
+            "launch_id": launch_receipt["launch_id"],
+            "launch_record_sha256": launch_receipt[
+                "launch_record_sha256"
+            ],
+            "output_commitment_sha256": launch_receipt[
+                "output_commitment_sha256"
+            ],
             "files": copied,
         }
         require_terminal_sa_promotion_closure(
@@ -2145,6 +2255,44 @@ def promote(
     return promotion_result
 
 
+def validate_sa_launch_for_promotion(
+    *,
+    view_root: Path,
+    round_root: Path,
+    process: dict[str, Any],
+    target: str,
+    input_commitment_sha256: str,
+    launch_record_path: Path,
+    expected_launch_id: str,
+    expected_process_seal_sha256: str,
+    expected_launch_record_sha256: str,
+    expected_output_commitment_sha256: str,
+) -> dict[str, Any]:
+    """Consume the same externally anchored v3 receipt as every other actor."""
+
+    manager = load_canonical_module(
+        Path(__file__).resolve().parent / "manage_stage_o_workspace.py",
+        "thesis_review_sa_stage_o_receipt",
+    )
+    try:
+        return manager.validate_launch_for_promotion(
+            actor=f"SA-{target}",
+            view_root=view_root,
+            round_root=round_root,
+            process=process,
+            input_commitment_sha256=input_commitment_sha256,
+            launch_record_path=launch_record_path,
+            expected_launch_id=expected_launch_id,
+            expected_process_seal_sha256=expected_process_seal_sha256,
+            expected_launch_record_sha256=expected_launch_record_sha256,
+            expected_output_commitment_sha256=expected_output_commitment_sha256,
+        )
+    except Exception as exc:
+        raise ContractError(
+            f"SA-{target} launch/transport receipt failed before promotion: {exc}"
+        ) from exc
+
+
 def print_result(status: str, value: dict[str, Any] | None = None, error: str = "") -> int:
     print(status)
     if value is not None:
@@ -2182,6 +2330,17 @@ def main(argv: list[str] | None = None) -> int:
     promote_parser.add_argument("--expected-process-sha256", required=True)
     promote_parser.add_argument(
         "--expected-input-commitment-sha256", required=True
+    )
+    promote_parser.add_argument("--launch-record", type=Path, required=True)
+    promote_parser.add_argument("--expected-launch-id", required=True)
+    promote_parser.add_argument(
+        "--expected-process-seal-sha256", required=True
+    )
+    promote_parser.add_argument(
+        "--expected-launch-record-sha256", required=True
+    )
+    promote_parser.add_argument(
+        "--expected-output-commitment-sha256", required=True
     )
     promote_parser.add_argument("--python-executable", type=Path, required=True)
 
@@ -2222,6 +2381,11 @@ def main(argv: list[str] | None = None) -> int:
                 args.target,
                 args.expected_process_sha256,
                 args.expected_input_commitment_sha256,
+                args.launch_record,
+                args.expected_launch_id,
+                args.expected_process_seal_sha256,
+                args.expected_launch_record_sha256,
+                args.expected_output_commitment_sha256,
                 args.python_executable,
             ),
         )

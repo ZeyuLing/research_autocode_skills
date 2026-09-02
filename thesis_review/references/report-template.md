@@ -11,9 +11,6 @@ thesis-review-round-YYYYMMDD/
   00-citation-candidate-ledger.csv
   00-unmatched-bracket-ledger.csv
   00-citation-inventory.csv
-  helpers/                         # optional; include only helpers actually consumed
-    H01-provenance.json
-    H01-<mechanical-sidecar>.*
   01-policy-basis.md
   02-page-layout-ledger.md
   02-page-layout-ledger.csv
@@ -48,9 +45,6 @@ thesis-review-round-YYYYMMDD/
   93-user-facing-summary.md
   93-current-actionable-items.csv
   93-current-ai-actionable-items.csv
-  stage-v-inputs/                       # optional; exact copied inputs when Stage V runs
-    round-previous-prior-issues.csv     # required Stage-V prior-ID master
-  94-post-freeze-prior-issue-closure.md  # optional, only after a fresh re-review round is frozen
   95-bundle-validation.md               # mechanical Stage-O validation, never reviewer input
 ```
 
@@ -62,7 +56,7 @@ Both citation ledgers are mandatory. For a doctorate, R5 owns `03-bibliography-a
 
 `05-ai-style-assessment.md` is mandatory for both degree levels but is not an R-numbered reviewer report. Its assessor freezes independently from the reviewer panel and follows `ai-style-audit.md`.
 
-Every new bundle follows `clean-room-orchestration.md`. `00`--`06`, every R report, `90`--`93`, and optional `94` are stage-owned artifacts; a conversation-aware orchestrator may not draft their substantive content. CSV files are the machine-readable master row sets and Markdown files are signed human-readable summaries/views. Preserve deterministic IDs, quote multiline CSV fields, and never let a Markdown row exist without the matching CSV row. `95` records mechanical completeness only and cannot cure semantic defects.
+Every new production-v1 bundle follows `clean-room-orchestration.md`. `00`--`06`, every R report, and `90`--`93` are stage-owned artifacts; a conversation-aware orchestrator may not draft their substantive content. Production runner v1 includes neither helpers nor Stage-V/`94` artifacts. CSV files are the machine-readable master row sets and Markdown files are signed human-readable summaries/views. Preserve deterministic IDs, quote multiline CSV fields, and never let a Markdown row exist without the matching CSV row. `95` records mechanical completeness only and cannot cure semantic defects.
 
 ## Neutral process parameters
 
@@ -92,7 +86,7 @@ Stage O writes only the closed administrative envelope below. Unknown values rem
 }
 ```
 
-`actor_prompt_sha256` is a closed mechanical launch plan. It contains `P`, every degree-appropriate `R` actor (`R1`--`R5` for a doctorate or `R1`--`R3` for a master's thesis), `AI`, one matching fresh semantic acceptor for every such actor (`SA-R1`--`SA-R5` or `SA-R1`--`SA-R3`, plus `SA-AI`), `C`, and `S`, with one distinct 64-hex prompt hash per actor; `V` is present if and only if optional `94-post-freeze-prior-issue-closure.md` is actually launched. The doctorate-shaped JSON above is illustrative; omit `R4`, `R5`, `SA-R4`, and `SA-R5` for a master's thesis. The hash is computed from the exact operational-prompt bytes before the fresh actor starts, and Stage O dispatches those same bytes. It does not contain thesis assertions. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and filesystem aliases are invalid. Governing-file and frozen-PDF basenames are mutually distinct and do not reuse any skill-reference, generated-artifact (including `P####.png`), or closed-root-directory basename.
+`actor_prompt_sha256` is a closed production-v1 mechanical launch plan. It contains exactly `P`, every degree-appropriate `R` actor (`R1`--`R5` for a doctorate or `R1`--`R3` for a master's thesis), `AI`, one matching fresh semantic acceptor for every such actor (`SA-R1`--`SA-R5` or `SA-R1`--`SA-R3`, plus `SA-AI`), `C`, and `S`, with one distinct 64-hex prompt hash per actor. It contains no `H`, `V`, or other actor. The doctorate-shaped JSON above is illustrative; omit `R4`, `R5`, `SA-R4`, and `SA-R5` for a master's thesis. The hash is computed from the exact operational-prompt bytes before the fresh actor starts, and Stage O dispatches those same bytes. It does not contain thesis assertions. Every `governing_local_files.neutral_file` basename is unique under Unicode-NFC, case-insensitive, Win32-portable comparison; trailing dots/spaces and filesystem aliases are invalid. Governing-file and frozen-PDF basenames are mutually distinct and do not reuse any skill-reference, generated-artifact (including `P####.png`), or closed-root-directory basename.
 
 The process envelope is strict JSON: duplicate keys are forbidden at every
 nesting level. Full validation and every scoped mode, including the Chair's
@@ -151,7 +145,7 @@ For Stage P, the canonical `opened=[...]` sequence is exactly: `00-process-param
 
 Each owner-written Markdown ledger (`02`, `03`, and `04`) begins with the same complete declaration block: exact `Actor ID`, `Review round ID`, and `Review retry ID`; fresh-context declaration using the exact no-inherited-turn wording above; one input-receipt/access declaration with `received=[operational prompt]`, the actor's exact canonical ordered `opened=[...]` allowlist, the allowed `public_endpoints=[...]`, and the three boundary confirmations; the process-bound operational-prompt hash; and start/end frozen-PDF hashes on one line. These declarations belong to the ledger itself, not only to the owner's R report.
 
-For every R actor, immediately after `ai-style-audit.md`, insert exactly one role-specific validator sequence before process-ordered governing local files, `<frozen_pdf_file>`, the seven Stage-P packet artifacts, and any recipient helper provenance/outputs:
+For every R actor, immediately after `ai-style-audit.md`, insert exactly one role-specific validator sequence before process-ordered governing local files, `<frozen_pdf_file>`, and the seven Stage-P packet artifacts. Production runner v1 appends no recipient-helper provenance or output:
 
 - ordinary doctoral/master's reviewer: `rules/scripts/validate_review_bundle.py; rules/scripts/validate_reviewer_output.py`;
 - doctoral R4: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_r5_output.py; rules/scripts/validate_r4_output.py`;
@@ -160,7 +154,7 @@ For every R actor, immediately after `ai-style-audit.md`, insert exactly one rol
 - Chair C: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py`;
 - Stage S: `rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_summary_output.py`.
 
-`materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. For C, the exact command in the frozen prompt repeats `--helper-input helpers/<portable-basename>` for every C-recipient provenance/output in canonical Hxx order and omits the flag otherwise; the materializer validates and opens only those declared paths before writing and never discovers sibling R/AI helpers. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
+`materialize_owner_outputs.py` is the deterministic pre-freeze writer for the current actor's owned projections and receipt lists; it must run inside that same fresh actor turn and never after freeze. Reviewer/Chair semantic CSV values and Chair adjudication remain actor-authored; Stage S's two CSVs are wholly derived open-row subsets and therefore are materializer outputs. Production runner v1 supplies no helper file or `--helper-input` argument to any actor. `validate_r5_output.py` in an R4/master's-R3 insertion supplies shared read-only Stage-P packet reconciliation; it does not grant access to an R5 report or R5-owned artifact. The same complete script sequence appears byte-for-byte in every Markdown artifact signed by that actor. `rules/` is a read-only staged skill-rule mount rather than a round-root artifact. Scripts and stdout are mechanical rule inputs, never thesis/citation evidence. Before freeze, complete the semantic sources, run the exact materializer command to `MATERIALIZED`, inspect the result, and then run the exact role gate in `ledger-validation.md` to `PASS`; rematerialize after every source edit. Do not rename any H2, label, field, or table header in a closed template, and do not hand-edit a deterministic projection or receipt after materialization.
 
 ## Independent reviewer report
 
@@ -406,7 +400,7 @@ Under `institutional`, `Governing source` is a duplicate-free semicolon-separate
 
 ## Standalone AI-style assessment
 
-The canonical AI `opened=[...]` sequence is exactly: `00-process-parameters.json`; `SKILL.md`; `clean-room-orchestration.md`; `report-template.md`; `ai-style-audit.md`; `rules/scripts/validate_review_bundle.py`; `rules/scripts/validate_ai_output.py`; `<frozen_pdf_file>`; `00-manifest.md`; `00-page-inventory.csv`; and any AI-recipient helper provenance/outputs. It contains no R report, `02`--`04`, Chair, Stage-S, old-round, or governing-local-file input. Before freeze, run `python rules/scripts/validate_ai_output.py <exact-round-root>` to PASS.
+The canonical AI `opened=[...]` sequence is exactly: `00-process-parameters.json`; `SKILL.md`; `clean-room-orchestration.md`; `report-template.md`; `ai-style-audit.md`; `rules/scripts/validate_review_bundle.py`; `rules/scripts/validate_ai_output.py`; `<frozen_pdf_file>`; `00-manifest.md`; and `00-page-inventory.csv`. It contains no helper, R report, `02`--`04`, Chair, Stage-S, old-round, or governing-local-file input. Before freeze, run `python rules/scripts/validate_ai_output.py <exact-stage-ai-view-root>` to PASS.
 
 ```markdown
 # Standalone AI-style prose assessment
@@ -521,7 +515,7 @@ The Markdown file has this exact closed H1/H2 sequence and fields:
 - Operational prompt SHA-256: <exact process actor_prompt_sha256.SA-<target>>
 - Frozen PDF SHA-256 at start and end: <selected_pdf_sha256>; <selected_pdf_sha256>
 - Fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered SA-<target> allowlist]; public_endpoints=[the exact duplicate-free subset actually opened, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
+- Input-receipt/access declaration: received=[operational prompt]; opened=[the exact canonical ordered SA-<target> allowlist]; public_endpoints=[none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Semantic-acceptance boundary: this actor did not create, modify, merge, grade, or adjudicate thesis findings; it evaluated only whether the frozen target actor outputs were semantically supported, complete for their mandatory scope, and admissible to the Chair.
 
 ## Target hash binding and coverage
@@ -672,15 +666,18 @@ whole-thesis synthesis fields, and the verdict. The acceptor still performs the
 semantic comparison; the projection only prevents it from silently accepting a
 different or internally inconsistent report.
 
-After all target acceptors freeze, Stage O runs:
+After all target acceptors freeze and their receipt-bound outputs are promoted,
+production Stage O runs only the authoritative state-machine transition:
 
 ```text
-python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set
-python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>
-python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set --require-gate
+"<absolute-bundled-python>" -B scripts/stage_o_runner.py close-sa-set --run-root <absolute-run-root> --expected-transition-token <previous-token>
 ```
 
-The materializer may write only `06-semantic-acceptance-gate.json`. Its v2
+The runner invokes its pinned materializer with the bootstrap-bound Python; the
+materializer validates the complete promoted set and may write only
+`06-semantic-acceptance-gate.json`. Calling the lower-level validator or
+materializer directly is non-production diagnosis and never advances the
+runner state, even if it prints PASS or MATERIALIZED. The gate's v2
 schema contains round/retry/PDF identity, the exact process-file SHA-256, the
 closed current `SA-*` prompt-hash map, exact hashes and row counts for every
 required acceptance pair, exact hashes of every frozen target artifact,
@@ -696,7 +693,7 @@ nor individual SA files.
 
 ## Chair synthesis
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS. Repeat both after any semantic Chair-source edit, using the exact repeated C-recipient helper arguments frozen in the operational prompt and no arguments when none apply. The validator's explicit pre-Stage-S mode requires every current upstream/Chair artifact and the hash-only semantic-acceptance gate, while forbidding individual semantic-acceptance reports and `93`, `94`, and `95`; it does not waive errors by matching diagnostic wording. The Chair may correct only its current `90`--`92` outputs before freeze. A defect in any frozen R/AI report, packet/ledger, semantic-acceptance closure, process/rule input, or PDF returns control to Stage O for a global retry.
+Before freeze, work only in the unified `<exact-stage-c-view-root>` and run `python rules/scripts/materialize_owner_outputs.py <exact-stage-c-view-root> C` to MATERIALIZED, then `python rules/scripts/validate_chair_output.py <exact-stage-c-view-root>` to PASS. Repeat both after any semantic Chair-source edit; production runner v1 permits no helper flags or helper files. The view contains exactly the canonical no-helper allowlist plus the six Chair-owned outputs—no page-render tree, individual semantic-acceptance directory, helper, `93`, `94`, or `95`. The scoped gate rejects every extra or missing entry before substantive synthesis can freeze. Hashes of private SA files and R5 page renders remain labeled Stage-O transport commitments until the final full validator recomputes them. After transport and scoped PASS, Stage O rechecks the prelaunch input commitment and promotes only the six Chair outputs with no replacement. The Chair may correct only its current `90`--`92` outputs before freeze; an input drift or frozen upstream defect requires a global retry.
 
 ```markdown
 # Chair synthesis
@@ -706,7 +703,7 @@ Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-rou
 - Review round ID: <exact process round_id>
 - Review retry ID: <exact process retry_id>
 - Chair fresh-context declaration: no inherited user/thread/task turns beyond system/developer instructions and the exact operational prompt
-- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 06-semantic-acceptance-gate.json; <any C-recipient helper provenance/outputs in canonical helper order> (omit each inapplicable placeholder; expand every actual governing filename, R row, and registered helper path exactly, in order, with no ellipsis; never open `06-semantic-acceptance/`)
+- Exact current-round input allowlist: 00-process-parameters.json; SKILL.md; clean-room-orchestration.md; china-policy.md; grading-and-verdicts.md; review-rubric.md; reviewer-panels.md; report-template.md; ledger-validation.md; rendered-pagination-audit.md; citation-audit.md; ai-style-audit.md; rules/scripts/validate_review_bundle.py; rules/scripts/materialize_owner_outputs.py; rules/scripts/validate_semantic_acceptance_output.py; rules/scripts/validate_chair_output.py; <each governing_local_files neutral_file in process order>; <frozen_pdf_file>; 00-manifest.md; 01-policy-basis.md; 00-page-inventory.csv; 00-bibliography-inventory.csv; 00-citation-candidate-ledger.csv; 00-unmatched-bracket-ledger.csv; 00-citation-inventory.csv; 02-page-layout-ledger.md; 02-page-layout-ledger.csv; 03-bibliography-audit-ledger.md; 03-bibliography-audit-ledger.csv; 04-citation-claim-audit-ledger.md; 04-citation-claim-audit-ledger.csv; R1-comprehensive-review.md; ...; Rn-comprehensive-review.md; 05-ai-style-assessment.md; 06-semantic-acceptance-gate.json (omit each inapplicable placeholder; expand every actual governing filename and R row exactly, in order, with no ellipsis; production runner v1 permits no helper path and never opens `06-semantic-acceptance/`)
 - Operational prompt SHA-256: <exactly one 64-hex hash>
 - Chair input-receipt/access declaration: received=[operational prompt]; opened=[the exact expanded allowlist above in the same order]; public_endpoints=[a duplicate-free subset of current process-rule URLs and current 03/04 evidence/content endpoints, or none]; no unlisted substantive assertion was received; no prohibited context/artifact was used; neighboring paths were not enumerated
 - Frozen PDF SHA-256 at start and end: <start 64-hex hash> / <end 64-hex hash> (both hashes must be on this one line)
@@ -853,7 +850,7 @@ Within the no-new-experiment table, `E` means existing evidence whose necessary 
 
 Stage O runs this as Stage S in a new context after `90`--`92` are frozen. The summarizer does not browse the web, consult conversation history, open the frozen PDF, or re-adjudicate evidence. Its PDF fields are identity projections copied from the process envelope and current frozen source artifacts, not checksums recomputed by Stage S.
 
-Before freeze, run `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` to MATERIALIZED and then `python rules/scripts/validate_summary_output.py <exact-round-root>` to PASS. These scoped commands open only the process/summary rules, full/materializer/Stage-S validator scripts, current R/AI/Chair reports, `91`/`92` sources, and S's three outputs. Every such source/output is a named-stream-free single-link regular file and retains its identity and bytes through the terminal PASS check. They never open the PDF, Stage-P packet, `02`--`04`, individual semantic-acceptance files, `06-semantic-acceptance-gate.json`, helpers, prior artifacts, or `95`; Stage O alone runs the full post-S validator and writes `95-bundle-validation.md`.
+Before freeze, work only in the unified `<exact-stage-s-view-root>` and run `python rules/scripts/materialize_owner_outputs.py <exact-stage-s-view-root> S` to MATERIALIZED, then `python rules/scripts/validate_summary_output.py <exact-stage-s-view-root>` to PASS. The private view contains exactly the expanded allowlist below plus S's three outputs. After reading only the process envelope, the scoped gate checks the exact root and `rules/scripts/` entry sets from names and metadata before opening any other source; it rejects an extra forbidden file without opening that file's bytes. Every allowed source/output is a named-stream-free single-link regular file and retains its identity, metadata, and bytes through the terminal PASS check. The view contains no PDF, governing file, Stage-P packet, `02`--`04`, page render, helper, semantic-acceptance file/gate, prior artifact, `94`, or `95`. After transport and scoped PASS, Stage O rechecks the prelaunch input commitment and promotes only the three `93` outputs with no replacement; Stage O alone runs the full finalized-round validator and writes `95-bundle-validation.md`.
 
 The validated Markdown dialect permits ATX headings with zero to three leading spaces and optional closing hashes. It forbids Setext headings, raw HTML blocks, HTML comments, fenced code, and indented code in review artifacts because non-rendered content cannot carry evidence or contract fields.
 
@@ -920,7 +917,7 @@ Keep the AI-style actor row visibly separate from the reviewers and Chair; its d
 
 The open academic and AI row sets are lossless, order-preserving projections: `93-current-actionable-items.csv` has exactly the same fifteen columns and values, in the same order, as the open subset of `91-revision-ledger.csv`; `93-current-ai-actionable-items.csv` has exactly the same seven columns and values, in the same order, as the open subset of `91-ai-actionable-ledger.csv`. Their Stage-S Markdown tables preserve the corresponding CSV order and exact fields. The current N-evidence table is the exact ordered projection of `92-new-evidence-or-experiments.csv`. The conclusion table order is `R1...Rn, AI, Chair`. `Unresolved questions` is the exact ordered subset of the current Chair decision table whose status is `unresolved`, `not verifiable`, or `disputed`. The `Statement` reconciliation value is exactly `This summary introduces no new finding and uses no prior-round or author-side information.` Every row and statement is current-round-only. Do not mention old/resolved items, user explanations, previous assistant summaries, companion papers/repositories, source-sync facts, or implementation claims invisible in the PDF. Before S freezes, a failure confined to an S-owned projection is corrected only in the three `93` outputs and the scoped gate is rerun. An inconsistency in a frozen R/AI/Chair/`91`/`92` source, or any failure discovered after S freezes, invalidates the whole retry and returns control to Stage O for a new global retry; never reopen the Chair or improvise a mixed lineage.
 
-## Fresh re-review and optional prior-issue closure
+## Reserved future Stage-V prior-issue closure template
 
 ```markdown
 ## Fresh category and defense recommendation — freeze before any prior ledger is opened
@@ -943,7 +940,10 @@ Repeat the complete nine-row matrix from the independent-review template. This r
 ...
 ```
 
-Only after all fresh R reports, the clean chair outputs, and `93-user-facing-summary.md` are frozen may a separate Stage-V actor write `94-post-freeze-prior-issue-closure.md`:
+Production runner v1 does not instantiate this section or write `94`. A future
+Stage-V implementation could use the template below only after all fresh R
+reports, clean chair outputs, and `93-user-facing-summary.md` were frozen and
+only after adding a canonical V prompt/view/transport/promotion/runner contract.
 
 ```markdown
 # Post-freeze prior-issue closure verification

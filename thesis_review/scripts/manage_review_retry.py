@@ -2,7 +2,7 @@
 """Fail-closed Stage-O run-container publication and quarantine mechanics."""
 from __future__ import annotations
 
-import argparse, contextlib, ctypes, errno, hashlib, json, os, stat, sys, types, uuid
+import argparse, contextlib, ctypes, errno, hashlib, json, os, re, stat, sys, types, uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator
@@ -17,10 +17,18 @@ LOCK_FILE=".thesis-review-retry.lock"
 STAGING_PREFIX=".thesis-review-staging-"
 QUARANTINE_PREFIX="QUARANTINED-"
 CHILDREN=("round","views","orchestration")
+CONTROL_ID_RE=re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 
 class RetryManagementError(RuntimeError): pass
 class CommitStateError(RetryManagementError):
     def __init__(self, status: str, message: str): super().__init__(message); self.status=status
+
+def _control_id(value, label: str) -> str:
+    if not isinstance(value,str) or CONTROL_ID_RE.fullmatch(value) is None:
+        raise RetryManagementError(
+            f"{label} must match ^[A-Za-z0-9][A-Za-z0-9._-]{{0,127}}$"
+        )
+    return value
 
 def _windows_kernel32():
     k=ctypes.WinDLL("kernel32",use_last_error=True)
@@ -356,11 +364,14 @@ def _validate_metadata_shape(meta: object) -> dict:
     top={"schema","operation","status","round_id","retry_id","replacement_for","pdf_identity","quarantine_template","transaction","frozen_at_utc"}
     if set(meta)!=top: raise RetryManagementError("metadata top-level keys are not closed")
     if meta["schema"]!=METADATA_SCHEMA or meta["operation"]!="initialize" or meta["status"]!="initialized": raise RetryManagementError("invalid metadata state")
-    for key in ("round_id","retry_id","frozen_at_utc"):
-        if not isinstance(meta[key],str) or not meta[key]: raise RetryManagementError(f"invalid {key}")
+    _control_id(meta["round_id"],"round_id")
+    _control_id(meta["retry_id"],"retry_id")
+    if not isinstance(meta["frozen_at_utc"],str) or not meta["frozen_at_utc"]: raise RetryManagementError("invalid frozen_at_utc")
     if meta["round_id"]==meta["retry_id"]: raise RetryManagementError("round and retry IDs must differ")
     replacement=meta["replacement_for"]
-    if not isinstance(replacement,dict) or set(replacement)!={"round_id","retry_id"} or not all(v is None or isinstance(v,str) and v for v in replacement.values()): raise RetryManagementError("invalid replacement_for")
+    if not isinstance(replacement,dict) or set(replacement)!={"round_id","retry_id"}: raise RetryManagementError("invalid replacement_for")
+    for key,value in replacement.items():
+        if value is not None: _control_id(value,f"replacement_for.{key}")
     pdf=meta["pdf_identity"]
     if not isinstance(pdf,dict) or set(pdf)!={"neutral_name","sha256","page_count"} or not isinstance(pdf["neutral_name"],str) or not isinstance(pdf["sha256"],str) or len(pdf["sha256"])!=64 or not isinstance(pdf["page_count"],int) or isinstance(pdf["page_count"],bool) or pdf["page_count"]<1: raise RetryManagementError("invalid pdf_identity")
     if not isinstance(meta["quarantine_template"],dict) or set(meta["quarantine_template"])!={"prefix","semantic_content"} or meta["quarantine_template"]!={"prefix":QUARANTINE_PREFIX,"semantic_content":None}: raise RetryManagementError("invalid quarantine template")
@@ -438,6 +449,7 @@ def initialize(args) -> None:
     if len(expected)!=64 or any(ch not in "0123456789ABCDEF" for ch in expected): raise RetryManagementError("expected SHA-256 must be exactly 64 hexadecimal characters")
     if args.expected_pages<1: raise RetryManagementError("expected pages must be positive")
     for label,value in (("round",args.new_round_id),("retry",args.new_retry_id)):
+        _control_id(value,f"{label} ID")
         if (
             not value or contract.is_placeholder(value) or value in CHILDREN
             or value.startswith((STAGING_PREFIX,QUARANTINE_PREFIX))
@@ -448,6 +460,7 @@ def initialize(args) -> None:
         old_round=old_retry=None
     else:
         if not args.old_round_id or not args.old_retry_id: raise RetryManagementError("replacement run requires both old IDs")
+        _control_id(args.old_round_id,"old round ID"); _control_id(args.old_retry_id,"old retry ID")
         old_round,args_old_retry=args.old_round_id,args.old_retry_id; old_retry=args_old_retry
         if args.new_round_id in (old_round,old_retry) or args.new_retry_id in (old_round,old_retry): raise RetryManagementError("new identifiers must not inherit old identifiers")
     source_identity=_identity(source)
@@ -773,7 +786,7 @@ def verify_process_seal(args) -> dict:
             workspace,run,args.expected_process_sha256,args.expected_seal_sha256
         )
 
-def quarantine(args) -> None:
+def quarantine(args) -> dict:
     workspace=_absolute(args.workspace,"workspace"); run=_absolute(args.run_root,"run-root"); dest=_absolute(args.quarantine_run_root,"quarantine-run-root")
     _direct_child(run,workspace,"run-root"); _direct_child(dest,workspace,"quarantine-run-root")
     if not dest.name.startswith(QUARANTINE_PREFIX): raise RetryManagementError("quarantine destination must start QUARANTINED-")
@@ -781,6 +794,13 @@ def quarantine(args) -> None:
     checked=_validate_run(run); source_identity=checked["transaction"]["root_identity"]
     with _lock(workspace):
         _validate_published_identity(run,source_identity)
+        metadata_bytes,metadata_hash,_metadata_identity=_read_regular_snapshot(
+            run/"orchestration"/METADATA_FILE,"initialized-run metadata"
+        )
+        if _strict_json_bytes(metadata_bytes,"initialized-run metadata")!=checked:
+            raise RetryManagementError(
+                "initialized-run metadata changed before quarantine"
+            )
         if dest.exists(): raise RetryManagementError("quarantine destination appeared")
         if not _same_identity(run,source_identity): raise RetryManagementError("run identity changed at quarantine boundary")
         _rename_noreplace(run,dest)
@@ -789,10 +809,17 @@ def quarantine(args) -> None:
                 dest,
                 source_identity,
                 expected_metadata=checked,
+                expected_metadata_hash=metadata_hash,
             )
         except Exception as exc: raise CommitStateError("commit_identity_failure",str(exc)) from exc
         try: _fsync_directory(workspace)
         except Exception as exc: raise CommitStateError("committed_but_durability_uncertain",str(exc)) from exc
+    return {
+        "round_id":checked["round_id"],
+        "retry_id":checked["retry_id"],
+        "metadata_sha256":metadata_hash,
+        "quarantined_run_root":str(dest),
+    }
 
 def parser() -> argparse.ArgumentParser:
     p=argparse.ArgumentParser(); subs=p.add_subparsers(dest="command",required=True)

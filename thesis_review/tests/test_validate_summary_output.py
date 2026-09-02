@@ -17,23 +17,6 @@ from tests import test_validate_review_bundle as fixture_module
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 SUMMARY_VALIDATOR = SKILL_ROOT / "scripts" / "validate_summary_output.py"
-FORBIDDEN_STAGE_S_LOCAL_NAMES = {
-    "frozen-thesis.pdf",
-    "00-manifest.md",
-    "01-policy-basis.md",
-    "00-page-inventory.csv",
-    "00-bibliography-inventory.csv",
-    "00-citation-candidate-ledger.csv",
-    "00-unmatched-bracket-ledger.csv",
-    "00-citation-inventory.csv",
-    "02-page-layout-ledger.md",
-    "02-page-layout-ledger.csv",
-    "03-bibliography-audit-ledger.md",
-    "03-bibliography-audit-ledger.csv",
-    "04-citation-claim-audit-ledger.md",
-    "04-citation-claim-audit-ledger.csv",
-    "95-bundle-validation.md",
-}
 
 
 def load_summary_module():
@@ -86,6 +69,40 @@ class ValidateSummaryOutputTests(unittest.TestCase):
         ):
             shutil.copy2(SKILL_ROOT / "scripts" / filename, scripts / filename)
 
+        process = json.loads(
+            (root / "00-process-parameters.json").read_text(encoding="utf-8")
+        )
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        expected_files = set(
+            FULL_MODULE.canonical_stage_opened_inputs(
+                process, reviewer_count, "S", root
+            )
+        ) | set(SUMMARY_MODULE.STAGE_S_OUTPUTS)
+        for child in list(root.iterdir()):
+            if child.name == "rules" or child.name in expected_files:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        for child in list((root / "rules").iterdir()):
+            if child.name == "scripts":
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+        expected_script_names = {
+            Path(relative).name for relative in FULL_MODULE.SUMMARY_VALIDATOR_RULE_INPUTS
+        }
+        for child in list(scripts.iterdir()):
+            if child.name in expected_script_names:
+                continue
+            if child.is_dir():
+                shutil.rmtree(child)
+            else:
+                child.unlink()
+
     def run_validator(self, root: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
             [sys.executable, "-B", str(SUMMARY_VALIDATOR), str(root)],
@@ -104,44 +121,77 @@ class ValidateSummaryOutputTests(unittest.TestCase):
             self.assertTrue(result.stdout.startswith("PASS\n"), result.stdout)
             self.assertEqual(before, snapshot(root))
 
-    def test_summary_gate_does_not_enumerate_or_open_forbidden_inputs(self) -> None:
+    def test_summary_gate_rejects_extra_forbidden_file_without_opening_it(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             self.build_bundle(root)
-            original_iterdir = Path.iterdir
-            original_is_file = Path.is_file
-            original_read_text = Path.read_text
-            original_read_bytes = Path.read_bytes
+            forbidden = root / "frozen-thesis.pdf"
+            forbidden.write_bytes(b"must never be opened by Stage S")
+            original_os_open = os.open
+            opened_paths: list[Path] = []
 
-            def guard(path: Path) -> None:
-                if path.name in FORBIDDEN_STAGE_S_LOCAL_NAMES:
-                    raise AssertionError(f"Stage S opened forbidden input {path.name}")
+            def guarded_os_open(path, flags, *args, **kwargs):
+                opened = Path(path).absolute()
+                if opened == forbidden.absolute():
+                    raise AssertionError("Stage S opened forbidden extra file bytes")
+                opened_paths.append(opened)
+                return original_os_open(path, flags, *args, **kwargs)
 
-            def guarded_iterdir(path: Path):
-                if path.absolute() == root.absolute():
-                    raise AssertionError("Stage S enumerated the bundle root")
-                return original_iterdir(path)
-
-            def guarded_is_file(path: Path):
-                guard(path)
-                return original_is_file(path)
-
-            def guarded_read_text(path: Path, *args, **kwargs):
-                guard(path)
-                return original_read_text(path, *args, **kwargs)
-
-            def guarded_read_bytes(path: Path, *args, **kwargs):
-                guard(path)
-                return original_read_bytes(path, *args, **kwargs)
-
-            with (
-                mock.patch.object(Path, "iterdir", guarded_iterdir),
-                mock.patch.object(Path, "is_file", guarded_is_file),
-                mock.patch.object(Path, "read_text", guarded_read_text),
-                mock.patch.object(Path, "read_bytes", guarded_read_bytes),
-            ):
+            with mock.patch.object(os, "open", guarded_os_open):
                 errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
-            self.assertEqual([], errors)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("forbidden extra entries" in error for error in errors), errors
+            )
+            self.assertEqual(
+                [root / "00-process-parameters.json"], opened_paths
+            )
+
+    def test_summary_gate_rejects_missing_canonical_root_input(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "R1-comprehensive-review.md").unlink()
+            errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("missing required entries" in error for error in errors), errors
+            )
+
+    def test_summary_gate_rejects_extra_rule_script(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "rules" / "scripts" / "unexpected.py").write_text(
+                "raise SystemExit('must not run')\n", encoding="utf-8"
+            )
+            errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("forbidden extra entries" in error for error in errors), errors
+            )
+
+    def test_summary_gate_rejects_missing_rule_script(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "rules" / "scripts" / "materialize_owner_outputs.py").unlink()
+            errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("missing required entries" in error for error in errors), errors
+            )
+
+    def test_summary_gate_rejects_extra_root_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_bundle(root)
+            (root / "forbidden-directory").mkdir()
+            errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
+            self.assertTrue(errors)
+            self.assertTrue(
+                any("forbidden extra entries" in error for error in errors), errors
+            )
 
     def test_summary_projection_drift_fails(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -233,10 +283,12 @@ class ValidateSummaryOutputTests(unittest.TestCase):
 
     def test_summary_gate_rejects_hardlinked_summary_output(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            base = Path(directory)
+            root = base / "stage-s-view"
+            root.mkdir()
             self.build_bundle(root)
             summary = root / "93-user-facing-summary.md"
-            os.link(summary, root / "outside-stage-s-hardlink.md")
+            os.link(summary, base / "outside-stage-s-hardlink.md")
             errors = SUMMARY_MODULE.validate_summary(root, FULL_MODULE)
             self.assertTrue(errors)
             self.assertTrue(

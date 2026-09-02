@@ -864,16 +864,11 @@ def materialize_chair(
         *module.canonical_stage_opened_inputs(process, reviewer_count, "C"),
         *helper_inputs,
     ]
-    allowed_endpoints = module.ordered_unique([
-        *module.governing_rule_public_endpoint_sequence(process),
-        *module.bibliography_ledger_public_endpoint_sequence(bibliography_ledger),
-        *module.citation_ledger_public_endpoint_sequence(citation_ledger),
-    ])
     selected_endpoints = selected_chair_endpoints(
         module,
         texts["90-chair-synthesis.md"],
-        allowed_endpoints,
-        set(module.governing_rule_public_endpoint_sequence(process)),
+        [],
+        set(),
         errors,
     )
     if errors:

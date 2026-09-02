@@ -9507,22 +9507,11 @@ def validate_chair_report(
     allowed_governing_sources: set[str],
     errors: list[str],
 ) -> set[str]:
-    allowed_chair_public = {
-        *(
-            value for value in process.get("governing_rule_urls", [])
-            if isinstance(value, str)
-        ),
-        *bibliography_ledger_public_endpoints(bibliography_ledger),
-        *citation_ledger_public_endpoints(citation_ledger),
-    }
     text = validate_declarations(
         path, expected_pdf_hash, errors,
         process=process, actor_id="C", reviewer_count=reviewer_count,
-        allowed_public_endpoints=allowed_chair_public,
-        required_public_endpoints={
-            value for value in process.get("governing_rule_urls", [])
-            if isinstance(value, str)
-        },
+        allowed_public_endpoints=set(),
+        required_public_endpoints=set(),
     )
     if not text:
         return set()
@@ -9605,20 +9594,9 @@ def validate_chair_report(
         )
         if token.strip() and token.strip().casefold() != "none"
     ]
-    allowed_public = {
-        *(
-            value.strip() for value in process.get("governing_rule_urls", [])
-            if isinstance(value, str) and value.strip()
-        ),
-        *bibliography_ledger_public_endpoints(bibliography_ledger),
-        *citation_ledger_public_endpoints(citation_ledger),
-    }
-    if len(declared_public) != len(set(declared_public)) or any(
-        value not in allowed_public for value in declared_public
-    ):
+    if declared_public:
         errors.append(
-            f"{path.name}: Chair public_endpoints must be a duplicate-free subset "
-            "of current policy/citation endpoints"
+            f"{path.name}: Chair public_endpoints must be exactly [none]"
         )
     coverage_headers = [
         "Reviewer", "Gate A", "B", "C", "D", "E", "F", "G", "H", "I",
@@ -12604,14 +12582,8 @@ def validate_manifest(
     text = validate_declarations(
         path, expected_pdf_hash, errors,
         process=process, actor_id="P", reviewer_count=reviewer_count,
-        allowed_public_endpoints={
-            value for value in process.get("governing_rule_urls", [])
-            if isinstance(value, str)
-        },
-        required_public_endpoints={
-            value for value in process.get("governing_rule_urls", [])
-            if isinstance(value, str)
-        },
+        allowed_public_endpoints=set(),
+        required_public_endpoints=set(),
     )
     if not text:
         return
@@ -13012,12 +12984,11 @@ def validate_process(
                 errors.append(f"duplicate governing_rule_urls entry {normalized!r}")
             seen_urls.add(normalized)
     if regime_status == "verified-institutional" and not (
-        isinstance(rule_urls, list)
-        and rule_urls
-    ) and not (isinstance(local_files, list) and local_files):
+        isinstance(local_files, list) and local_files
+    ):
         errors.append(
-            "verified-institutional decision regime requires at least one "
-            "frozen official URL or local governing file"
+            "verified-institutional decision regime requires at least one frozen "
+            "local governing file; governing_rule_urls are process metadata only"
         )
     frozen_name = str(process.get("frozen_pdf_file") or "")
     if not is_neutral_portable_basename(frozen_name):
@@ -14902,8 +14873,8 @@ def main(argv: list[str] | None = None) -> int:
         validate_declarations(
             root / "01-policy-basis.md", expected_hash, errors,
             process=process, actor_id="P", reviewer_count=reviewer_count,
-            allowed_public_endpoints=rule_public_endpoints,
-            required_public_endpoints=rule_public_endpoints,
+            allowed_public_endpoints=set(),
+            required_public_endpoints=set(),
         )
         owned_main_table_headers = {
             "02-page-layout-ledger.md": PAGE_MARKDOWN_HEADERS,
@@ -14928,14 +14899,12 @@ def main(argv: list[str] | None = None) -> int:
             ),
             (
                 "91-revision-ledger.md", "C",
-                rule_public_endpoints | bibliography_public_endpoints
-                | citation_public_endpoints,
+                set(),
                 set(),
             ),
             (
                 "92-new-evidence-or-experiments.md", "C",
-                rule_public_endpoints | bibliography_public_endpoints
-                | citation_public_endpoints,
+                set(),
                 set(),
             ),
         ):

@@ -59,6 +59,25 @@ class ManageReviewRetryTests(unittest.TestCase):
                 "--expected-pages", "2", "--new-round-id", "round-new",
                 "--new-retry-id", "retry-new", "--replacement-for", "round-old", "retry-old"]
 
+    def test_control_ids_reject_prompt_and_path_injection_characters(self):
+        invalid = (
+            "round\nforged",
+            "round\rforged",
+            "round\u2028forged",
+            "round/child",
+            "round\\child",
+            "-leading",
+            "x" * 129,
+            "round\x00forged",
+        )
+        for value in invalid:
+            with self.subTest(value=repr(value)):
+                with self.assertRaises(MODULE.RetryManagementError):
+                    MODULE._control_id(value, "test ID")
+        for value in ("r", "round-30a76ddf", "retry_01", "A.B-C_9"):
+            with self.subTest(valid=value):
+                self.assertEqual(value, MODULE._control_id(value, "test ID"))
+
     def initialized(self, root):
         workspace = root / "workspace"; workspace.mkdir()
         source = root / "source.pdf"; write_pdf(source)
@@ -156,6 +175,12 @@ class ManageReviewRetryTests(unittest.TestCase):
             args=["quarantine","--workspace",str(workspace.resolve()),"--run-root",str(run.resolve()),"--quarantine-run-root",str(dst.resolve())]
             code,out=self.run_main(args); self.assertEqual(code,0,out); self.assertFalse(run.exists())
             self.assertEqual((dst/"round/review.txt").read_text(),"current")
+            payload=json.loads(out)
+            metadata_path=dst/"orchestration"/MODULE.METADATA_FILE
+            self.assertEqual(payload["round_id"],"round-new")
+            self.assertEqual(payload["retry_id"],"retry-new")
+            self.assertEqual(payload["metadata_sha256"],sha256(metadata_path))
+            self.assertEqual(payload["quarantined_run_root"],str(dst.resolve()))
 
     def test_process_seal_binds_initialized_metadata_to_final_process(self):
         with tempfile.TemporaryDirectory() as tmp:

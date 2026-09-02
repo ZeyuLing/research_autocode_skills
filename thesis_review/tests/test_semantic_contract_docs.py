@@ -11,10 +11,9 @@ SKILL_ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
 REVIEWER_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_reviewer_prompt.py"
 SA_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py"
-GENERAL_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_bound_actor_prompt.py"
+CANONICAL_PROMPT_HELPER = SKILL_ROOT / "scripts" / "build_canonical_actor_prompt.py"
 ACTOR_CONTRACT_HELPER = SKILL_ROOT / "scripts" / "actor_prompt_contract.py"
 TRANSPORT_VALIDATOR = SKILL_ROOT / "scripts" / "validate_actor_transport.py"
-OWNER_MATERIALIZER = SKILL_ROOT / "scripts" / "materialize_owner_outputs.py"
 SKILL_DOC = SKILL_ROOT / "SKILL.md"
 REPORT_TEMPLATE = SKILL_ROOT / "references" / "report-template.md"
 LEDGER_VALIDATION = SKILL_ROOT / "references" / "ledger-validation.md"
@@ -218,7 +217,7 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         )
         reviewer_helper = REVIEWER_PROMPT_HELPER.read_text(encoding="utf-8")
         sa_helper = SA_PROMPT_HELPER.read_text(encoding="utf-8")
-        general_helper = GENERAL_PROMPT_HELPER.read_text(encoding="utf-8")
+        general_helper = CANONICAL_PROMPT_HELPER.read_text(encoding="utf-8")
         actor_contract = ACTOR_CONTRACT_HELPER.read_text(encoding="utf-8")
         transport_validator = TRANSPORT_VALIDATOR.read_text(encoding="utf-8")
         optional_global_flags = tuple(
@@ -270,7 +269,7 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         for name, source in (
             ("build_reviewer_prompt.py", reviewer_helper),
             ("build_semantic_acceptance_prompt.py", sa_helper),
-            ("build_bound_actor_prompt.py", general_helper),
+            ("build_canonical_actor_prompt.py", general_helper),
         ):
             with self.subTest(helper=name):
                 self.assertIn("from actor_prompt_contract import", source)
@@ -299,7 +298,7 @@ class SemanticContractDocumentationTests(unittest.TestCase):
             ("clean-room-orchestration.md", clean_room),
         ):
             with self.subTest(transport_document=name):
-                self.assertIn("thesis-review-actor-launch-v1", text)
+                self.assertIn("thesis-review-actor-launch-v3", text)
                 self.assertIn("--ephemeral", text)
                 self.assertIn("--ignore-user-config", text)
                 self.assertIn("--ignore-rules", text)
@@ -317,8 +316,12 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 ):
                     self.assertIn(token, text)
 
-        self.assertIn("--expected-body-sha256", skill)
-        self.assertIn("--expected-body-sha256", clean_room)
+        self.assertIn("build_canonical_actor_prompt.py", skill)
+        self.assertIn("build_canonical_actor_prompt.py plan", clean_room)
+        self.assertIn("build_canonical_actor_prompt.py verify", clean_room)
+        self.assertIn("--scratch-dir", clean_room)
+        self.assertNotIn("--expected-body-sha256", skill)
+        self.assertNotIn("--expected-body-sha256", clean_room)
         self.assertIn("WebSocket", skill)
         self.assertIn("WebSocket", clean_room)
 
@@ -358,11 +361,13 @@ class SemanticContractDocumentationTests(unittest.TestCase):
             SKILL_ROOT / "references" / "grading-and-verdicts.md"
         ).read_text(encoding="utf-8")
         self.assertIn("Stage O starts every reviewer", panels)
-        self.assertIn("A reviewer never launches or delegates to a helper", panels)
+        self.assertIn("must not launch, message, fork, hand off, or", panels)
+        self.assertIn("otherwise delegate to another actor or task", panels)
+        self.assertIn("Production runner v1 rejects Stage-H actors", panels)
         self.assertIn("Stage O starts each ledger owner", citation)
         self.assertIn("Stage O starts the chair", grading)
 
-    def test_stage_r_cli_and_helper_freeze_documentation_tracks_public_cli(self) -> None:
+    def test_stage_r_production_cli_is_helper_free_and_tracks_public_cli(self) -> None:
         helper_source = REVIEWER_PROMPT_HELPER.read_text(encoding="utf-8")
         clean_room = CLEAN_ROOM.read_text(encoding="utf-8")
         panels = REVIEWER_PANELS.read_text(encoding="utf-8")
@@ -372,8 +377,12 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         verify_flags = cli_argument_flags(helper_source, "verify_parser")
         self.assertTrue(plan_flags)
         self.assertTrue(verify_flags)
-        self.assertIn("--helper-input", plan_flags)
-        self.assertIn("--helper-input", verify_flags)
+
+        # The low-level builder retains the historical flag only as dormant
+        # compatibility surface.  Runner v1 is the production authority and
+        # its documented command deliberately omits that flag.
+        production_plan_flags = set(plan_flags) - {"--helper-input"}
+        production_verify_flags = set(verify_flags) - {"--helper-input"}
 
         plan_command = re.search(
             r'```text\n("<absolute-bundled-python>" -B '
@@ -387,21 +396,22 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         )
         self.assertIsNotNone(plan_command)
         self.assertIsNotNone(verify_command)
-        for flag in plan_flags:
+        for flag in production_plan_flags:
             with self.subTest(command="plan", flag=flag):
                 self.assertIn(flag, plan_command.group(1))
-        for flag in verify_flags:
+        for flag in production_verify_flags:
             with self.subTest(command="verify", flag=flag):
                 self.assertIn(flag, verify_command.group(1))
+        self.assertNotIn("--helper-input", plan_command.group(1))
+        self.assertNotIn("--helper-input", verify_command.group(1))
 
         for required in (
-            "repeat it once for every",
-            "Hxx-provenance.json",
-            "followed immediately by that provenance record's output",
-            "Before the process seal, freeze every",
-            "same Python path, scratch path, and repeated",
-            "actual frozen recipient-helper projection",
-            "snapshots the canonical and staged",
+            "Production runner v1 requires the no-helper plan above exactly",
+            "rejects every",
+            "`--helper-input` argument or `helpers/` path",
+            "same Python path and scratch path",
+            "snapshots the canonical and",
+            "staged final-round",
             "validate_stage_p_output.py",
             "still-empty actor scratch as working",
             "PYTHONDONTWRITEBYTECODE=1",
@@ -409,16 +419,18 @@ class SemanticContractDocumentationTests(unittest.TestCase):
             with self.subTest(clean_room_helper_contract=required):
                 self.assertIn(required, clean_room)
         for required in (
-            "every `--helper-input` is a separate",
-            "The sequence is frozen",
-            "followed immediately by that record's outputs",
-            "Plan and verify receive the same repeated sequence",
+            "Production runner v1 rejects Stage-H actors",
+            "helper paths, and every",
+            "`--helper-input` argument",
+            "Production runner v1 launches no helper",
         ):
             with self.subTest(panel_helper_contract=required):
                 self.assertIn(required, panels)
-        for flag in set(plan_flags) | set(verify_flags):
+        for flag in production_plan_flags | production_verify_flags:
             with self.subTest(skill_public_cli=flag):
                 self.assertIn(flag, skill)
+        self.assertIn("rejects any", skill)
+        self.assertIn("`--helper-input` arguments", skill)
 
     def test_sa_runtime_binding_documentation_tracks_public_cli(self) -> None:
         helper_source = SA_PROMPT_HELPER.read_text(encoding="utf-8")
@@ -460,8 +472,7 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         self.assertIn("Bound Python SHA-256", helper_source)
         self.assertNotIn("\npython -B ", report)
 
-    def test_chair_helper_materializer_cli_and_unc_policy_are_documented(self) -> None:
-        materializer_source = OWNER_MATERIALIZER.read_text(encoding="utf-8")
+    def test_chair_materializer_is_helper_free_and_unc_policy_is_documented(self) -> None:
         combined = "\n".join(
             path.read_text(encoding="utf-8")
             for path in (
@@ -472,16 +483,20 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 REVIEWER_PANELS,
             )
         )
-        self.assertIn('"--helper-input"', materializer_source)
+        # A dormant parser compatibility branch, if retained, cannot authorize
+        # a production helper and is intentionally not part of this contract.
         for required in (
-            "materialize_owner_outputs.py <exact-round-root> C [--helper-input",
-            "exact C-recipient",
-            "canonical Hxx",
-            "never discovers",
-            "single-link regular files",
+            "materialize_owner_outputs.py <exact-stage-c-view-root> C`",
+            "Production runner v1 supplies no helper flags or helper files",
+            "Production runner v1 rejects H actors",
+            "`helpers/`, and `--helper-input`",
         ):
             with self.subTest(chair_helper_contract=required):
                 self.assertIn(required, combined)
+        self.assertNotIn(
+            "materialize_owner_outputs.py <exact-stage-c-view-root> C [--helper-input",
+            combined,
+        )
 
         clean_room = CLEAN_ROOM.read_text(encoding="utf-8")
         for required in (
@@ -496,6 +511,32 @@ class SemanticContractDocumentationTests(unittest.TestCase):
         ):
             with self.subTest(stage_r_unc_contract=required):
                 self.assertIn(required, clean_room)
+
+    def test_runner_owns_bootstrap_staging_phase_barriers_and_offline_p(self) -> None:
+        clean_room = CLEAN_ROOM.read_text(encoding="utf-8")
+        for required in (
+            "Do not stage Stage-P rule",
+            "bootstrap transaction first proves the untouched pre-Stage-P topology",
+            "stages",
+            "the exact rule inputs itself",
+            "Stage P is forbidden until",
+            "`BOOTSTRAP_COMMIT`",
+            "Per-actor transition commands are not exposed by the production",
+            "CLI, and the reducer rejects them for every multi-actor phase",
+            "P, AI, SA, C, and S use `[none]`",
+            "A nonempty `governing_rule_urls` array is process metadata",
+            "Public-network access, conversation history",
+        ):
+            with self.subTest(runner_contract=required):
+                self.assertIn(required, clean_room)
+        self.assertNotIn(
+            "After staging the exact\nStage-P rule inputs",
+            clean_room,
+        )
+        self.assertNotIn(
+            "allowlisted official public rule sources or frozen official local",
+            clean_room,
+        )
 
 
 if __name__ == "__main__":

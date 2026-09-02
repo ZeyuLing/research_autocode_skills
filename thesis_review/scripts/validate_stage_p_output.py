@@ -686,11 +686,6 @@ def validate_stage_p(root: Path, module: Any) -> list[str]:
         bibliography_inventory,
         errors,
     )
-    rule_public_endpoints = {
-        value
-        for value in process.get("governing_rule_urls", [])
-        if isinstance(value, str)
-    }
     module.validate_declarations(
         root / "01-policy-basis.md",
         expected_hash,
@@ -698,8 +693,8 @@ def validate_stage_p(root: Path, module: Any) -> list[str]:
         process=process,
         actor_id=ACTOR_ID,
         reviewer_count=reviewer_count,
-        allowed_public_endpoints=rule_public_endpoints,
-        required_public_endpoints=rule_public_endpoints,
+        allowed_public_endpoints=set(),
+        required_public_endpoints=set(),
     )
     after = snapshot_exact_paths(exact_paths)
     if before != after:

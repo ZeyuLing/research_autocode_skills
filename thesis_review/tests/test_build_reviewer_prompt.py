@@ -123,6 +123,7 @@ class ReviewerPromptFixture:
         self.metadata_hash = initialized["metadata_sha256"]
         self.frozen_at = initialized["frozen_at_utc"]
         self.round_root = self.run_root / "round"
+        self.view_root = self.run_root / "views" / actor
         self.prompt_path = base / f"{actor}-prompt.txt"
         self.preplan_path = base / f"{actor}-preplan.json"
         self.python_executable = Path(sys.executable).resolve()
@@ -173,6 +174,7 @@ class ReviewerPromptFixture:
         self.planned = MODULE.plan_prompt(
             self.preplan_path,
             self.round_root,
+            self.view_root,
             self.actor,
             self.prompt_path,
             self.python_executable,
@@ -352,12 +354,20 @@ class ReviewerPromptFixture:
                 SKILL_ROOT / "scripts/validate_stage_p_output.py",
                 stage_p_validator,
             )
+
+        self.view_root.mkdir()
+        for relative in self.planned["opened"]:
+            source = self.round_root / Path(relative)
+            destination = self.view_root / Path(relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
         return process, self.process_hash, self.seal_hash
 
     def verify(self, **overrides: object) -> dict:
         values = {
             "run_root_value": self.run_root,
             "round_root_value": self.round_root,
+            "view_root_value": self.view_root,
             "prompt_value": self.prompt_path,
             "actor_value": self.actor,
             "expected_process_sha256": self.process_hash,
@@ -434,6 +444,13 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     self.assertIn("If question 6 is answered no, delete", prompt)
                     self.assertEqual(metadata["python_executable"], str(fixture.python_executable))
                     self.assertEqual(metadata["scratch_dir"], str(fixture.scratch_dir))
+                    self.assertEqual(metadata["view_root"], str(fixture.view_root))
+                    self.assertEqual(metadata["codex_workspace"], str(fixture.view_root))
+                    self.assertIn(
+                        f"Exact Codex workspace (`-C`) value: {fixture.view_root}",
+                        prompt,
+                    )
+                    self.assertNotIn(str(fixture.round_root), prompt)
 
     def test_real_lifecycle_verifies_pdf_process_seal_runtime_and_scratch(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -450,6 +467,8 @@ class BuildReviewerPromptTests(unittest.TestCase):
             self.assertEqual(verified["process_seal"]["seal_sha256"], seal_hash)
             self.assertEqual(verified["python_executable"], str(fixture.python_executable))
             self.assertEqual(verified["scratch_dir"], str(fixture.scratch_dir))
+            self.assertEqual(verified["view_root"], str(fixture.view_root))
+            self.assertEqual(verified["codex_workspace"], str(fixture.view_root))
             self.assertIn("04-citation-claim-audit-ledger.csv", verified["owned_outputs"])
 
     def test_exact_all_role_gate_command_arrays_use_bound_python_and_b_flag(self) -> None:
@@ -466,25 +485,25 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     fixture = ReviewerPromptFixture(case_root, degree, actor)
                     metadata = fixture.plan()
                     python = str(fixture.python_executable)
-                    round_root = str(fixture.round_root)
+                    view_root = str(fixture.view_root)
                     if (degree, actor) == ("doctorate", "R4"):
                         expected = [
-                            [python, "-B", str(fixture.round_root / "rules/scripts/materialize_owner_outputs.py"), round_root, "R4"],
-                            [python, "-B", str(fixture.round_root / "rules/scripts/validate_r4_output.py"), round_root],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/materialize_owner_outputs.py"), view_root, "R4"],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/validate_r4_output.py"), view_root],
                         ]
                     elif (degree, actor) == ("doctorate", "R5"):
                         expected = [
-                            [python, "-B", str(fixture.round_root / "rules/scripts/materialize_owner_outputs.py"), round_root, "R5"],
-                            [python, "-B", str(fixture.round_root / "rules/scripts/validate_r5_output.py"), round_root],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/materialize_owner_outputs.py"), view_root, "R5"],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/validate_r5_output.py"), view_root],
                         ]
                     elif (degree, actor) == ("masters", "R3"):
                         expected = [
-                            [python, "-B", str(fixture.round_root / "rules/scripts/materialize_owner_outputs.py"), round_root, "R3"],
-                            [python, "-B", str(fixture.round_root / "rules/scripts/validate_master_r3_output.py"), round_root],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/materialize_owner_outputs.py"), view_root, "R3"],
+                            [python, "-B", str(fixture.view_root / "rules/scripts/validate_master_r3_output.py"), view_root],
                         ]
                     else:
                         expected = [
-                            [python, "-B", str(fixture.round_root / "rules/scripts/validate_reviewer_output.py"), round_root, actor]
+                            [python, "-B", str(fixture.view_root / "rules/scripts/validate_reviewer_output.py"), view_root, actor]
                         ]
                     self.assertEqual(metadata["gate_commands"], expected)
                     prompt = fixture.prompt_path.read_text(encoding="utf-8")
@@ -569,7 +588,10 @@ class BuildReviewerPromptTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary)
             for validator_name, error in (
-                ("validate_r4_output.py", "staged reviewer validator hash mismatch"),
+                (
+                    "validate_r4_output.py",
+                    "private-view input bytes differ|staged reviewer validator hash mismatch",
+                ),
                 (
                     "validate_stage_p_output.py",
                     "staged Stage-P scoped validator hash mismatch",
@@ -603,6 +625,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     fixture.round_root,
+                    fixture.view_root,
                     fixture.actor,
                     fixture.prompt_path,
                     fixture.python_executable,
@@ -637,6 +660,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                         MODULE.plan_prompt(
                             fixture.preplan_path,
                             fixture.round_root,
+                            fixture.view_root,
                             fixture.actor,
                             fixture.prompt_path,
                             fake,
@@ -685,6 +709,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                             MODULE.plan_prompt(
                                 fixture.preplan_path,
                                 fixture.round_root,
+                                fixture.view_root,
                                 fixture.actor,
                                 prompt,
                                 python,
@@ -707,11 +732,86 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     wrong_round,
+                    fixture.view_root,
                     fixture.actor,
                     fixture.prompt_path,
                     fixture.python_executable,
                     wrong_scratch,
                 )
+
+    def test_plan_requires_the_exact_absent_run_views_actor_path(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+
+            wrong_case = base / "wrong-actor-view"
+            wrong_case.mkdir()
+            fixture = ReviewerPromptFixture(wrong_case, "doctorate", "R1")
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "exactly the actor-ID direct child"
+            ):
+                MODULE.plan_prompt(
+                    fixture.preplan_path,
+                    fixture.round_root,
+                    fixture.run_root / "views" / "R2",
+                    fixture.actor,
+                    fixture.prompt_path,
+                    fixture.python_executable,
+                    fixture.scratch_dir,
+                )
+
+            existing_case = base / "existing-view"
+            existing_case.mkdir()
+            fixture = ReviewerPromptFixture(existing_case, "doctorate", "R1")
+            fixture.view_root.mkdir()
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "must not exist during prompt planning"
+            ):
+                MODULE.plan_prompt(
+                    fixture.preplan_path,
+                    fixture.round_root,
+                    fixture.view_root,
+                    fixture.actor,
+                    fixture.prompt_path,
+                    fixture.python_executable,
+                    fixture.scratch_dir,
+                )
+
+    def test_private_view_is_closed_and_final_round_peer_output_is_not_visible(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            fixture = ReviewerPromptFixture(
+                Path(temporary), "doctorate", "R1", valid_packet=True
+            )
+            fixture.plan()
+            fixture.stage()
+            peer = fixture.round_root / "R2-comprehensive-review.md"
+            peer.write_text("frozen peer output outside the R1 view\n", encoding="utf-8")
+            verified = fixture.verify()
+            self.assertEqual(verified["status"], "VERIFIED")
+            self.assertFalse((fixture.view_root / peer.name).exists())
+
+    def test_private_view_byte_drift_and_extra_entry_fail_before_dispatch(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            for mutation in ("byte-drift", "extra-entry"):
+                with self.subTest(mutation=mutation):
+                    case_root = base / mutation
+                    case_root.mkdir()
+                    fixture = ReviewerPromptFixture(
+                        case_root, "doctorate", "R1", valid_packet=True
+                    )
+                    fixture.plan()
+                    fixture.stage()
+                    if mutation == "byte-drift":
+                        target = fixture.view_root / "SKILL.md"
+                        target.write_bytes(target.read_bytes() + b"\nprivate drift\n")
+                        expected = "private-view input bytes differ"
+                    else:
+                        (fixture.view_root / "UNLISTED-PEER-REPORT.md").write_text(
+                            "must not be opened\n", encoding="utf-8"
+                        )
+                        expected = "exact closed pre-dispatch input tree"
+                    with self.assertRaisesRegex(MODULE.ContractError, expected):
+                        fixture.verify()
 
     @unittest.skipUnless(os.name == "nt", "NTFS 8.3 alias test is Windows-specific")
     def test_plan_rejects_ntfs_short_aliases_into_run_root(self) -> None:
@@ -748,6 +848,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     fixture.round_root,
+                    fixture.view_root,
                     fixture.actor,
                     fixture.prompt_path,
                     fixture.python_executable,
@@ -761,8 +862,23 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     fixture.round_root,
+                    fixture.view_root,
                     fixture.actor,
                     alias_prompt,
+                    fixture.python_executable,
+                    fixture.scratch_dir,
+                )
+
+            alias_view = short_views / fixture.actor
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "canonical filesystem spelling"
+            ):
+                MODULE.plan_prompt(
+                    fixture.preplan_path,
+                    fixture.round_root,
+                    alias_view,
+                    fixture.actor,
+                    fixture.prompt_path,
                     fixture.python_executable,
                     fixture.scratch_dir,
                 )
@@ -808,6 +924,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     fixture.round_root,
+                    fixture.view_root,
                     fixture.actor,
                     fixture.prompt_path,
                     fixture.python_executable,
@@ -821,6 +938,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.plan_prompt(
                     fixture.preplan_path,
                     fixture.round_root,
+                    fixture.view_root,
                     fixture.actor,
                     alias_prompt,
                     fixture.python_executable,
@@ -839,6 +957,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 MODULE.verify_prompt(
                     fixture.run_root,
                     fixture.round_root,
+                    fixture.view_root,
                     alias_existing_prompt,
                     fixture.actor,
                     fixture.process_hash,
@@ -846,6 +965,11 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     fixture.python_executable,
                     fixture.scratch_dir,
                 )
+            alias_existing_view = localhost_admin_alias(fixture.view_root)
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "UNC/device namespace"
+            ):
+                fixture.verify(view_root_value=alias_existing_view)
 
     @unittest.skipUnless(os.name == "nt", "UNC rejection is Windows-specific")
     def test_nested_unc_share_control_path_is_rejected_without_share_discovery(self) -> None:
@@ -874,7 +998,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="stage-r-nested-unc-plan-") as temporary:
             base = Path(temporary)
-            for placement in ("prompt", "python", "scratch"):
+            for placement in ("view", "prompt", "python", "scratch"):
                 with self.subTest(placement=placement):
                     case_root = base / placement
                     case_root.mkdir()
@@ -885,7 +1009,10 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     prompt = fixture.prompt_path
                     python = fixture.python_executable
                     scratch = fixture.scratch_dir
-                    if placement == "prompt":
+                    view = fixture.view_root
+                    if placement == "view":
+                        view = share_root / fixture.actor
+                    elif placement == "prompt":
                         prompt = share_root / "R1-prompt.txt"
                     elif placement == "python":
                         python = share_root / "python.exe"
@@ -897,6 +1024,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                         MODULE.plan_prompt(
                             fixture.preplan_path,
                             fixture.round_root,
+                            view,
                             fixture.actor,
                             prompt,
                             python,
@@ -909,7 +1037,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="stage-r-nested-unc-verify-") as temporary:
             base = Path(temporary)
-            for placement in ("prompt", "python", "scratch"):
+            for placement in ("view", "prompt", "python", "scratch"):
                 with self.subTest(placement=placement):
                     case_root = base / placement
                     case_root.mkdir()
@@ -920,7 +1048,9 @@ class BuildReviewerPromptTests(unittest.TestCase):
                         rf"\\localhost\NestedShareBelowRun-{placement}"
                     )
                     overrides: dict[str, Path] = {}
-                    if placement == "prompt":
+                    if placement == "view":
+                        overrides["view_root_value"] = share_root / fixture.actor
+                    elif placement == "prompt":
                         overrides["prompt_value"] = share_root / "R1-prompt.txt"
                     elif placement == "python":
                         overrides["python_executable_value"] = share_root / "python.exe"
@@ -1084,7 +1214,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 ):
                     fixture.verify()
 
-    def test_late_round_file_and_directory_are_rejected_by_terminal_topology(self) -> None:
+    def test_late_private_view_file_and_directory_are_rejected_by_terminal_topology(self) -> None:
         for entry_type in ("file", "directory"):
             with self.subTest(entry_type=entry_type), tempfile.TemporaryDirectory() as temporary:
                 fixture = ReviewerPromptFixture(
@@ -1102,7 +1232,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     result = original_scratch_check(*args, **kwargs)
                     calls += 1
                     if calls == 3:
-                        inserted = fixture.round_root / "PROHIBITED-OLD-REVIEW"
+                        inserted = fixture.view_root / "PROHIBITED-OLD-REVIEW"
                         if entry_type == "file":
                             inserted.with_suffix(".md").write_text(
                                 "late unrelated artifact\n", encoding="utf-8"
@@ -1118,7 +1248,7 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 ):
                     with self.assertRaisesRegex(
                         MODULE.ContractError,
-                        "round topology (?:changed|directory changed)",
+                        "private-view topology changed|topology directory changed",
                     ):
                         fixture.verify()
 
@@ -1141,8 +1271,8 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 if calls == 3:
                     try:
                         os.symlink(
-                            fixture.round_root / "00-page-inventory.csv",
-                            fixture.round_root / "PROHIBITED-LINK.csv",
+                            fixture.view_root / "00-page-inventory.csv",
+                            fixture.view_root / "PROHIBITED-LINK.csv",
                         )
                     except OSError as exc:
                         raise unittest.SkipTest(
@@ -1178,12 +1308,12 @@ class BuildReviewerPromptTests(unittest.TestCase):
                     calls += 1
                     if calls == 3:
                         if drift_kind == "extra-file":
-                            (fixture.round_root / "PROHIBITED-LATE-TOPOLOGY.md").write_text(
+                            (fixture.view_root / "PROHIBITED-LATE-TOPOLOGY.md").write_text(
                                 "late unrelated artifact\n", encoding="utf-8"
                             )
                         else:
                             os.link(
-                                fixture.round_root / "00-page-inventory.csv",
+                                fixture.view_root / "00-page-inventory.csv",
                                 base / "late-packet-hardlink.csv",
                             )
 
@@ -1285,6 +1415,8 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 str(fixture.preplan_path),
                 "--round-root",
                 str(fixture.round_root),
+                "--view-root",
+                str(fixture.view_root),
                 "--actor",
                 fixture.actor,
                 "--output",
@@ -1308,6 +1440,8 @@ class BuildReviewerPromptTests(unittest.TestCase):
                 str(fixture.run_root),
                 "--round-root",
                 str(fixture.round_root),
+                "--view-root",
+                str(fixture.view_root),
                 "--prompt",
                 str(fixture.prompt_path),
                 "--actor",

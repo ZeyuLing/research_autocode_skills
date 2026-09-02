@@ -32,14 +32,9 @@ Use separate output files and private scratch directories. If reviewers share a 
 
 Stage O builds each R prompt with the canonical plan/verify CLI in
 `clean-room-orchestration.md`, an explicit absolute bundled Python executable,
-and an existing empty actor-private scratch directory outside the run root. If
-this reviewer consumes Stage-H outputs, every `--helper-input` is a separate
-round-relative `helpers/<portable-basename>` argument. The sequence is frozen
-before the process seal and is exactly: each recipient `Hxx-provenance.json` in
-basename order followed immediately by that record's outputs in declared
-order. Plan and verify receive the same repeated sequence; verify rejects any
-actual recipient, provenance, basename, or order drift. No helper flag is
-supplied when the reviewer consumes none. The same verify boundary reruns the
+and an existing empty actor-private scratch directory outside the run root.
+Production runner v1 rejects Stage-H actors, helper paths, and every
+`--helper-input` argument. The same verify boundary reruns the
 hash-matched staged Stage-P validator with the bound Python and empty actor
 scratch and requires first-line `PASS` before reviewer dispatch.
 
@@ -104,13 +99,13 @@ This structure is intentionally overlapping. Independent reviewers should someti
 | `03-bibliography-audit-ledger.md` | R5 | R3 | Evaluate every bibliography entry rendered in the PDF and the source risks relevant to the whole-thesis judgment; do not claim entry-by-entry closure without the ledger. |
 | `04-citation-claim-audit-ledger.md` | R4 | R3 | Test key citations and report any problem encountered; do not claim occurrence-by-occurrence closure without the ledger. |
 
-Ledger ownership creates no extra vote, veto, severity privilege, or exclusive authority over that gate. It is an additional completeness duty and cannot replace the owner's Gate A--I matrix or whole-thesis conclusion. Before a reviewer process begins, Stage O may separately launch clean Stage-H non-voting helpers under `clean-room-orchestration.md` to produce inventory-extraction sidecars. A reviewer never launches or delegates to a helper. The checksum-bound sidecars are mechanical navigation aids, not findings. The assigned reviewer must independently sign off semantic citation support, bibliography identity/status, and visual page dispositions before freezing the ledger.
+Ledger ownership creates no extra vote, veto, severity privilege, or exclusive authority over that gate. It is an additional completeness duty and cannot replace the owner's Gate A--I matrix or whole-thesis conclusion. Production runner v1 launches no helper: the assigned reviewer works from the frozen PDF and neutral Stage-P packet in its own exact private view and must independently sign off semantic citation support, bibliography identity/status, and visual page dispositions before freezing the ledger.
 
 ## Standalone AI-style assessor — not a panel reviewer
 
 Stage O runs one additional isolated prose-style assessment for both doctoral and master's theses. This assessor is not R6, is not included in the reviewer count, does not issue an academic or defense category, and does not infer AI use or authorship. Follow `ai-style-audit.md` and write only `05-ai-style-assessment.md`.
 
-Stage O separately launches the assessor in its own fresh context; no reviewer or assessor may perform that launch. The assessor may read only the neutral process envelope, the frozen PDF, the exact clean-room/report/AI rule files and full/AI-scoped validators, `00-manifest.md`, `00-page-inventory.csv`, and any registered AI-recipient helper sidecars containing mechanical PDF-text statistics. It must not read `01-policy-basis.md`, governing local files, conversation history, user explanations, the thesis source, R1--R5/R1--R3 reports or ledgers, the chair synthesis, old review rounds, author responses, or author-side materials. It reports `low`, `moderate`, `high`, or `indeterminate` AI-style signal with evidence and counter-evidence, then runs `python rules/scripts/validate_ai_output.py <exact-round-root>` to PASS before freeze. The AI gate may correct only `05-ai-style-assessment.md`; an upstream defect triggers Stage O's global retry.
+Stage O separately launches the assessor in its own fresh context; no reviewer or assessor may perform that launch. The assessor may read only the neutral process envelope, the frozen PDF, the exact clean-room/report/AI rule files and full/AI-scoped validators, `00-manifest.md`, and `00-page-inventory.csv` in its exact private view. It must not read helper sidecars, `01-policy-basis.md`, governing local files, conversation history, user explanations, the thesis source, R1--R5/R1--R3 reports or ledgers, the chair synthesis, old review rounds, author responses, or author-side materials. It reports `low`, `moderate`, `high`, or `indeterminate` AI-style signal with evidence and counter-evidence, then runs `python rules/scripts/validate_ai_output.py <exact-stage-ai-view-root>` to PASS before freeze. The AI gate may correct only `05-ai-style-assessment.md`; an upstream defect triggers Stage O's global retry.
 
 ## Doctoral panel: five reviewers
 
@@ -288,6 +283,6 @@ The chair is not a sixth reviewer. Stage O launches it as a new clean actor with
 
 Before preserving a question that would need evidence beyond the frozen PDF and permitted public citation sources, the chair first decides whether that evidence is part of the thesis's verified submission obligation. If not, reject the source item as an out-of-scope artifact request; do not label it `not verifiable`, keep it open, or send it to Stage S. Use `not verifiable from the submitted PDF` only for an otherwise legitimate thesis question whose answer is required to judge a claim visible in the PDF. A user-requested source-sync or provenance check must run later as a separate non-review task and cannot rewrite the frozen reviewer verdicts.
 
-Before freezing or exiting, the Chair runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` to MATERIALIZED and then `python rules/scripts/validate_chair_output.py <exact-round-root>` to PASS, repeating both after any Chair-source edit. Stage O freezes the repeated arguments as the exact canonical C-recipient helper sequence; omit them when no C helper applies. Materialization validates only those declared helper files before writing, preserves semantic decisions, and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The pre-Stage-S gate validates the frozen upstream chain and current `90`--`92` outputs while forbidding `93`, `94`, and `95`. The Chair may correct only its own current outputs before freeze; any upstream failure triggers Stage O's global retry.
+Before freezing or exiting, the Chair works only in the exact unified `<exact-stage-c-view-root>` and runs `python rules/scripts/materialize_owner_outputs.py <exact-stage-c-view-root> C` to MATERIALIZED, then `python rules/scripts/validate_chair_output.py <exact-stage-c-view-root>` to PASS, repeating both after any Chair-source edit. Production runner v1 supplies no helper flags or helper files. Materialization preserves semantic decisions and rebuilds only deterministic `90`--`92` Markdown projections/receipts. The scoped gate requires the exact C input/output tree and never receives individual SA files, page renders, helpers, `93`, `94`, or `95`; private-SA and render hashes remain Stage-O transport commitments until final full validation. After transport and scoped PASS, Stage O rechecks the prelaunch input commitment and promotes only the six C outputs with no replacement. The Chair may correct only its own current outputs before freeze; any drift or upstream failure triggers Stage O's global retry.
 
 After the chair freezes its outputs, Stage O launches the separate clean Stage-S synthesis defined in `clean-room-orchestration.md`. The chair does not write free-form user commentary, and the conversation-aware orchestrator does not reconstruct or supplement the issue table.

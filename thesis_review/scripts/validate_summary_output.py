@@ -77,6 +77,164 @@ def safe_directory_snapshot(
     )
 
 
+def scan_exact_directory(
+    module: Any,
+    path: Path,
+    label: str,
+    expected_files: set[str],
+    expected_directories: set[str],
+    errors: list[str],
+) -> tuple[
+    tuple[int, int, int, int, int, int, int] | None,
+    dict[str, tuple[str, int, int, int, int, int, int, int]],
+]:
+    """Enumerate names and metadata only; never open an entry's bytes."""
+
+    directory_snapshot = safe_directory_snapshot(module, path, label, errors)
+    if directory_snapshot is None:
+        return None, {}
+    observations: dict[str, tuple[str, int, int, int, int, int, int, int]] = {}
+    try:
+        with os.scandir(path) as entries:
+            ordered_entries = sorted(entries, key=lambda entry: entry.name)
+    except OSError as exc:
+        errors.append(f"cannot enumerate {label}: {exc}")
+        return directory_snapshot, observations
+
+    for entry in ordered_entries:
+        try:
+            metadata = entry.stat(follow_symlinks=False)
+        except OSError as exc:
+            errors.append(f"cannot inspect {label} entry {entry.name!r}: {exc}")
+            continue
+        attributes = int(getattr(metadata, "st_file_attributes", 0))
+        is_reparse = bool(
+            attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+        )
+        if stat.S_ISREG(metadata.st_mode):
+            kind = "file"
+        elif stat.S_ISDIR(metadata.st_mode):
+            kind = "directory"
+        else:
+            kind = "other"
+        observations[entry.name] = (
+            kind,
+            int(metadata.st_dev),
+            int(metadata.st_ino),
+            int(metadata.st_mode),
+            int(metadata.st_nlink),
+            int(metadata.st_size),
+            int(getattr(metadata, "st_mtime_ns", int(metadata.st_mtime * 1e9))),
+            attributes,
+        )
+        if entry.is_symlink() or is_reparse:
+            errors.append(
+                f"{label} entry {entry.name!r} must not be link/reparse-backed"
+            )
+
+    expected_names = expected_files | expected_directories
+    observed_names = set(observations)
+    missing = sorted(expected_names - observed_names)
+    extra = sorted(observed_names - expected_names)
+    if missing:
+        errors.append(f"{label} is missing required entries: {missing}")
+    if extra:
+        errors.append(f"{label} contains forbidden extra entries: {extra}")
+    for name in sorted(expected_files & observed_names):
+        if observations[name][0] != "file":
+            errors.append(f"{label} entry {name!r} must be a regular file")
+    for name in sorted(expected_directories & observed_names):
+        if observations[name][0] != "directory":
+            errors.append(f"{label} entry {name!r} must be a directory")
+    return directory_snapshot, observations
+
+
+def validate_closed_stage_s_view(
+    module: Any,
+    root: Path,
+    opened_inputs: list[str],
+    errors: list[str],
+) -> dict[str, Any]:
+    """Prove that Stage S sees one exact, unified, private filesystem view.
+
+    This boundary deliberately inspects only directory-entry names and stat
+    metadata. It runs after the process envelope is read but before any other
+    Stage-S source bytes are opened, so a forbidden extra file can cause a
+    closed failure without exposing its contents to Stage S.
+    """
+
+    required_paths = [*opened_inputs, *STAGE_S_OUTPUTS]
+    if len(required_paths) != len(set(required_paths)):
+        errors.append("Stage-S canonical opened-input/output paths are not unique")
+
+    expected_root_files: set[str] = set()
+    expected_rule_scripts: set[str] = set()
+    for relative in required_paths:
+        relative_path = Path(relative)
+        parts = relative_path.parts
+        if (
+            relative_path.is_absolute()
+            or not parts
+            or "." in parts
+            or ".." in parts
+            or any(":" in part for part in parts)
+        ):
+            errors.append(f"unsafe Stage-S canonical path: {relative!r}")
+        elif len(parts) == 1:
+            expected_root_files.add(parts[0])
+        elif len(parts) == 3 and parts[:2] == ("rules", "scripts"):
+            expected_rule_scripts.add(parts[2])
+        else:
+            errors.append(
+                "Stage-S canonical paths may only name root files or "
+                f"rules/scripts files: {relative!r}"
+            )
+
+    canonical_rule_paths = set(module.SUMMARY_VALIDATOR_RULE_INPUTS)
+    observed_rule_paths = {
+        f"rules/scripts/{filename}" for filename in expected_rule_scripts
+    }
+    if observed_rule_paths != canonical_rule_paths:
+        errors.append(
+            "Stage-S canonical rule inputs mismatch; "
+            f"missing={sorted(canonical_rule_paths-observed_rule_paths)}, "
+            f"extra={sorted(observed_rule_paths-canonical_rule_paths)}"
+        )
+
+    root_directory, root_entries = scan_exact_directory(
+        module,
+        root,
+        "Stage-S private root",
+        expected_root_files,
+        {"rules"},
+        errors,
+    )
+    rules_directory, rules_entries = scan_exact_directory(
+        module,
+        root / "rules",
+        "Stage-S rules directory",
+        set(),
+        {"scripts"},
+        errors,
+    )
+    scripts_directory, scripts_entries = scan_exact_directory(
+        module,
+        root / "rules" / "scripts",
+        "Stage-S rules/scripts directory",
+        expected_rule_scripts,
+        set(),
+        errors,
+    )
+    return {
+        "root_directory": root_directory,
+        "root_entries": root_entries,
+        "rules_directory": rules_directory,
+        "rules_entries": rules_entries,
+        "scripts_directory": scripts_directory,
+        "scripts_entries": scripts_entries,
+    }
+
+
 def capture_stage_s_files(
     module: Any,
     root: Path,
@@ -185,38 +343,39 @@ def preflight_summary_boundary(
     tuple[int, int, int, int, int, int, int] | None,
     dict[str, Any],
     list[str],
+    dict[str, Any],
 ]:
     root_snapshot = safe_directory_snapshot(
-        module, root, "round directory", errors
+        module, root, "Stage-S private-view directory", errors
     )
     if root_snapshot is None:
         errors.append(
-            "round directory is missing or is a symlink/junction/reparse point"
+            "Stage-S private-view directory is missing or is a "
+            "symlink/junction/reparse point"
         )
-        return None, 0, None, {}, []
-    process_path = root / "00-process-parameters.json"
+        return None, 0, None, {}, [], {}
     process_snapshots = capture_stage_s_files(
         module, root, ["00-process-parameters.json"], errors
     )
     process_snapshot = process_snapshots.get("00-process-parameters.json")
     if process_snapshot is None:
         errors.append("missing or unsafe Stage-S input: 00-process-parameters.json")
-        return None, 0, root_snapshot, process_snapshots, []
+        return None, 0, root_snapshot, process_snapshots, [], {}
     try:
         process = module.parse_strict_json_object(
             process_snapshot.content.decode("utf-8")
         )
     except (UnicodeError, json.JSONDecodeError, ValueError) as exc:
         errors.append(f"cannot safely preflight 00-process-parameters.json: {exc}")
-        return None, 0, root_snapshot, process_snapshots, []
+        return None, 0, root_snapshot, process_snapshots, [], {}
     if not isinstance(process, dict):
         errors.append("00-process-parameters.json root must be an object")
-        return None, 0, root_snapshot, process_snapshots, []
+        return None, 0, root_snapshot, process_snapshots, [], {}
     degree = process.get("degree_level")
     reviewer_count = 5 if degree == "doctorate" else 3 if degree == "masters" else 0
     if reviewer_count == 0:
         errors.append("Stage-S process degree_level must be doctorate or masters")
-        return None, 0, root_snapshot, process_snapshots, []
+        return None, 0, root_snapshot, process_snapshots, [], {}
     expected_hash = process.get("selected_pdf_sha256")
     if not isinstance(expected_hash, str) or module.HEX64_RE.fullmatch(expected_hash) is None:
         errors.append("Stage-S process selected_pdf_sha256 must be 64 hexadecimal characters")
@@ -236,6 +395,18 @@ def preflight_summary_boundary(
         process, reviewer_count, "S", root
     )
     required = [*opened, *STAGE_S_OUTPUTS]
+    boundary_snapshot = validate_closed_stage_s_view(
+        module, root, opened, errors
+    )
+    if errors:
+        return (
+            None,
+            reviewer_count,
+            root_snapshot,
+            process_snapshots,
+            required,
+            boundary_snapshot,
+        )
     snapshots = capture_stage_s_files(module, root, required, errors)
     if snapshots.get("00-process-parameters.json") != process_snapshot:
         errors.append(
@@ -252,7 +423,47 @@ def preflight_summary_boundary(
         root_snapshot,
         snapshots,
         required,
+        boundary_snapshot,
     )
+
+
+def terminal_summary_closure(
+    module: Any,
+    root: Path,
+    preflight_process: dict[str, Any],
+    reviewer_count: int,
+    root_snapshot: tuple[int, int, int, int, int, int, int] | None,
+    safety_snapshots: dict[str, Any],
+    safety_paths: list[str],
+    boundary_snapshot: dict[str, Any],
+    errors: list[str],
+) -> None:
+    """Re-prove the exact Stage-S universe on every post-preflight exit."""
+
+    terminal_root_snapshot = safe_directory_snapshot(
+        module, root, "Stage-S private-view directory", errors
+    )
+    if terminal_root_snapshot != root_snapshot:
+        errors.append(
+            "Stage-S private-view directory identity changed during validation"
+        )
+    terminal_boundary_snapshot = validate_closed_stage_s_view(
+        module,
+        root,
+        module.canonical_stage_opened_inputs(
+            preflight_process, reviewer_count, "S", root
+        ),
+        errors,
+    )
+    if terminal_boundary_snapshot != boundary_snapshot:
+        errors.append("Stage-S private view structure changed during validation")
+    terminal_snapshots = capture_stage_s_files(
+        module, root, safety_paths, errors
+    )
+    if terminal_snapshots != safety_snapshots:
+        errors.append(
+            "Stage-S source/output identity or bytes changed during validation"
+        )
 
 
 def validate_summary(root: Path, module: Any) -> list[str]:
@@ -263,6 +474,7 @@ def validate_summary(root: Path, module: Any) -> list[str]:
         root_snapshot,
         safety_snapshots,
         safety_paths,
+        boundary_snapshot,
     ) = preflight_summary_boundary(module, root, errors)
     if preflight_process is None:
         return errors
@@ -279,10 +491,18 @@ def validate_summary(root: Path, module: Any) -> list[str]:
         ),
     )
     if errors:
+        terminal_summary_closure(
+            module, root, preflight_process, reviewer_count, root_snapshot,
+            safety_snapshots, safety_paths, boundary_snapshot, errors,
+        )
         return errors
     if validated_reviewer_count != reviewer_count:
         errors.append(
             "Stage-S reviewer count does not match the validated process envelope"
+        )
+        terminal_summary_closure(
+            module, root, preflight_process, reviewer_count, root_snapshot,
+            safety_snapshots, safety_paths, boundary_snapshot, errors,
         )
         return errors
     expected_hash = str(process["selected_pdf_sha256"]).upper()
@@ -509,30 +729,22 @@ def validate_summary(root: Path, module: Any) -> list[str]:
         len(evidence_by_id),
         errors,
     )
-    terminal_root_snapshot = safe_directory_snapshot(
-        module, root, "round directory", errors
+    terminal_summary_closure(
+        module, root, preflight_process, reviewer_count, root_snapshot,
+        safety_snapshots, safety_paths, boundary_snapshot, errors,
     )
-    if terminal_root_snapshot != root_snapshot:
-        errors.append("Stage-S round directory identity changed during validation")
-    terminal_snapshots = capture_stage_s_files(
-        module, root, safety_paths, errors
-    )
-    if terminal_snapshots != safety_snapshots:
-        errors.append(
-            "Stage-S source/output identity or bytes changed during validation"
-        )
     return errors
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("round_directory", type=Path)
+    parser.add_argument("stage_s_view_directory", type=Path)
     args = parser.parse_args(argv)
     previous_bytecode_setting = sys.dont_write_bytecode
     sys.dont_write_bytecode = True
     try:
         module = load_validator()
-        errors = validate_summary(args.round_directory.absolute(), module)
+        errors = validate_summary(args.stage_s_view_directory.absolute(), module)
     except Exception as exc:
         errors = [f"Stage-S validator could not complete safely: {exc}"]
     finally:

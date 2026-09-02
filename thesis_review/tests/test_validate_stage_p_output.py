@@ -150,6 +150,24 @@ class ValidateStagePOutputTests(unittest.TestCase):
             encoding="utf-8",
         )
 
+    def add_governing_url_metadata(self, root: Path, endpoint: str) -> None:
+        process_path = root / "00-process-parameters.json"
+        process = json.loads(process_path.read_text(encoding="utf-8"))
+        process["governing_rule_urls"] = [endpoint]
+        process_path.write_text(json.dumps(process), encoding="utf-8")
+        self.refresh_process_identity(root)
+        manifest = root / "00-manifest.md"
+        projection = FULL_VALIDATOR_MODULE.manifest_process_projection(process)
+        manifest.write_text(
+            re.sub(
+                r"(?m)^- Governing template/rules: .*$",
+                "- Governing template/rules: "
+                + projection["Governing template/rules"],
+                manifest.read_text(encoding="utf-8"),
+            ),
+            encoding="utf-8",
+        )
+
     def assert_stage_p_and_full_fail(self, root: Path, needle: str) -> None:
         stage_p = self.run_stage_p(root)
         full = self.run_full_validator(root)
@@ -179,6 +197,35 @@ class ValidateStagePOutputTests(unittest.TestCase):
                 self.assertEqual(before, after)
                 self.assertFalse((root / "95-bundle-validation.md").exists())
                 self.assertFalse((root / "__pycache__").exists())
+
+    def test_governing_url_metadata_does_not_open_a_stage_p_endpoint(self) -> None:
+        endpoint = "https://example.edu/official-rule"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_stage_p_only_fixture(root)
+            self.add_governing_url_metadata(root, endpoint)
+            result = self.run_stage_p(root)
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertTrue(result.stdout.startswith("PASS\n"), result.stdout)
+
+        for filename in ("00-manifest.md", "01-policy-basis.md"):
+            with self.subTest(filename=filename), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                self.build_stage_p_only_fixture(root)
+                self.add_governing_url_metadata(root, endpoint)
+                path = root / filename
+                path.write_text(
+                    path.read_text(encoding="utf-8").replace(
+                        "public_endpoints=[none]",
+                        f"public_endpoints=[{endpoint}]",
+                        1,
+                    ),
+                    encoding="utf-8",
+                )
+                self.assert_stage_p_fails(
+                    root,
+                    "current P authoritative endpoint allowlist",
+                )
 
     def test_pdf_derived_numbered_chapter_boundary_rejects_p0073_style_mislabel_in_both_gates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

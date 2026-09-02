@@ -36,7 +36,7 @@ CSV row rather than duplicated as a table column.
 
 Ledger owners do not hand-build these deterministic pipe tables. After every
 owned-CSV change and before the read-only owner gate, doctoral R4/R5 or master's
-R3 runs `python rules/scripts/materialize_owner_outputs.py <exact-round-root> <actor-id>`
+ R3 runs `python rules/scripts/materialize_owner_outputs.py <exact-reviewer-view-root> <actor-id>`
 in the same fresh actor turn. Exit `0` and first nonempty stdout
 `MATERIALIZED` mean only that the owned Markdown projections and duplicate-free
 endpoint receipt lists were rebuilt; the command does not validate or change a
@@ -495,14 +495,15 @@ required pairs, recomputes every hash, and rejects a missing/extra target or
 failed row.
 
 The Chair receives only this hash gate; its isolated view must not contain the
-`06-semantic-acceptance/` directory. Its pre-Stage-S gate therefore exactly
-recomputes the process-file hash, `SA-*` prompt-map projection, current target
-artifact hashes, and expected coverage counts, while treating each
-`acceptance_md_sha256`/`acceptance_csv_sha256` only as a closed 64-hex Stage-O
-transport commitment. It must not claim to have recomputed private acceptance
-bytes. A different well-formed private-file hash cannot be distinguished by the
-Chair alone; after Stage S, the final full validator must open the private
-directory and revalidate those hashes and the complete acceptance content.
+`06-semantic-acceptance/` directory or the R5 page-render tree. Its scoped gate
+therefore exactly recomputes the process-file hash, `SA-*` prompt-map
+projection, every C-visible target-artifact hash, and expected coverage counts,
+while treating each `acceptance_md_sha256`/`acceptance_csv_sha256` and R5 render
+hash only as a closed 64-hex Stage-O transport commitment. It must not claim to
+have recomputed bytes it is forbidden to see. A different well-formed private-
+file/render hash cannot be distinguished by the Chair alone; after Stage S,
+the final full validator must open the private directory/render tree and
+revalidate those hashes and the complete acceptance content.
 Stage S receives neither the gate nor that directory.
 
 ### Chair and summary reconciliation
@@ -531,33 +532,31 @@ weakening primary-key projection checks.
 
 The chair citation cross-ledger gate is a real join, not a self-reported count. It has exactly the cited `ReferenceID` set, projects displayed labels and affected Pair IDs, serializes each citation identity/source and the fixed bibliography canonical-identity field list deterministically, derives agreement/conflict/resolution from `03`, `04`, and linked current `C-Fxx` rows, and recomputes all seven counts. A nonexistent reference, wrong Pair ID, unlinked conflict, or count drift invalidates the gate.
 
-### Optional Stage-V prior-issues contract
+### Reserved future Stage-V prior-issues contract
 
 - `stage-v-inputs/<name>-prior-issues.csv`: `PriorFindingID,PriorPDFSHA256,PriorPDFAnchor,Finding,RequiredClosureEvidence`
 
-When optional Stage V runs, this CSV is the authoritative prior-finding row set. It is nonempty; all five fields are mandatory; `PriorFindingID` is a unique identifier matching `[A-Za-z][A-Za-z0-9._-]{0,127}`; every `PriorPDFSHA256` is the same 64-hex prior frozen-PDF identity; and `PriorPDFAnchor` names a positive physical page. The Stage-V Markdown closure table contains exactly these IDs once each and in CSV order. A phantom, omitted, duplicated, or reordered prior ID invalidates Stage V.
+Production runner v1 rejects Stage V and every prior-issue input. The schema below is reserved for a future extension with its own complete prompt/view/transport/promotion/runner contract; it is not an enabled current-round input. In such an extension, this CSV would be the authoritative prior-finding row set. It would be nonempty; all five fields would be mandatory; `PriorFindingID` would be a unique identifier matching `[A-Za-z][A-Za-z0-9._-]{0,127}`; every `PriorPDFSHA256` would be the same 64-hex prior frozen-PDF identity; and `PriorPDFAnchor` would name a positive physical page. The Stage-V Markdown closure table would have to match those IDs exactly once each and in CSV order.
 
 Every Stage-V prior input is copied into `stage-v-inputs/` and declared exactly once as `basename@SHA-256`. The validator requires the directory's regular-file set to equal the complete prior allowlist, hashes each file, rejects a missing or mismatched artifact, and verifies the same exact basename order in the V actor's `opened=[...]` receipt. The prior PDF and each of the six prior inventory/ledger inputs for a full regression audit use the same basename/hash contract. An author response is optional locator evidence and cannot replace or add rows to the prior-issues CSV.
 
 The Stage-V iterative checklist is a deterministic projection rather than free prose: page counts/dispositions come from `02`, bibliography and citation verdict counts from `03`/`04`, open academic and AI rows from `91`, current reviewer `S0`--`S3` counts from the frozen R reports, and prior remainder from the CSV-reconciled closure rows. Any disagreement between the checklist and these frozen masters invalidates Stage V.
 
-### Optional helper provenance
+### Reserved future helper provenance
 
-Every consumed helper writes `helpers/Hxx-provenance.json` with exactly these top-level fields:
+Production runner v1 rejects H actors, `helpers/`, and `--helper-input`. The
+following dormant schema is a design note for a future extension and cannot
+authorize current production input. Any such extension would require each
+consumed helper to write `helpers/Hxx-provenance.json` with exactly these
+top-level fields:
 
 `actor_id,round_id,retry_id,prompt_sha256,fresh_context_declaration,input_receipt_access_declaration,received_blocks,opened_inputs,tool,version,command_or_query,pdf_sha256_start,pdf_sha256_end,outputs,limitations,recipient_stages`
 
 `received_blocks`, `opened_inputs`, `limitations`, and `recipient_stages` are arrays. The fresh-context string is canonical, and `input_receipt_access_declaration` must exactly serialize `received_blocks`, `opened_inputs`, and the three clean-access statements; prose cannot contradict or compensate for the arrays. `outputs` is a non-empty array of objects with exactly `file` and `sha256`; `file` is a neutral basename inside `helpers/`, and its hash is verified. The prompt and PDF hashes are 64 hexadecimal characters; both PDF hashes equal the frozen PDF. Every non-provenance file in `helpers/` must be registered by exactly one provenance record. For every declared recipient actor, the canonical opened list appends the provenance path and all output paths in deterministic helper/output order; every artifact signed by that actor must report those inputs. Unregistered, multiply registered, missing, path-traversing, unconsumed, or hash-mismatched helper output invalidates the bundle. If no helper is consumed, omit the `helpers/` directory.
 
-For Chair materialization, Stage O also serializes that exact C-recipient
-projection as repeated `--helper-input helpers/<portable-basename>` arguments in
-the frozen C prompt. The sequence is ascending `Hxx-provenance.json` order,
-with each provenance immediately followed by its declared outputs. The scoped
-materializer validates and opens only those exact single-link regular files;
-it never discovers, opens, or rejects sibling helpers assigned only to R/AI.
-Missing, reordered, duplicate, hardlinked/reparse-backed, wrong-recipient,
-schema-invalid, or hash-invalid declared C inputs fail before any Chair output
-is written. Omit the arguments when C consumes no helper.
+No production-v1 Chair command contains a helper argument. Dormant
+helper-aware validator branches remain non-authoritative until a future runner
+implements the complete extension described above.
 
 ## 3. Mandatory stage gates and final validation
 
@@ -566,12 +565,12 @@ production pre-freeze materializer:
 
 | Actor | Mandatory materialization command | Files it may rewrite mechanically |
 |---|---|---|
-| Doctoral R4 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R4` | `04-citation-claim-audit-ledger.md`, `R4-comprehensive-review.md` receipt endpoint list |
-| Doctoral R5 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R5` | `02-page-layout-ledger.md`, `03-bibliography-audit-ledger.md`, `R5-comprehensive-review.md` receipt endpoint list |
-| Master's R3 | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> R3` | `02`, `03`, `04` Markdown masters and `R3-comprehensive-review.md` receipt endpoint list |
-| Stage O after all SA targets pass | `python rules/scripts/materialize_semantic_acceptance_gate.py <exact-round-root>` | `06-semantic-acceptance-gate.json` only; no R/AI/SA semantic artifact |
-| C | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> C [--helper-input helpers/H01-provenance.json --helper-input helpers/<H01-output-1> ...]` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
-| S | `python rules/scripts/materialize_owner_outputs.py <exact-round-root> S` | all three wholly derived `93` outputs, including both open-row CSV subsets and every closed Markdown projection |
+| Doctoral R4 | `python rules/scripts/materialize_owner_outputs.py <exact-reviewer-view-root> R4` | `04-citation-claim-audit-ledger.md`, `R4-comprehensive-review.md` receipt endpoint list |
+| Doctoral R5 | `python rules/scripts/materialize_owner_outputs.py <exact-reviewer-view-root> R5` | `02-page-layout-ledger.md`, `03-bibliography-audit-ledger.md`, `R5-comprehensive-review.md` receipt endpoint list |
+| Master's R3 | `python rules/scripts/materialize_owner_outputs.py <exact-reviewer-view-root> R3` | `02`, `03`, `04` Markdown masters and `R3-comprehensive-review.md` receipt endpoint list |
+| Stage O after all SA targets pass | `"<absolute-bundled-python>" -B scripts/stage_o_runner.py close-sa-set --run-root <absolute-run-root> --expected-transition-token <previous-token>` | Runner-owned creation of `06-semantic-acceptance-gate.json` only; no R/AI/SA semantic artifact may be edited |
+| C | `python rules/scripts/materialize_owner_outputs.py <exact-stage-c-view-root> C` | deterministic tables/allowlist/one identical receipt in `90`, `91.md`, and `92.md`; never the three semantic Chair CSVs or free adjudication prose |
+| S | `python rules/scripts/materialize_owner_outputs.py <exact-stage-s-view-root> S` | all three wholly derived `93` outputs, including both open-row CSV subsets and every closed Markdown projection |
 
 The materializer must exit `0` with first nonempty stdout `MATERIALIZED`. It is
 run after every owned-CSV edit. It neither replaces nor wraps the following
@@ -582,22 +581,22 @@ Every substantive actor then runs its exact read-only gate before freezing or ex
 
 | Actor | Mandatory command | Outputs the actor may correct before rerunning |
 |---|---|---|
-| P | `python rules/scripts/validate_stage_p_output.py <exact-round-root>` | `00-manifest.md`, `01-policy-basis.md`, and the five `00-*.csv` packet masters |
-| Ordinary R reviewer | `python rules/scripts/validate_reviewer_output.py <exact-round-root> Rn` | that actor's `Rn-comprehensive-review.md` only |
-| Doctoral R4 | `python rules/scripts/validate_r4_output.py <exact-round-root>` | `R4-comprehensive-review.md` and `04` Markdown/CSV only |
-| Doctoral R5 | `python rules/scripts/validate_r5_output.py <exact-round-root>` | `R5-comprehensive-review.md`, `02`, `03`, and authorized page renders only |
-| Master's R3 | `python rules/scripts/validate_master_r3_output.py <exact-round-root>` | `R3-comprehensive-review.md`, `02`, `03`, `04`, and authorized page renders only |
-| AI | `python rules/scripts/validate_ai_output.py <exact-round-root>` | `05-ai-style-assessment.md` only |
+| P | `python rules/scripts/validate_stage_p_output.py <exact-stage-p-view-root>` | `00-manifest.md`, `01-policy-basis.md`, and the five `00-*.csv` packet masters |
+| Ordinary R reviewer | `python rules/scripts/validate_reviewer_output.py <exact-reviewer-view-root> Rn` | that actor's `Rn-comprehensive-review.md` only |
+| Doctoral R4 | `python rules/scripts/validate_r4_output.py <exact-reviewer-view-root>` | `R4-comprehensive-review.md` and `04` Markdown/CSV only |
+| Doctoral R5 | `python rules/scripts/validate_r5_output.py <exact-reviewer-view-root>` | `R5-comprehensive-review.md`, `02`, `03`, and authorized page renders only |
+| Master's R3 | `python rules/scripts/validate_master_r3_output.py <exact-reviewer-view-root>` | `R3-comprehensive-review.md`, `02`, `03`, `04`, and authorized page renders only |
+| AI | `python rules/scripts/validate_ai_output.py <exact-stage-ai-view-root>` | `05-ai-style-assessment.md` only |
 | Each `SA-<target>` | `python rules/scripts/validate_semantic_acceptance_output.py <exact-SA-view> <target>` | that acceptor's own `SA-<target>.md` and `.csv` only; never the frozen target |
-| Stage O SA-set closure | `python rules/scripts/validate_semantic_acceptance_output.py <exact-round-root> --set --require-gate` | none; any failure invalidates the retry |
-| C | `python rules/scripts/validate_chair_output.py <exact-round-root>` | current Chair-owned `90`--`92` Markdown/CSV outputs only |
-| S | `python rules/scripts/validate_summary_output.py <exact-round-root>` | `93-user-facing-summary.md` and both `93` CSV projections only |
+| Stage O SA-set closure | `"<absolute-bundled-python>" -B scripts/stage_o_runner.py close-sa-set --run-root <absolute-run-root> --expected-transition-token <previous-token>` | none; the runner invokes the pinned validator/materializer internally and any failure invalidates the retry |
+| C | `python rules/scripts/validate_chair_output.py <exact-stage-c-view-root>` | exact unified C private view and current Chair-owned `90`--`92` Markdown/CSV outputs only; production v1 permits no helper flag |
+| S | `python rules/scripts/validate_summary_output.py <exact-stage-s-view-root>` | exact unified S private view, `93-user-facing-summary.md`, and both `93` CSV projections only |
 
 Each gate passes only when it exits `0` and its first nonempty stdout line is exactly `PASS`. Do not skip, patch, mock, replace, suppress, or wrap a validator so its diagnostics disappear. The actor may repair only the owned outputs in the table and rerun within the same still-fresh turn. It must never edit the process envelope, frozen PDF, governing inputs, staged rules, Stage-P packet after P freezes, a peer artifact, or an upstream artifact. If a failure is attributable to any such frozen input, the actor stops and reports failure to Stage O. Once the actor exits/freeze occurs, or once post-S validation fails, the retry is immutable and must be globally quarantined/restarted under `clean-room-orchestration.md`.
 
 For the doctoral R5 gate, this boundary is literal: R5 must not edit the Stage-P packet or any other frozen input. A packet/frozen-input diagnostic requires R5 to stop and report failure to Stage O; it is never repaired inside the R5 stage.
 
-The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Each SA scoped gate opens one closed target-specific view and no peer acceptance. Stage O alone checks the complete SA set and materializes its hash gate. Chair materialization and its gate use the closed C allowlist, which contains only that hash gate and never individual SA files; the gate invokes the full validator's explicit `--pre-stage-s` mode, where `93`, `94`, and `95` are forbidden and no diagnostic is waived by message matching. Stage-S materialization and its gate open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs; the gate requires its standalone process snapshot to equal the process entry in the complete stable-handle snapshot and serves every semantic CSV/Markdown read from those captured bytes. Every member is single-link, named-stream-free, and identity/byte stable through the terminal scoped PASS. Neither opens the PDF, packet, `02`--`04`, individual SA files, the SA hash gate, helpers, prior artifacts, or `95`. All validators except the two explicitly named deterministic materializers are read-only and create no `95-bundle-validation.md`.
+The ordinary reviewer and AI gates do not enumerate the round root or probe peer/downstream files. R4/R5/master's-R3 owner gates open only their exact packet and owned-ledger closure. Each SA scoped gate opens one closed target-specific view and no peer acceptance. Stage O alone checks the complete SA set and materializes its hash gate. Chair materialization and its gate run in the exact unified C private view, which contains the hash-only gate but no individual SA files, page-render tree, or helper; the C gate treats private-SA and R5-render hashes as Stage-O transport commitments and leaves byte recomputation to the final full validator. Stage-S materialization and its gate run in the exact unified S private view and open only the current R/AI/Chair summary sources, `91`/`92`, and S's three outputs. After parsing the process envelope, each private-view gate rejects any extra/missing tree entry before opening other substantive sources, then serves every semantic CSV/Markdown read from captured stable bytes and repeats its topology check at the terminal boundary. Every member is single-link, named-stream-free, and identity/byte stable through scoped PASS. S never opens the PDF, packet, `02`--`04`, individual SA files, SA hash gate, helpers, prior artifacts, or `95`; C opens only its canonical PDF/packet/ledger/report inputs. All validators except the two explicitly named deterministic materializers are read-only and create no `95-bundle-validation.md`. Stage O rechecks the externally retained prelaunch input commitment before promoting only each actor's owned outputs.
 
 The R4 citation access receipt is closed. `ContentSourceOpened` is exactly one complete source URL except for the closed dangling-citation contract, where it and `ExactSourceLocator` remain blank. Any redirect, fallback, or failed route that was actually accessed is recorded in `DispositionEvidence` as `accessed endpoint: <URL>` followed only by a semicolon, newline, or field end. Each URL occurrence is checked independently and every marked auxiliary must itself pass the complete source-endpoint gate. Bare URLs in `PublicIdentifier`, attached propositions, locators, or unmarked disposition prose do not prove access. The R4 ledger/report receipt must contain every source and explicitly marked access endpoint once; an unrecorded receipt endpoint or an omitted recorded endpoint fails both scoped and full gates.
 
@@ -612,11 +611,19 @@ recorded URL.
 
 Validator scripts and stdout are mechanical rule infrastructure only. They are never thesis/citation evidence, never decide whether a proposition is supported, and never replace packet neutrality, reviewer semantic judgment, page-level visual inspection, or Chair adjudication.
 
-After Stage S has passed its scoped gate and frozen, Stage O runs the complete validator in an environment with `pypdf` and Pillow available (the bundled Codex workspace Python includes both; with `uv`, use `uv run --with pypdf --with pillow`):
+After Stage S has passed its scoped gate and frozen, production Stage O invokes
+the complete validator only through the authoritative runner transition, using
+the Python executable and validator bytes pinned at bootstrap:
 
 ```text
-python scripts/validate_review_bundle.py <round-directory> --write-report <round-directory>/95-bundle-validation.md
+"<absolute-bundled-python>" -B scripts/stage_o_runner.py finalize --run-root <absolute-run-root> --expected-transition-token <previous-token>
 ```
+
+The runner internally executes `validate_review_bundle.py` with the exact
+final-round path and exclusive `95-bundle-validation.md` destination. A direct
+validator invocation is permitted only as read-only diagnosis when it omits
+`--write-report`; it cannot advance the Stage-O event chain or authorize
+delivery.
 
 When `--write-report` is supplied, its destination must be exactly the regular
 in-root file `95-bundle-validation.md`. If that path already exists, it must be a

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Plan and verify canonical Stage-R reviewer operational prompts.
 
-``plan`` is deliberately usable before the final process envelope exists.  It
-depends only on stable administrative fields, the eventual absolute round-root
-path, and (optionally) already planned helper basenames.  ``verify`` runs after
-Stage P and any Stage-H helpers have been frozen.  It reconstructs the prompt
-from the final process and the validator-derived Stage-R allowlist, proves the
-prompt's exact bytes and SHA-256 commitment, and authenticates every staged
-validator named by that prompt.
+``plan`` is deliberately usable before the final process envelope or reviewer
+private view exists.  It depends only on stable administrative fields, the
+eventual absolute final-round and ``run/views/Rn`` paths, and (optionally)
+already planned helper basenames.  ``verify`` runs after Stage P and any
+Stage-H helpers have been frozen and Stage O has copied the exact reviewer
+allowlist into that private view.  It reconstructs the prompt from the final
+process and the validator-derived Stage-R allowlist, proves the prompt's exact
+bytes and SHA-256 commitment, authenticates every staged validator named by
+that prompt, and proves that the closed private-view inputs are byte-identical
+to their final-round sources.
 
 This helper does not read the thesis, reviewer output, or any review finding.
 It is Stage-O process control only.
@@ -35,10 +38,11 @@ if SCRIPT_DIRECTORY not in sys.path:
 from actor_prompt_contract import render_bound_actor_contract  # noqa: E402
 
 
-PROMPT_SCHEMA = "thesis-review-stage-r-operational-prompt-v3"
-VERIFICATION_SCHEMA = "thesis-review-stage-r-prompt-verification-v2"
+PROMPT_SCHEMA = "thesis-review-stage-r-operational-prompt-v4"
+VERIFICATION_SCHEMA = "thesis-review-stage-r-prompt-verification-v3"
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
 ACTOR_RE = re.compile(r"R([1-5])\Z")
+CONTROL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
 PROCESS_COMMITMENT_RE = re.compile(
     r"(?m)^- Process-parameter file and SHA-256: "
     r"00-process-parameters\.json / ([0-9A-F]{64})$"
@@ -477,16 +481,23 @@ def safe_basename(value: Any, label: str) -> str:
     return value
 
 
+def require_control_id(value: Any, label: str) -> str:
+    if not isinstance(value, str) or CONTROL_ID_RE.fullmatch(value) is None:
+        raise ContractError(
+            f"stable process field {label} must match "
+            "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+        )
+    return value
+
+
 def stable_process_projection(process: dict[str, Any]) -> dict[str, Any]:
     missing = [field for field in STABLE_PROCESS_FIELDS if field not in process]
     if missing:
         raise ContractError(f"preplan process is missing stable field(s): {missing}")
-    for field in ("round_id", "retry_id", "output_language"):
-        value = process.get(field)
-        if not isinstance(value, str) or not value.strip() or value != value.strip():
-            raise ContractError(
-                f"stable process field {field} must be a nonempty trimmed string"
-            )
+    round_id = require_control_id(process.get("round_id"), "round_id")
+    retry_id = require_control_id(process.get("retry_id"), "retry_id")
+    if process.get("output_language") != "zh-CN":
+        raise ContractError("stable process field output_language must be exactly zh-CN")
     degree = process.get("degree_level")
     if degree not in {"masters", "doctorate"}:
         raise ContractError("stable process field degree_level must be masters or doctorate")
@@ -526,8 +537,8 @@ def stable_process_projection(process: dict[str, Any]) -> dict[str, Any]:
     if len(governing_names) != len(set(governing_names)):
         raise ContractError("stable governing neutral_file names must be duplicate-free")
     return {
-        "round_id": process["round_id"],
-        "retry_id": process["retry_id"],
+        "round_id": round_id,
+        "retry_id": retry_id,
         "frozen_pdf_file": pdf_name,
         "selected_pdf_sha256": pdf_hash.upper(),
         "physical_page_count": page_count,
@@ -675,6 +686,62 @@ def validate_actor_scratch(
     return scratch
 
 
+def validate_reviewer_view_root(
+    value: Path,
+    run_root: Path,
+    actor: str,
+    *,
+    must_exist: bool,
+) -> Path:
+    """Bind one reviewer to exactly ``<run-root>/views/<actor>``.
+
+    Planning intentionally happens before Stage O publishes the view, whereas
+    verification requires the completed read-only input tree.  In both phases
+    the ``views`` parent already exists, so ``absolute_no_alias`` can reject
+    alternate filesystem spellings without following a future path.
+    """
+
+    views_root = absolute_no_alias(
+        run_root / "views", "run-root views directory", must_exist=True
+    )
+    require_safe_directory(views_root, "run-root views directory")
+    candidate = absolute_no_alias(
+        value, "reviewer private view root", must_exist=must_exist
+    )
+    expected = absolute_no_alias(
+        views_root / actor,
+        f"canonical {actor} private view root",
+        must_exist=must_exist,
+    )
+    if (
+        os.path.normcase(os.fspath(candidate))
+        != os.path.normcase(os.fspath(expected))
+        or candidate.parent != views_root
+        or candidate.name != actor
+    ):
+        raise ContractError(
+            "reviewer private view must be exactly the actor-ID direct child "
+            f"of <run-root>/views: expected {expected}"
+        )
+    finalized_round = run_root / "round"
+    if (
+        is_within(candidate, finalized_round)
+        or is_within(finalized_round, candidate)
+        or (must_exist and boundaries_overlap(candidate, finalized_round))
+    ):
+        raise ContractError(
+            "reviewer private view and finalized round root must not overlap"
+        )
+    if must_exist:
+        require_safe_directory(candidate, "reviewer private view root")
+    elif os.path.lexists(candidate) or is_link_or_reparse(candidate):
+        raise ContractError(
+            "reviewer private view must not exist during prompt planning; "
+            "Stage O publishes it only after the final inputs are frozen"
+        )
+    return candidate
+
+
 def validate_helper_inputs(values: Iterable[str], validator: Any) -> list[str]:
     result: list[str] = []
     for index, value in enumerate(values):
@@ -801,57 +868,57 @@ def canonical_validator_commitments(
 
 def reviewer_gate_commands(
     python_executable: Path,
-    round_root: Path,
+    view_root: Path,
     process: dict[str, Any],
     actor: str,
 ) -> list[list[str]]:
     actor = require_reviewer_actor(process, actor)
     python = str(python_executable)
     degree = process["degree_level"]
-    materializer = str(round_root / "rules/scripts/materialize_owner_outputs.py")
+    materializer = str(view_root / "rules/scripts/materialize_owner_outputs.py")
     if degree == "doctorate" and actor == "R4":
         return [
-            [python, "-B", materializer, str(round_root), "R4"],
+            [python, "-B", materializer, str(view_root), "R4"],
             [
                 python,
                 "-B",
-                str(round_root / "rules/scripts/validate_r4_output.py"),
-                str(round_root),
+                str(view_root / "rules/scripts/validate_r4_output.py"),
+                str(view_root),
             ],
         ]
     if degree == "doctorate" and actor == "R5":
         return [
-            [python, "-B", materializer, str(round_root), "R5"],
+            [python, "-B", materializer, str(view_root), "R5"],
             [
                 python,
                 "-B",
-                str(round_root / "rules/scripts/validate_r5_output.py"),
-                str(round_root),
+                str(view_root / "rules/scripts/validate_r5_output.py"),
+                str(view_root),
             ],
         ]
     if degree == "masters" and actor == "R3":
         return [
-            [python, "-B", materializer, str(round_root), "R3"],
+            [python, "-B", materializer, str(view_root), "R3"],
             [
                 python,
                 "-B",
-                str(round_root / "rules/scripts/validate_master_r3_output.py"),
-                str(round_root),
+                str(view_root / "rules/scripts/validate_master_r3_output.py"),
+                str(view_root),
             ],
         ]
     return [
         [
             python,
             "-B",
-            str(round_root / "rules/scripts/validate_reviewer_output.py"),
-            str(round_root),
+            str(view_root / "rules/scripts/validate_reviewer_output.py"),
+            str(view_root),
             actor,
         ]
     ]
 
 
 def render_prompt(
-    round_root: Path,
+    view_root: Path,
     actor: str,
     process: dict[str, Any],
     opened: list[str],
@@ -866,18 +933,18 @@ def render_prompt(
     persona = validator.PERSONA_ASSIGNMENTS[process["degree_level"]][index]
     outputs = reviewer_owned_outputs(process, actor)
     opened_lines = "\n".join(
-        f"{number}. {round_root / Path(relative)}"
+        f"{number}. {view_root / Path(relative)}"
         for number, relative in enumerate(opened, start=1)
     )
     output_lines = "\n".join(
-        f"- {round_root / Path(relative)}" for relative in outputs
+        f"- {view_root / Path(relative)}" for relative in outputs
     )
     commitment_lines = "\n".join(
         f"- {relative} SHA-256: {digest}"
         for relative, digest in validator_commitments.items()
     )
     gate_commands = reviewer_gate_commands(
-        python_executable, round_root, process, actor
+        python_executable, view_root, process, actor
     )
     command_lines = "\n".join(
         f"{number}. {json.dumps(command, ensure_ascii=False, separators=(',', ':'))}"
@@ -893,7 +960,7 @@ Actor ID: {actor}
 Persona assignment: {persona}
 Review round ID: {process['round_id']}
 Review retry ID: {process['retry_id']}
-Frozen PDF file: {round_root / process['frozen_pdf_file']}
+Frozen PDF file: {view_root / process['frozen_pdf_file']}
 Frozen PDF SHA-256: {process['selected_pdf_sha256']}
 Frozen physical page count: {process['physical_page_count']}
 Degree level: {process['degree_level']}
@@ -910,8 +977,12 @@ Frozen validator commitments:
 
 Perform one independent, holistic, PDF-only review as {actor}. Apply every Gate A--I to the entire frozen thesis before the persona-weighted deep review. Do not enumerate neighboring paths, contact another actor, or open any local file not listed below. Do not use conversation history, user explanations, prior reviews, thesis source, Git, sibling papers, code, experiment records, or any other author-side material. No follow-up message will be sent after dispatch.
 
-Round root:
-{round_root}
+Reviewer private view root: {view_root}
+Exact Codex workspace (`-C`) value: {view_root}
+
+The final round directory is Stage-O-only process control and is not visible to
+this actor. Treat the private view above as the complete local workspace and do
+not infer, enumerate, or open its parent or any sibling path.
 
 Private scratch boundary:
 Stage O may dispatch these bytes only after `verify` has confirmed that the scratch directory above is empty, outside and non-overlapping with the complete run root, and unique to this round/retry/actor by its bound basename. It is the only place for transient files created by this actor. Do not enumerate its parent or any neighboring path, and do not treat scratch content as review evidence. Remove all transient content before freeze; final outputs belong only at the actor-owned paths below.
@@ -970,6 +1041,7 @@ def exclusive_write(path: Path, value: bytes) -> tuple[str, dict[str, int]]:
 def plan_prompt(
     process_path_value: Path,
     round_root_value: Path,
+    view_root_value: Path,
     actor_value: str,
     output_value: Path,
     python_executable_value: Path,
@@ -998,6 +1070,12 @@ def plan_prompt(
         read_json_object(process_path, "preplan process envelope")
     )
     actor = require_reviewer_actor(process, actor_value)
+    view_root = validate_reviewer_view_root(
+        view_root_value,
+        inferred_run_root,
+        actor,
+        must_exist=False,
+    )
     python_executable, python_sha256 = validate_python_executable(
         python_executable_value
     )
@@ -1027,7 +1105,7 @@ def plan_prompt(
     )
     commitments = canonical_validator_commitments(opened, validator)
     prompt = render_prompt(
-        round_root,
+        view_root,
         actor,
         process,
         opened,
@@ -1054,12 +1132,20 @@ def plan_prompt(
         actor,
         run_root=inferred_run_root,
     )
+    validate_reviewer_view_root(
+        view_root,
+        inferred_run_root,
+        actor,
+        must_exist=False,
+    )
     if regular_file_snapshot(output, "created prompt output") != output_snapshot:
         raise ContractError("created prompt output changed during prompt planning")
     return {
         "schema": PROMPT_SCHEMA,
         "actor": actor,
         "round_root": str(round_root),
+        "view_root": str(view_root),
+        "codex_workspace": str(view_root),
         "prompt_file": str(output),
         "prompt_sha256": digest,
         "python_executable": str(python_executable),
@@ -1071,7 +1157,7 @@ def plan_prompt(
         "owned_outputs": reviewer_owned_outputs(process, actor),
         "validator_sha256": commitments,
         "gate_commands": reviewer_gate_commands(
-            python_executable, round_root, process, actor
+            python_executable, view_root, process, actor
         ),
     }
 
@@ -1303,6 +1389,85 @@ def round_topology_snapshot(
     return snapshot
 
 
+def exact_private_view_snapshot(
+    view_root: Path,
+    opened: Iterable[str],
+) -> dict[str, tuple[int, int, int, int, int, int, int]]:
+    """Require the pre-dispatch reviewer view to contain only opened inputs.
+
+    Actor outputs must not exist before dispatch.  Parent directories needed by
+    nested inputs (``rules/scripts`` and an optional ``helpers`` directory) are
+    the only directories admitted.  Unknown entries are rejected solely by
+    pathname/metadata inspection; their bytes are never opened.
+    """
+
+    expected_files: set[str] = set()
+    expected_directories = {"."}
+    for index, value in enumerate(opened):
+        normalized = Path(value.replace("\\", "/"))
+        if (
+            normalized.is_absolute()
+            or not normalized.parts
+            or "." in normalized.parts
+            or ".." in normalized.parts
+            or any(":" in part for part in normalized.parts)
+        ):
+            raise ContractError(
+                f"private-view opened input {index} is not a safe relative path: {value!r}"
+            )
+        relative = normalized.as_posix()
+        if relative in expected_files:
+            raise ContractError(
+                f"private-view opened inputs contain a duplicate: {relative}"
+            )
+        expected_files.add(relative)
+        parent = normalized.parent
+        while parent != Path("."):
+            expected_directories.add(parent.as_posix())
+            parent = parent.parent
+
+    observed = round_topology_snapshot(view_root)
+    observed_files = {
+        relative
+        for relative, identity in observed.items()
+        if relative != "." and stat.S_ISREG(identity[2])
+    }
+    observed_directories = {
+        relative
+        for relative, identity in observed.items()
+        if stat.S_ISDIR(identity[2])
+    }
+    if observed_files != expected_files or observed_directories != expected_directories:
+        raise ContractError(
+            "reviewer private view is not the exact closed pre-dispatch input tree; "
+            f"missing_files={sorted(expected_files - observed_files)}, "
+            f"extra_files={sorted(observed_files - expected_files)}, "
+            f"missing_directories={sorted(expected_directories - observed_directories)}, "
+            f"extra_directories={sorted(observed_directories - expected_directories)}"
+        )
+    return observed
+
+
+def require_matching_source_and_view_inputs(
+    source: dict[str, tuple[str, dict[str, int]]],
+    private_view: dict[str, tuple[str, dict[str, int]]],
+) -> None:
+    if list(source) != list(private_view):
+        raise ContractError(
+            "final-round and reviewer-private-view input path orders differ"
+        )
+    mismatches = [
+        relative
+        for relative in source
+        if source[relative][0] != private_view[relative][0]
+    ]
+    if mismatches:
+        raise ContractError(
+            "reviewer private-view input bytes differ from their staged "
+            f"final-round sources: {mismatches}"
+        )
+
+
 def require_unchanged_round_topology(
     round_root: Path,
     expected: dict[str, tuple[int, int, int, int, int, int, int]],
@@ -1317,7 +1482,7 @@ def require_unchanged_round_topology(
             if expected[path] != observed[path]
         )
         raise ContractError(
-            "closed Stage-P round topology changed during reviewer prompt "
+            "closed reviewer private-view topology changed during prompt "
             f"verification; added={added}, removed={removed}, changed={changed}"
         )
 
@@ -1325,9 +1490,10 @@ def require_unchanged_round_topology(
 def require_terminal_stage_r_closure(
     *,
     round_root: Path,
-    round_topology: dict[str, tuple[int, int, int, int, int, int, int]],
-    opened_snapshots: dict[str, tuple[str, dict[str, int]]],
-    helper_snapshots: dict[str, tuple[str, dict[str, int]]],
+    view_root: Path,
+    view_topology: dict[str, tuple[int, int, int, int, int, int, int]],
+    source_opened_snapshots: dict[str, tuple[str, dict[str, int]]],
+    view_opened_snapshots: dict[str, tuple[str, dict[str, int]]],
     process_path: Path,
     process_snapshot: tuple[str, dict[str, int]],
     python_executable: Path,
@@ -1353,8 +1519,11 @@ def require_terminal_stage_r_closure(
         actor,
         run_root=run_root,
     )
-    require_unchanged_opened_inputs(round_root, opened_snapshots)
-    require_unchanged_helper_inputs(round_root, helper_snapshots)
+    require_unchanged_opened_inputs(round_root, source_opened_snapshots)
+    require_unchanged_opened_inputs(view_root, view_opened_snapshots)
+    require_matching_source_and_view_inputs(
+        source_opened_snapshots, view_opened_snapshots
+    )
     for path, expected, label in (
         (process_path, process_snapshot, "final process envelope"),
         (python_executable, python_snapshot, "bundled/workspace Python executable"),
@@ -1362,11 +1531,13 @@ def require_terminal_stage_r_closure(
     ):
         if regular_file_snapshot(path, label) != expected:
             raise ContractError(f"{label} changed during final Stage-R closure")
-    # The complete topology snapshot also rechecks every opened/helper file's
+    # The exact private-view topology snapshot also rechecks every opened file's
     # link count, all directory boundaries, and the absence of extra entries.
-    # Keep it last inside the composite so late hardlinks and late files cannot
-    # survive an earlier per-file check.
-    require_unchanged_round_topology(round_root, round_topology)
+    # Keep it last so a late output, hardlink, or hidden peer file cannot survive
+    # an earlier per-file check.  The finalized round is intentionally not
+    # enumerated: it is a source store and may already contain frozen peer
+    # outputs which are outside this reviewer's view.
+    require_unchanged_round_topology(view_root, view_topology)
 
 
 def require_unchanged_helper_inputs(
@@ -1489,6 +1660,7 @@ def verify_stage_p_gate(
 def verify_prompt(
     run_root_value: Path,
     round_root_value: Path,
+    view_root_value: Path,
     prompt_value: Path,
     actor_value: str,
     expected_process_sha256: str,
@@ -1569,6 +1741,16 @@ def verify_prompt(
     process = strict_json_bytes(process_bytes, "final process envelope")
     stable = stable_process_projection(process)
     actor = require_reviewer_actor(stable, actor_value)
+    view_root = validate_reviewer_view_root(
+        view_root_value,
+        run_root,
+        actor,
+        must_exist=True,
+    )
+    if is_within_boundary(prompt_path, view_root):
+        raise ContractError(
+            "planned reviewer prompt must remain outside the reviewer private view"
+        )
     scratch_dir = validate_actor_scratch(
         scratch_dir_value,
         round_root,
@@ -1579,6 +1761,19 @@ def verify_prompt(
     if is_within_boundary(prompt_path, scratch_dir):
         raise ContractError(
             "planned reviewer prompt must remain outside the actor-private scratch directory"
+        )
+    view_process_path = view_root / "00-process-parameters.json"
+    view_process_snapshot_sha256, view_process_snapshot_identity = (
+        regular_file_snapshot(view_process_path, "private-view process envelope")
+    )
+    if view_process_snapshot_sha256 != process_sha256:
+        raise ContractError(
+            "reviewer private-view process bytes differ from the sealed final process"
+        )
+    if manifest_process_commitment(view_root) != process_sha256:
+        raise ContractError(
+            "reviewer private-view manifest process commitment differs from the "
+            "sealed final process bytes"
         )
 
     validator = canonical_validator()
@@ -1619,6 +1814,48 @@ def verify_prompt(
             + "; ".join(helper_errors)
         )
 
+    view_process = read_json_object(
+        view_process_path, "private-view process envelope"
+    )
+    if view_process != process:
+        raise ContractError(
+            "reviewer private-view process projection differs from the final process"
+        )
+    view_process_errors: list[str] = []
+    view_validated_process, _view_pdf, _view_hash, _view_pages, view_count, _view_sizes = (
+        validator.validate_process(
+            view_root,
+            view_process_errors,
+            enforce_single_reviewer_pdf=True,
+            validate_governing_file_bytes=True,
+            validate_frozen_pdf_bytes=True,
+            stage_v_present_override=stage_v_present,
+            process_override=view_process,
+        )
+    )
+    if view_process_errors:
+        raise ContractError(
+            "reviewer private-view process/PDF/governing inputs fail the canonical "
+            "process contract: " + "; ".join(view_process_errors)
+        )
+    if view_validated_process != process or view_count != validated_count:
+        raise ContractError(
+            "reviewer private-view process projection differs from the finalized round"
+        )
+    view_helper_errors: list[str] = []
+    validator.validate_helper_bundle(
+        view_root,
+        str(process["selected_pdf_sha256"]).upper(),
+        process,
+        validated_count,
+        view_helper_errors,
+    )
+    if view_helper_errors:
+        raise ContractError(
+            "reviewer private-view helper bundle fails the canonical provenance "
+            "contract: " + "; ".join(view_helper_errors)
+        )
+
     actual_opened = algorithmic_opened_inputs(
         process,
         actor,
@@ -1628,9 +1865,23 @@ def verify_prompt(
     )
     if not actual_opened:
         raise ContractError(f"canonical validator returned an empty allowlist for {actor}")
-    opened_snapshots = snapshot_opened_inputs(round_root, actual_opened)
-    helper_snapshots = snapshot_helper_inputs(round_root, actual_opened)
-    round_topology = round_topology_snapshot(round_root)
+    view_opened = algorithmic_opened_inputs(
+        process,
+        actor,
+        validator,
+        helper_inputs=helper_inputs,
+        round_root=view_root,
+    )
+    if view_opened != actual_opened:
+        raise ContractError(
+            "reviewer private-view allowlist differs from the finalized source allowlist"
+        )
+    source_opened_snapshots = snapshot_opened_inputs(round_root, actual_opened)
+    view_opened_snapshots = snapshot_opened_inputs(view_root, view_opened)
+    require_matching_source_and_view_inputs(
+        source_opened_snapshots, view_opened_snapshots
+    )
+    view_topology = exact_private_view_snapshot(view_root, view_opened)
 
     expected_commitments = canonical_validator_commitments(actual_opened, validator)
     prompt_commitments = parse_prompt_validator_commitments(prompt_bytes)
@@ -1638,10 +1889,10 @@ def verify_prompt(
         raise ContractError(
             "reviewer prompt validator commitments differ from the canonical Stage-R set"
         )
-    verify_staged_validator_commitments(round_root, expected_commitments)
+    verify_staged_validator_commitments(view_root, expected_commitments)
 
     expected_prompt = render_prompt(
-        round_root,
+        view_root,
         actor,
         stable,
         actual_opened,
@@ -1683,6 +1934,19 @@ def verify_prompt(
             "frozen Stage-H helper bundle changed or fails after the Stage-P gate: "
             + "; ".join(post_helper_errors)
         )
+    post_view_helper_errors: list[str] = []
+    validator.validate_helper_bundle(
+        view_root,
+        str(process["selected_pdf_sha256"]).upper(),
+        process,
+        validated_count,
+        post_view_helper_errors,
+    )
+    if post_view_helper_errors:
+        raise ContractError(
+            "reviewer private-view helper bundle changed or fails after the "
+            "Stage-P gate: " + "; ".join(post_view_helper_errors)
+        )
     post_opened = algorithmic_opened_inputs(
         process,
         actor,
@@ -1692,8 +1956,23 @@ def verify_prompt(
     )
     if post_opened != actual_opened:
         raise ContractError("Stage-R opened allowlist changed across Stage-P verification")
-    require_unchanged_helper_inputs(round_root, helper_snapshots)
-    require_unchanged_opened_inputs(round_root, opened_snapshots)
+    post_view_opened = algorithmic_opened_inputs(
+        process,
+        actor,
+        validator,
+        helper_inputs=helper_inputs,
+        round_root=view_root,
+    )
+    if post_view_opened != view_opened:
+        raise ContractError(
+            "reviewer private-view opened allowlist changed across Stage-P verification"
+        )
+    require_unchanged_opened_inputs(round_root, source_opened_snapshots)
+    require_unchanged_opened_inputs(view_root, view_opened_snapshots)
+    require_matching_source_and_view_inputs(
+        source_opened_snapshots, view_opened_snapshots
+    )
+    require_unchanged_round_topology(view_root, view_topology)
     process_sha256_after, process_identity_after = regular_file_snapshot(
         process_path, "final process envelope"
     )
@@ -1727,6 +2006,10 @@ def verify_prompt(
     )
     if manifest_process_commitment(round_root) != process_sha256:
         raise ContractError("Stage-P manifest changed during prompt verification")
+    if manifest_process_commitment(view_root) != process_sha256:
+        raise ContractError(
+            "reviewer private-view manifest changed during prompt verification"
+        )
     final_seal_result = verify_real_process_seal(
         run_root, expected_process_sha256, expected_seal_sha256
     )
@@ -1737,8 +2020,11 @@ def verify_prompt(
     )
     if terminal_stage_p_gate != stage_p_gate:
         raise ContractError("Stage-P scoped gate result changed during verification")
-    require_unchanged_opened_inputs(round_root, opened_snapshots)
-    require_unchanged_helper_inputs(round_root, helper_snapshots)
+    require_unchanged_opened_inputs(round_root, source_opened_snapshots)
+    require_unchanged_opened_inputs(view_root, view_opened_snapshots)
+    require_matching_source_and_view_inputs(
+        source_opened_snapshots, view_opened_snapshots
+    )
     terminal_process_sha256, terminal_process_identity = regular_file_snapshot(
         process_path, "final process envelope"
     )
@@ -1770,9 +2056,12 @@ def verify_prompt(
         actor,
         run_root=run_root,
     )
-    require_unchanged_round_topology(round_root, round_topology)
-    require_unchanged_opened_inputs(round_root, opened_snapshots)
-    require_unchanged_helper_inputs(round_root, helper_snapshots)
+    require_unchanged_round_topology(view_root, view_topology)
+    require_unchanged_opened_inputs(round_root, source_opened_snapshots)
+    require_unchanged_opened_inputs(view_root, view_opened_snapshots)
+    require_matching_source_and_view_inputs(
+        source_opened_snapshots, view_opened_snapshots
+    )
     post_scratch_process = regular_file_snapshot(
         process_path, "final process envelope"
     )
@@ -1803,12 +2092,24 @@ def verify_prompt(
         raise ContractError(
             "reviewer prompt changed after the terminal scratch check"
         )
+    post_scratch_view_process = regular_file_snapshot(
+        view_process_path, "private-view process envelope"
+    )
+    if post_scratch_view_process != (
+        view_process_snapshot_sha256,
+        view_process_snapshot_identity,
+    ):
+        raise ContractError(
+            "reviewer private-view process changed after the terminal scratch check"
+        )
     result = {
         "schema": VERIFICATION_SCHEMA,
         "status": "VERIFIED",
         "actor": actor,
         "run_root": str(run_root),
         "round_root": str(round_root),
+        "view_root": str(view_root),
+        "codex_workspace": str(view_root),
         "prompt_file": str(prompt_path),
         "prompt_sha256": prompt_sha256,
         "process_prompt_sha256": process_prompt_sha256,
@@ -1825,14 +2126,15 @@ def verify_prompt(
         "owned_outputs": reviewer_owned_outputs(stable, actor),
         "validator_sha256": expected_commitments,
         "gate_commands": reviewer_gate_commands(
-            python_executable, round_root, stable, actor
+            python_executable, view_root, stable, actor
         ),
     }
     require_terminal_stage_r_closure(
         round_root=round_root,
-        round_topology=round_topology,
-        opened_snapshots=opened_snapshots,
-        helper_snapshots=helper_snapshots,
+        view_root=view_root,
+        view_topology=view_topology,
+        source_opened_snapshots=source_opened_snapshots,
+        view_opened_snapshots=view_opened_snapshots,
         process_path=process_path,
         process_snapshot=(process_snapshot_sha256, process_snapshot_identity),
         python_executable=python_executable,
@@ -1863,6 +2165,7 @@ def main(argv: list[str] | None = None) -> int:
     plan_parser = subparsers.add_parser("plan")
     plan_parser.add_argument("--process", type=Path, required=True)
     plan_parser.add_argument("--round-root", type=Path, required=True)
+    plan_parser.add_argument("--view-root", type=Path, required=True)
     plan_parser.add_argument("--actor", required=True)
     plan_parser.add_argument("--output", type=Path, required=True)
     plan_parser.add_argument("--python-executable", type=Path, required=True)
@@ -1874,6 +2177,7 @@ def main(argv: list[str] | None = None) -> int:
     verify_parser = subparsers.add_parser("verify")
     verify_parser.add_argument("--run-root", type=Path, required=True)
     verify_parser.add_argument("--round-root", type=Path, required=True)
+    verify_parser.add_argument("--view-root", type=Path, required=True)
     verify_parser.add_argument("--prompt", type=Path, required=True)
     verify_parser.add_argument("--actor", required=True)
     verify_parser.add_argument("--expected-process-sha256", required=True)
@@ -1894,6 +2198,7 @@ def main(argv: list[str] | None = None) -> int:
                 plan_prompt(
                     args.process,
                     args.round_root,
+                    args.view_root,
                     args.actor,
                     args.output,
                     args.python_executable,
@@ -1906,6 +2211,7 @@ def main(argv: list[str] | None = None) -> int:
             verify_prompt(
                 args.run_root,
                 args.round_root,
+                args.view_root,
                 args.prompt,
                 args.actor,
                 args.expected_process_sha256,

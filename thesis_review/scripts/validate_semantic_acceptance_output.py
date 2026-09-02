@@ -2361,24 +2361,9 @@ def parse_target_hashes(
 def target_public_endpoints(
     root: Path, process: dict[str, Any], target: str, shared: Any, errors: list[str]
 ) -> set[str]:
-    if target == "AI":
-        return set()
-    allowed = {
-        value
-        for value in process.get("governing_rule_urls", [])
-        if isinstance(value, str)
-    }
-    if target_is_page_bib_owner(process, target):
-        rows = read_generic_csv(
-            root / "03-bibliography-audit-ledger.csv", errors
-        )
-        allowed.update(shared.bibliography_ledger_public_endpoint_sequence(rows))
-    if target_is_citation_owner(process, target):
-        rows = read_generic_csv(
-            root / "04-citation-claim-audit-ledger.csv", errors
-        )
-        allowed.update(shared.citation_ledger_public_endpoint_sequence(rows))
-    return allowed
+    """Return the closed no-network authority for every semantic acceptor."""
+
+    return set()
 
 
 def exact_singleton_physical_pages(value: str) -> set[int]:
@@ -3221,8 +3206,6 @@ def validate_actor(
     if fresh != FRESH_CONTEXT_SENTENCE:
         errors.append(f"{acceptance_md.name}: noncanonical fresh-context declaration")
     receipt = shared.parse_closed_access_receipt(receipt_value, acceptance_md.name, errors)
-    allowed_public = target_public_endpoints(root, process, target, shared, errors)
-    receipt_public: list[str] = []
     if receipt:
         if receipt.get("received") != ["operational prompt"]:
             errors.append(f"{acceptance_md.name}: received must be [operational prompt]")
@@ -3230,21 +3213,10 @@ def validate_actor(
             errors.append(
                 f"{acceptance_md.name}: opened list must exactly equal the canonical SA-{target} allowlist"
             )
-        receipt_public = receipt.get("public_endpoints", [])
-        if receipt_public == ["none"]:
-            receipt_public = []
-        elif len(receipt_public) != len(set(receipt_public)):
+        declared_public = receipt.get("public_endpoints", [])
+        if declared_public != ["none"]:
             errors.append(
-                f"{acceptance_md.name}: public_endpoints must be duplicate-free"
-            )
-        if target == "AI" and receipt_public:
-            errors.append(
-                f"{acceptance_md.name}: SA-AI public_endpoints must be [none]"
-            )
-        unknown_public = sorted(set(receipt_public) - allowed_public)
-        if unknown_public:
-            errors.append(
-                f"{acceptance_md.name}: public endpoints outside target authority {unknown_public}"
+                f"{acceptance_md.name}: all SA public_endpoints must be exactly [none]"
             )
         for item in receipt.get("opened", []):
             if Path(item).is_absolute() or ".." in Path(item).parts or FORBIDDEN_INPUT_TOKEN_RE.search(item):
@@ -4033,10 +4005,6 @@ def validate_actor(
         )
     if len(row_ids) != len(set(row_ids)):
         errors.append(f"{acceptance_csv.name}: duplicate AcceptanceRowID values")
-    if any(url not in set(receipt_public) for url in used_urls):
-        errors.append(
-            f"{acceptance_csv.name}: evidence cites public endpoints absent from the SA receipt"
-        )
     if target == "AI" and used_urls:
         errors.append(
             f"{acceptance_csv.name}: SA-AI evidence must not cite public endpoints"

@@ -10,6 +10,7 @@ thread. The record is operational provenance only; it is not thesis evidence.
 from __future__ import annotations
 
 import argparse
+import ast
 import hashlib
 import json
 import os
@@ -32,7 +33,7 @@ ACTOR_RE = re.compile(
     r"(?:P|H(?:0[1-9]|[1-9][0-9])|R[1-5]|AI|SA-(?:R[1-5]|AI)|C|S|V)\Z"
 )
 SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
-LAUNCH_RECORD_SCHEMA = "thesis-review-actor-launch-v1"
+LAUNCH_RECORD_SCHEMA = "thesis-review-actor-launch-v3"
 LAUNCH_RECORD_FIELDS = frozenset(
     {
         "schema",
@@ -41,6 +42,10 @@ LAUNCH_RECORD_FIELDS = frozenset(
         "prompt_path",
         "prompt_bytes",
         "prompt_sha256",
+        "process_sha256",
+        "process_seal_sha256",
+        "input_commitment_sha256",
+        "output_commitment_sha256",
         "executable_path",
         "executable_sha256",
         "argv",
@@ -64,12 +69,14 @@ REQUIRED_EXEC_FLAGS = (
 )
 OPTIONAL_EXEC_FLAGS = (
     "--skip-git-repo-check",
-    "--dangerously-bypass-approvals-and-sandbox",
 )
 MULTI_AGENT_DISABLE_FORMS = (
     "--disable multi_agent",
     "--disable=multi_agent",
     "-c features.multi_agent=false",
+)
+NO_PUBLIC_NETWORK_ACTOR_RE = re.compile(
+    r"(?:H(?:0[1-9]|[1-9][0-9])|AI|SA-AI|S|V)\Z"
 )
 
 COLLAB_EVENT_TYPES = {
@@ -202,6 +209,29 @@ MODEL_RUNNER_TARGETS = frozenset(
         "opencode",
     }
 )
+PYTHON_BASENAMES = {
+    "py",
+    "py.exe",
+    "python",
+    "python.exe",
+    "python3",
+    "python3.exe",
+}
+PUBLIC_NETWORK_CLIENT_BASENAMES = {
+    "aria2c",
+    "aria2c.exe",
+    "curl",
+    "curl.exe",
+    "invoke-restmethod",
+    "invoke-webrequest",
+    "irm",
+    "iwr",
+    "start-bitstransfer",
+    "wget",
+    "wget.exe",
+    "wget2",
+    "wget2.exe",
+}
 RECONNECT_MESSAGE_RE = re.compile(
     r"Reconnecting\.\.\. ([1-9][0-9]*)/([1-9][0-9]*) "
     r"\(([^()\r\n]+)\)\Z"
@@ -1448,6 +1478,157 @@ def _start_process_payload(remainder: str) -> str | None:
     return None
 
 
+def _python_invocation_payload(remainder: str) -> tuple[str, str] | None:
+    """Extract the executable payload from one Python command line.
+
+    Only literal command-line syntax is interpreted.  In particular, this does
+    not scan command output or agent prose for model/client names.
+    """
+
+    tokens = _command_tokens(remainder)
+    cursor = 0
+    options_with_values = {
+        "--check-hash-based-pycs",
+        "-W",
+        "-X",
+    }
+    while cursor < len(tokens):
+        token = tokens[cursor]
+        lowered = token.lower()
+        if lowered in {"-c", "-m"}:
+            if cursor + 1 >= len(tokens):
+                return None
+            return ("code" if lowered == "-c" else "module", tokens[cursor + 1])
+        if lowered.startswith("-c") and len(token) > 2:
+            return "code", token[2:]
+        if lowered.startswith("-m") and len(token) > 2:
+            return "module", token[2:]
+        if lowered == "--":
+            return ("script", tokens[cursor + 1]) if cursor + 1 < len(tokens) else None
+        if lowered in options_with_values:
+            cursor += 2
+            continue
+        if lowered.startswith("-"):
+            cursor += 1
+            continue
+        return "script", token
+    return None
+
+
+def _ast_dotted_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _ast_dotted_name(node.value)
+        return f"{prefix}.{node.attr}" if prefix else node.attr
+    return ""
+
+
+def _literal_command_from_ast(node: ast.AST) -> str | None:
+    """Render only a literal subprocess command, never arbitrary Python data."""
+
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, (ast.List, ast.Tuple)):
+        values: list[str] = []
+        for element in node.elts:
+            if not isinstance(element, ast.Constant) or not isinstance(
+                element.value, str
+            ):
+                return None
+            values.append(element.value)
+        if values:
+            return " ".join(json.dumps(value) for value in values)
+    return None
+
+
+def _python_call_aliases(tree: ast.AST) -> tuple[set[str], set[str], set[str]]:
+    """Return subprocess-module, os-module, and imported process-call aliases."""
+
+    subprocess_modules = {"subprocess"}
+    os_modules = {"os"}
+    direct_calls: set[str] = set()
+    subprocess_calls = {"run", "Popen", "call", "check_call", "check_output"}
+    os_calls = {"system", "popen", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == "subprocess":
+                    subprocess_modules.add(alias.asname or alias.name)
+                elif alias.name == "os":
+                    os_modules.add(alias.asname or alias.name)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == "subprocess":
+                for alias in node.names:
+                    if alias.name in subprocess_calls:
+                        direct_calls.add(alias.asname or alias.name)
+            elif node.module == "os":
+                for alias in node.names:
+                    if alias.name in os_calls:
+                        direct_calls.add(alias.asname or alias.name)
+    return subprocess_modules, os_modules, direct_calls
+
+
+def _python_process_call_commands(code: str) -> list[str]:
+    """Return literal commands passed to Python process-launch APIs."""
+
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, TypeError):
+        return []
+    subprocess_modules, os_modules, direct_calls = _python_call_aliases(tree)
+    subprocess_calls = {"run", "Popen", "call", "check_call", "check_output"}
+    os_calls = {"system", "popen", "execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe"}
+    commands: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = _ast_dotted_name(node.func)
+        if "." in dotted:
+            module, method = dotted.split(".", 1)
+            recognized = (
+                module in subprocess_modules and method in subprocess_calls
+            ) or (module in os_modules and method in os_calls)
+        else:
+            recognized = dotted in direct_calls
+        if not recognized:
+            continue
+        candidates: list[ast.AST] = []
+        if node.args:
+            candidates.append(node.args[0])
+        candidates.extend(
+            keyword.value
+            for keyword in node.keywords
+            if keyword.arg in {"args", "executable"}
+        )
+        for candidate in candidates:
+            rendered = _literal_command_from_ast(candidate)
+            if rendered:
+                commands.append(rendered)
+    return commands
+
+
+def _python_code_launches_model(code: str, *, depth: int) -> str | None:
+    for command in _python_process_call_commands(code):
+        nested = _command_launches_model(
+            command, _depth=depth + 1, _dialect="posix"
+        )
+        if nested:
+            return f"Python process API -> {nested}"
+    return None
+
+
+def _python_script_is_model_runner(value: str) -> bool:
+    token = value.strip().strip('"\'').replace("\\", "/")
+    basename = token.rsplit("/", 1)[-1].lower()
+    stem, suffix = os.path.splitext(basename)
+    if suffix not in {".py", ".pyw"}:
+        return False
+    return _is_model_runner_target(stem) or _is_model_runner_target(
+        stem.replace("_", "-")
+    )
+
+
 def _command_launches_model(
     command: str, *, _depth: int = 0, _dialect: str = "powershell"
 ) -> str | None:
@@ -1547,17 +1728,133 @@ def _command_launches_model(
             remainder,
         ):
             return f"{executable} Codex JavaScript entrypoint"
-        if executable in {
-            "python",
-            "python.exe",
-            "python3",
-            "python3.exe",
-            "py",
-            "py.exe",
-        }:
-            module_match = re.search(r"(?i)(?:^|\s)-m\s+([^\s]+)", remainder)
-            if module_match and _is_model_runner_target(module_match.group(1)):
-                return f"{executable} -m model client {module_match.group(1)}"
+        if executable in PYTHON_BASENAMES:
+            invocation = _python_invocation_payload(remainder)
+            if invocation is None:
+                continue
+            kind, payload = invocation
+            if kind == "module" and _is_model_runner_target(payload):
+                return f"{executable} -m model client {payload}"
+            if kind == "code":
+                nested = _python_code_launches_model(payload, depth=_depth)
+                if nested:
+                    return f"{executable} -c -> {nested}"
+            if kind == "script" and _python_script_is_model_runner(payload):
+                return f"{executable} model-client script {payload}"
+    return None
+
+
+def _python_code_accesses_public_network(code: str, *, depth: int) -> str | None:
+    for command in _python_process_call_commands(code):
+        nested = _command_accesses_public_network(
+            command, _depth=depth + 1, _dialect="posix"
+        )
+        if nested:
+            return f"Python process API -> {nested}"
+
+    try:
+        tree = ast.parse(code)
+    except (SyntaxError, ValueError, TypeError):
+        return None
+    network_call_patterns = (
+        re.compile(r"(?:^|\.)(?:requests|httpx)\.(?:request|get|post|put|patch|delete|head|options)\Z", re.I),
+        re.compile(r"(?:^|\.)urllib\.request\.(?:urlopen|urlretrieve)\Z", re.I),
+        re.compile(r"(?:^|\.)socket\.create_connection\Z", re.I),
+        re.compile(r"(?:^|\.)webbrowser\.open(?:_new|_new_tab)?\Z", re.I),
+    )
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        dotted = _ast_dotted_name(node.func)
+        if any(pattern.search(dotted) for pattern in network_call_patterns):
+            return f"Python network API {dotted}"
+    return None
+
+
+def _command_accesses_public_network(
+    command: str, *, _depth: int = 0, _dialect: str = "powershell"
+) -> str | None:
+    """Recognize an executed public-network client in an actual command field."""
+
+    if _depth > 8:
+        return "nested shell depth"
+    for segment in _split_shell_segments(command, dialect=_dialect):
+        executable, remainder = _first_executable(segment, dialect=_dialect)
+        if not executable:
+            continue
+        if executable in PUBLIC_NETWORK_CLIENT_BASENAMES:
+            return executable
+        if executable in SHELL_WRAPPER_BASENAMES:
+            payload = _shell_payload(executable, remainder)
+            if payload is None:
+                continue
+            nested_dialect = (
+                "cmd"
+                if executable in {"cmd", "cmd.exe"}
+                else "powershell"
+                if executable in {"powershell", "powershell.exe", "pwsh", "pwsh.exe"}
+                else "posix"
+            )
+            nested = _command_accesses_public_network(
+                payload, _depth=_depth + 1, _dialect=nested_dialect
+            )
+            if nested:
+                return f"{executable} wrapper -> {nested}"
+            continue
+        if executable in START_WRAPPER_BASENAMES:
+            payload = _start_payload(remainder, dialect=_dialect)
+            if payload is not None:
+                nested = _command_accesses_public_network(
+                    payload, _depth=_depth + 1, _dialect=_dialect
+                )
+                if nested:
+                    return f"{executable} wrapper -> {nested}"
+            continue
+        if executable in WSL_WRAPPER_BASENAMES:
+            payload = _wsl_payload(remainder)
+            if payload is not None:
+                nested = _command_accesses_public_network(
+                    payload, _depth=_depth + 1, _dialect="posix"
+                )
+                if nested:
+                    return f"{executable} wrapper -> {nested}"
+            continue
+        if executable in ENV_COMMAND_WRAPPER_BASENAMES:
+            payload = _environment_command_payload(remainder)
+            if payload is not None:
+                nested = _command_accesses_public_network(
+                    payload, _depth=_depth + 1, _dialect=_dialect
+                )
+                if nested:
+                    return f"{executable} wrapper -> {nested}"
+            continue
+        if executable in TRANSPARENT_WRAPPER_BASENAMES:
+            payload = _transparent_wrapper_payload(executable, remainder)
+            if payload is not None:
+                nested = _command_accesses_public_network(
+                    payload, _depth=_depth + 1, _dialect=_dialect
+                )
+                if nested:
+                    return f"{executable} wrapper -> {nested}"
+            continue
+        if executable == "start-process":
+            payload = _start_process_payload(remainder)
+            if payload is not None:
+                nested = _command_accesses_public_network(
+                    payload, _depth=_depth + 1, _dialect="powershell"
+                )
+                if nested:
+                    return f"{executable} wrapper -> {nested}"
+            continue
+        if executable in PYTHON_BASENAMES:
+            invocation = _python_invocation_payload(remainder)
+            if invocation is None:
+                continue
+            kind, payload = invocation
+            if kind == "code":
+                nested = _python_code_accesses_public_network(payload, depth=_depth)
+                if nested:
+                    return f"{executable} -c -> {nested}"
     return None
 
 
@@ -1613,6 +1910,71 @@ def nested_model_process_evidence(event: dict[str, Any]) -> list[str]:
     return sorted(set(evidence))
 
 
+def public_network_command_evidence(event: dict[str, Any]) -> list[str]:
+    """Inspect actual command fields for a public-network client invocation."""
+
+    evidence: list[str] = []
+    item = event.get("item")
+    if not isinstance(item, dict):
+        return evidence
+    item_type = canonical_tool_name(item.get("type"))
+    command_source: dict[str, Any] | None = None
+    command_dialect = "powershell"
+    if item_type == "command_execution":
+        command_source = {"command": item.get("command")}
+    elif item_type == "mcp_tool_call":
+        tool = canonical_tool_name(item.get("tool"))
+        if tool.endswith(
+            (
+                "exec_command",
+                "command_execution",
+                "command_call",
+                "shell_command",
+                "shell_execution",
+            )
+        ):
+            arguments = item.get("arguments")
+            if isinstance(arguments, dict):
+                command_source = arguments
+                shell_value = arguments.get(
+                    "shell", arguments.get("shell_executable")
+                )
+                if isinstance(shell_value, str):
+                    shell_basename = (
+                        shell_value.replace("\\", "/").rsplit("/", 1)[-1].lower()
+                    )
+                    if shell_basename in {"cmd", "cmd.exe"}:
+                        command_dialect = "cmd"
+                    elif shell_basename in {
+                        "bash",
+                        "bash.exe",
+                        "sh",
+                        "sh.exe",
+                        "zsh",
+                        "zsh.exe",
+                    }:
+                        command_dialect = "posix"
+    if command_source is None:
+        return evidence
+    for field in ("command", "cmd", "command_line"):
+        value = command_source.get(field)
+        if isinstance(value, str):
+            match = _command_accesses_public_network(
+                value, _dialect=command_dialect
+            )
+            if match:
+                evidence.append(f"{field}={match}")
+    argv = command_source.get("argv")
+    if isinstance(argv, list) and all(isinstance(value, str) for value in argv):
+        match = _command_accesses_public_network(
+            " ".join(json.dumps(value) for value in argv),
+            _dialect=command_dialect,
+        )
+        if match:
+            evidence.append(f"argv={match}")
+    return sorted(set(evidence))
+
+
 def _load_launch_record(path: Path) -> dict[str, Any]:
     if not path.is_absolute():
         raise TransportError("launch-record path must be absolute")
@@ -1628,7 +1990,7 @@ def _load_launch_record(path: Path) -> dict[str, Any]:
 
 
 def _validate_argv(
-    record: dict[str, Any], executable: Path, workspace: Path
+    record: dict[str, Any], executable: Path, workspace: Path, actor: str
 ) -> list[str]:
     argv = record.get("argv")
     if (
@@ -1663,6 +2025,7 @@ def _validate_argv(
     required_flags = {flag: 0 for flag in REQUIRED_EXEC_FLAGS}
     optional_flags = {flag: 0 for flag in OPTIONAL_EXEC_FLAGS}
     workspace_values: list[str] = []
+    sandbox_values: list[str] = []
     disable_modes: list[str] = []
     while cursor < len(argv) - 1:
         token = argv[cursor]
@@ -1678,6 +2041,12 @@ def _validate_argv(
             if cursor + 1 >= len(argv) - 1:
                 raise TransportError("exact argv -C is missing its workspace argument")
             workspace_values.append(argv[cursor + 1])
+            cursor += 2
+            continue
+        if token == "--sandbox":
+            if cursor + 1 >= len(argv) - 1:
+                raise TransportError("exact argv --sandbox is missing its value")
+            sandbox_values.append(argv[cursor + 1])
             cursor += 2
             continue
         if token == "--disable":
@@ -1709,6 +2078,13 @@ def _validate_argv(
         raise TransportError("exact argv must contain exactly one Codex exec")
     if argv.count(OPTIONAL_GLOBAL_FLAGS[0]) > 1:
         raise TransportError("exact argv permits --search at most once")
+    if (
+        NO_PUBLIC_NETWORK_ACTOR_RE.fullmatch(actor) is not None
+        and argv.count(OPTIONAL_GLOBAL_FLAGS[0])
+    ):
+        raise TransportError(
+            f"actor {actor} has public_endpoints=[none] and cannot enable --search"
+        )
     for flag, count in required_flags.items():
         if count != 1:
             raise TransportError(f"exact argv must contain {flag} exactly once")
@@ -1721,6 +2097,10 @@ def _validate_argv(
         )
     if len(workspace_values) != 1:
         raise TransportError("exact argv must contain one '-C <workspace>' pair")
+    if sandbox_values != ["workspace-write"]:
+        raise TransportError(
+            "exact argv must contain one '--sandbox workspace-write' pair"
+        )
     argv_workspace = _canonical_existing_path(
         workspace_values[0], label="argv -C workspace", kind="directory"
     )
@@ -1738,6 +2118,10 @@ def _validate_launch_record(
     actor: str,
     expected_prompt_sha256: str,
     expected_launch_id: str,
+    expected_process_sha256: str | None,
+    expected_process_seal_sha256: str | None,
+    expected_input_commitment_sha256: str | None,
+    expected_output_commitment_sha256: str | None,
 ) -> dict[str, Any]:
     _require_closed_keys(
         record,
@@ -1772,6 +2156,37 @@ def _validate_launch_record(
     if _sha256_file(prompt_path, label="prompt file") != prompt_sha256:
         raise TransportError("launch record prompt_sha256 does not match prompt file")
 
+    process_sha256 = _required_sha256(record, "process_sha256")
+    process_seal_sha256 = _required_sha256(record, "process_seal_sha256")
+    input_commitment_sha256 = _required_sha256(
+        record, "input_commitment_sha256"
+    )
+    output_commitment_sha256 = _required_sha256(
+        record, "output_commitment_sha256"
+    )
+    for observed, expected, label in (
+        (process_sha256, expected_process_sha256, "process_sha256"),
+        (
+            process_seal_sha256,
+            expected_process_seal_sha256,
+            "process_seal_sha256",
+        ),
+        (
+            input_commitment_sha256,
+            expected_input_commitment_sha256,
+            "input_commitment_sha256",
+        ),
+        (
+            output_commitment_sha256,
+            expected_output_commitment_sha256,
+            "output_commitment_sha256",
+        ),
+    ):
+        if expected is not None and observed != expected:
+            raise TransportError(
+                f"launch record {label} does not match the external anchor"
+            )
+
     canonical_log = log_path
     recorded_log = _canonical_existing_path(
         record.get("log_path"), label="log_path", kind="file"
@@ -1797,7 +2212,7 @@ def _validate_launch_record(
     workspace = _canonical_existing_path(
         record.get("workspace"), label="workspace", kind="directory"
     )
-    argv = _validate_argv(record, executable, workspace)
+    argv = _validate_argv(record, executable, workspace, actor)
     pid = _required_positive_int(record, "pid")
     exit_code = record.get("exit_code")
     if isinstance(exit_code, bool) or not isinstance(exit_code, int) or exit_code != 0:
@@ -1826,6 +2241,10 @@ def _validate_launch_record(
         "log_sha256": log_sha256,
         "pid": pid,
         "prompt_sha256": prompt_sha256,
+        "process_sha256": process_sha256,
+        "process_seal_sha256": process_seal_sha256,
+        "input_commitment_sha256": input_commitment_sha256,
+        "output_commitment_sha256": output_commitment_sha256,
         "thread_id": thread_id.strip(),
         "workspace": str(workspace),
     }
@@ -1837,6 +2256,11 @@ def validate_log(
     launch_record_path: Path,
     expected_prompt_sha256: str,
     expected_launch_id: str,
+    expected_process_sha256: str | None = None,
+    expected_process_seal_sha256: str | None = None,
+    expected_input_commitment_sha256: str | None = None,
+    expected_output_commitment_sha256: str | None = None,
+    expected_launch_record_sha256: str | None = None,
 ) -> dict[str, object]:
     canonical_actor = actor.strip().upper()
     if not ACTOR_RE.fullmatch(canonical_actor):
@@ -1850,6 +2274,28 @@ def validate_log(
             raise ValueError
     except (ValueError, AttributeError) as exc:
         raise TransportError("expected launch ID must be a canonical UUID") from exc
+    normalized_external_hashes: list[str | None] = []
+    for value, label in (
+        (expected_process_sha256, "expected process SHA-256"),
+        (expected_process_seal_sha256, "expected process-seal SHA-256"),
+        (expected_input_commitment_sha256, "expected input-commitment SHA-256"),
+        (expected_output_commitment_sha256, "expected output-commitment SHA-256"),
+        (expected_launch_record_sha256, "expected launch-record SHA-256"),
+    ):
+        if value is None:
+            normalized_external_hashes.append(None)
+            continue
+        normalized = value.strip().lower()
+        if not SHA256_RE.fullmatch(normalized):
+            raise TransportError(f"{label} must have 64 hex digits")
+        normalized_external_hashes.append(normalized)
+    (
+        expected_process_sha256,
+        expected_process_seal_sha256,
+        expected_input_commitment_sha256,
+        expected_output_commitment_sha256,
+        expected_launch_record_sha256,
+    ) = normalized_external_hashes
     if not path.is_absolute():
         raise TransportError("JSONL log path must be absolute")
     if not launch_record_path.is_absolute():
@@ -1867,7 +2313,23 @@ def validate_log(
     except (OSError, UnicodeDecodeError) as exc:
         raise TransportError(f"cannot read strict-UTF-8 JSONL log: {exc}") from exc
 
-    record = _load_launch_record(canonical_record_path)
+    try:
+        record_bytes = _read_stable_file(
+            canonical_record_path, label="launch record"
+        )
+        if (
+            expected_launch_record_sha256 is not None
+            and _sha256_bytes(record_bytes) != expected_launch_record_sha256
+        ):
+            raise TransportError(
+                "launch record bytes do not match the external hash anchor"
+            )
+        record_text = record_bytes.decode("utf-8", errors="strict")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise TransportError(f"cannot read strict-UTF-8 launch record: {exc}") from exc
+    if not record_text.strip():
+        raise TransportError("launch record is empty")
+    record = _load_json_object(record_text, label="launch record")
     binding = _validate_launch_record(
         record,
         record_path=canonical_record_path,
@@ -1876,6 +2338,10 @@ def validate_log(
         actor=canonical_actor,
         expected_prompt_sha256=expected_prompt_sha256,
         expected_launch_id=expected_launch_id,
+        expected_process_sha256=expected_process_sha256,
+        expected_process_seal_sha256=expected_process_seal_sha256,
+        expected_input_commitment_sha256=expected_input_commitment_sha256,
+        expected_output_commitment_sha256=expected_output_commitment_sha256,
     )
 
     if not raw.strip():
@@ -1890,6 +2356,7 @@ def validate_log(
     collaboration_violations: list[str] = []
     model_process_violations: list[str] = []
     schema_violations: list[str] = []
+    public_network_violations: list[str] = []
     for line_number, line in enumerate(raw.splitlines(), start=1):
         if not line.strip():
             raise TransportError(f"line {line_number} is unexpectedly blank")
@@ -1906,6 +2373,28 @@ def validate_log(
             collaboration_violations.append(f"line {line_number}: {evidence}")
         for evidence in nested_model_process_evidence(event):
             model_process_violations.append(f"line {line_number}: {evidence}")
+        if NO_PUBLIC_NETWORK_ACTOR_RE.fullmatch(canonical_actor) is not None:
+            for evidence in public_network_command_evidence(event):
+                public_network_violations.append(
+                    f"line {line_number}: {evidence}"
+                )
+            item = event.get("item")
+            if isinstance(item, dict) and item.get("type") == "web_search":
+                public_network_violations.append(
+                    f"line {line_number}: web_search item"
+                )
+            elif isinstance(item, dict) and item.get("type") == "mcp_tool_call":
+                server = str(item.get("server", ""))
+                tool = str(item.get("tool", ""))
+                network_name = f"{server} {tool}".casefold()
+                if re.search(
+                    r"(?:^|[^a-z0-9])(?:web|browser|http|fetch|url|search_query)"
+                    r"(?:[^a-z0-9]|$)",
+                    network_name,
+                ):
+                    public_network_violations.append(
+                        f"line {line_number}: public-network MCP {server}/{tool}"
+                    )
         try:
             validate_event_schema(event)
         except TransportError as exc:
@@ -1966,6 +2455,11 @@ def validate_log(
             "actor attempted a nested Codex/model process: "
             + "; ".join(model_process_violations)
         )
+    if public_network_violations:
+        raise TransportError(
+            f"actor {canonical_actor} accessed public network despite "
+            "public_endpoints=[none]: " + "; ".join(public_network_violations)
+        )
     if schema_violations:
         raise TransportError(
             "transport contains unknown or malformed JSONL event schema: "
@@ -1988,6 +2482,10 @@ def validate_log(
             "successful transport must contain a non-empty completed agent_message"
         )
 
+    if _read_stable_file(canonical_record_path, label="launch record") != record_bytes:
+        raise TransportError("launch record changed during transport validation")
+    if _read_stable_file(canonical_log_path, label="JSONL transport log") != raw_bytes:
+        raise TransportError("JSONL transport log changed during transport validation")
     return {
         "actor": canonical_actor,
         "events": len(events),
@@ -1997,12 +2495,17 @@ def validate_log(
         "thread_id": thread_id.strip(),
         "launch_id": binding["launch_id"],
         "prompt_sha256": binding["prompt_sha256"],
+        "process_sha256": binding["process_sha256"],
+        "process_seal_sha256": binding["process_seal_sha256"],
+        "input_commitment_sha256": binding["input_commitment_sha256"],
+        "output_commitment_sha256": binding["output_commitment_sha256"],
         "log_sha256": binding["log_sha256"],
         "pid": binding["pid"],
         "exit_code": binding["exit_code"],
         "recoverable_transport_error_events": len(recoverable_error_indices),
         "collaboration_events": 0,
         "nested_model_processes": 0,
+        "public_network_events": 0,
     }
 
 
@@ -2013,6 +2516,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--launch-record", type=Path, required=True)
     parser.add_argument("--expected-prompt-sha256", required=True)
     parser.add_argument("--expected-launch-id", required=True)
+    parser.add_argument("--expected-process-sha256", required=True)
+    parser.add_argument("--expected-process-seal-sha256", required=True)
+    parser.add_argument("--expected-input-commitment-sha256", required=True)
+    parser.add_argument("--expected-output-commitment-sha256", required=True)
+    parser.add_argument("--expected-launch-record-sha256", required=True)
     return parser.parse_args(argv)
 
 
@@ -2025,6 +2533,11 @@ def main(argv: list[str] | None = None) -> int:
             arguments.launch_record,
             arguments.expected_prompt_sha256,
             arguments.expected_launch_id,
+            arguments.expected_process_sha256,
+            arguments.expected_process_seal_sha256,
+            arguments.expected_input_commitment_sha256,
+            arguments.expected_output_commitment_sha256,
+            arguments.expected_launch_record_sha256,
         )
     except TransportError as exc:
         print(f"FAIL: {exc}")

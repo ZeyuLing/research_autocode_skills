@@ -20,6 +20,10 @@ ACTOR_CONTRACT_PATH = SKILL_ROOT / "scripts" / "actor_prompt_contract.py"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
 SHARED_VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_review_bundle.py"
 SEMANTIC_TEST_PATH = SKILL_ROOT / "tests" / "test_validate_semantic_acceptance_output.py"
+SA_LAUNCH_ID = "12345678-1234-4234-8234-123456789abc"
+SA_PROCESS_SEAL_SHA256 = "B" * 64
+SA_LAUNCH_RECORD_SHA256 = "C" * 64
+SA_OUTPUT_COMMITMENT_SHA256 = "D" * 64
 
 
 def load_module(path: Path, name: str):
@@ -33,6 +37,7 @@ def load_module(path: Path, name: str):
 
 VALIDATOR = load_module(VALIDATOR_PATH, "test_sa_prompt_contract_validator")
 HELPER = load_module(HELPER_PATH, "test_sa_prompt_contract_builder")
+REAL_VALIDATE_SA_LAUNCH = HELPER.validate_sa_launch_for_promotion
 SEMANTIC_TEST = load_module(SEMANTIC_TEST_PATH, "test_sa_prompt_contract_fixture")
 SHARED = VALIDATOR.load_shared_validator()
 
@@ -93,7 +98,38 @@ def write_process(path: Path, process: dict[str, object]) -> None:
     path.write_text(json.dumps(process, indent=2), encoding="utf-8")
 
 
+def sa_receipt_arguments(base: Path) -> tuple[Path, str, str, str, str]:
+    return (
+        base / "SA-launch-record.json",
+        SA_LAUNCH_ID,
+        SA_PROCESS_SEAL_SHA256,
+        SA_LAUNCH_RECORD_SHA256,
+        SA_OUTPUT_COMMITMENT_SHA256,
+    )
+
+
+def planned_sa_view(base: Path, target: str) -> Path:
+    """Return the exact absent ``<run>/views/SA-<target>`` planning path."""
+
+    views = base / "run" / "views"
+    views.mkdir(parents=True, exist_ok=True)
+    return views / f"SA-{target}"
+
+
 class BuildSemanticAcceptancePromptTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.receipt_patcher = mock.patch.object(
+            HELPER,
+            "validate_sa_launch_for_promotion",
+            return_value={
+                "launch_id": SA_LAUNCH_ID,
+                "launch_record_sha256": SA_LAUNCH_RECORD_SHA256,
+                "output_commitment_sha256": SA_OUTPUT_COMMITMENT_SHA256,
+            },
+        )
+        self.receipt_patcher.start()
+        self.addCleanup(self.receipt_patcher.stop)
+
     def run_helper(
         self,
         *arguments: str,
@@ -119,6 +155,28 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     digest(root / "00-process-parameters.json"),
                 ]
             )
+        if (
+            arguments_list
+            and arguments_list[0] == "promote"
+            and "--launch-record" not in arguments_list
+        ):
+            round_root = Path(
+                arguments_list[arguments_list.index("--round-root") + 1]
+            )
+            arguments_list.extend(
+                [
+                    "--launch-record",
+                    str(round_root.parent / "SA-launch-record.json"),
+                    "--expected-launch-id",
+                    SA_LAUNCH_ID,
+                    "--expected-process-seal-sha256",
+                    SA_PROCESS_SEAL_SHA256,
+                    "--expected-launch-record-sha256",
+                    SA_LAUNCH_RECORD_SHA256,
+                    "--expected-output-commitment-sha256",
+                    SA_OUTPUT_COMMITMENT_SHA256,
+                ]
+            )
         return subprocess.run(
             [sys.executable, "-B", str(helper_path), *arguments_list],
             text=True,
@@ -126,6 +184,88 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             check=False,
             env=disabled_bytecode_environment(),
         )
+
+    def test_sa_promotion_receipt_cannot_be_omitted_or_synthesized_posthoc(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            view = base / "run" / "views" / "SA-R1"
+            round_root = base / "run" / "round"
+            view.mkdir(parents=True)
+            round_root.mkdir()
+            process = {"actor_prompt_sha256": {"SA-R1": "A" * 64}}
+            with self.assertRaisesRegex(
+                HELPER.ContractError, "launch/transport receipt failed"
+            ):
+                REAL_VALIDATE_SA_LAUNCH(
+                    view_root=view,
+                    round_root=round_root,
+                    process=process,
+                    target="R1",
+                    input_commitment_sha256="B" * 64,
+                    launch_record_path=base / "missing-launch-record.json",
+                    expected_launch_id=SA_LAUNCH_ID,
+                    expected_process_seal_sha256=SA_PROCESS_SEAL_SHA256,
+                    expected_launch_record_sha256=SA_LAUNCH_RECORD_SHA256,
+                    expected_output_commitment_sha256=SA_OUTPUT_COMMITMENT_SHA256,
+                )
+
+    def test_plan_requires_absent_exact_sa_target_view(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            round_root = base / "round"
+            round_root.mkdir()
+            fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
+            preplan = base / "preplan.json"
+            write_process(preplan, stable_preplan_process(fixture))
+            prompt_root = base / "prompts"
+            prompt_root.mkdir()
+
+            wrong_parent = base / "views-wrong" / "SA-R1"
+            wrong_parent.parent.mkdir()
+            result = self.run_helper(
+                "plan",
+                "--process",
+                str(preplan),
+                "--view-root",
+                str(wrong_parent),
+                "--target",
+                "R1",
+                "--output",
+                str(prompt_root / "wrong-parent.txt"),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("parent must be named exactly 'views'", result.stdout)
+
+            existing = planned_sa_view(base, "R1")
+            existing.mkdir()
+            result = self.run_helper(
+                "plan",
+                "--process",
+                str(preplan),
+                "--view-root",
+                str(existing),
+                "--target",
+                "R1",
+                "--output",
+                str(prompt_root / "existing.txt"),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("completely absent", result.stdout)
+
+            mismatched = base / "run" / "views" / "SA-R2"
+            result = self.run_helper(
+                "plan",
+                "--process",
+                str(preplan),
+                "--view-root",
+                str(mismatched),
+                "--target",
+                "R1",
+                "--output",
+                str(prompt_root / "mismatched.txt"),
+            )
+            self.assertNotEqual(0, result.returncode)
+            self.assertIn("exactly the SA-target direct child", result.stdout)
 
     def run_validator(self, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -183,6 +323,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
         self.assertTrue(result.stdout.startswith("VERIFIED\n"), result.stdout)
         metadata = json.loads(result.stdout.splitlines()[1])
         self.assertEqual("absent", metadata["sa_output_state"])
+        self.assertEqual([], metadata["public_endpoints_derived_at_verify"])
         self.assertRegex(metadata["input_commitment"]["sha256"], r"^[0-9A-F]{64}$")
         return metadata
 
@@ -201,7 +342,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
 
             for target in ("R1", "R2", "R3", "R4", "R5", "AI"):
                 with self.subTest(target=target):
-                    view = base / f"view-{target}"
+                    view = planned_sa_view(base, target)
                     first_prompt = prompt_root / f"SA-{target}.txt"
                     self.assertFalse(view.exists())
                     metadata = self.plan_one(
@@ -288,7 +429,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     )
                     self.assertEqual(digest(first_prompt), metadata["prompt_sha256"])
                     self.assertEqual(
-                        "derive-at-launch-from-target-owned-ledgers",
+                        "none",
                         metadata["public_endpoint_policy"],
                     )
                     self.assertEqual(
@@ -305,7 +446,12 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     self.assertNotIn(fixture.endpoint, prompt)
                     self.assertNotIn("Permitted public endpoints", prompt)
                     self.assertIn(
-                        "No dynamic public endpoint is frozen into this prompt",
+                        "The receipt must be exactly public_endpoints=[none]",
+                        prompt,
+                    )
+                    self.assertIn("Use no public endpoint and do not browse", prompt)
+                    self.assertIn(
+                        "URLs recorded inside the frozen target artifacts are inert",
                         prompt,
                     )
                     self.assertIn(
@@ -392,7 +538,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     prompt_path = prompt_root / f"SA-{target}.txt"
                     self.plan_one(
                         preplan_path,
-                        base / f"view-{target}",
+                        planned_sa_view(base, target),
                         target,
                         prompt_path,
                     )
@@ -419,7 +565,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             prompt_root = base / "prompts"
             prompt_root.mkdir()
             prompt = prompt_root / "SA-R1.txt"
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
 
             missing = subprocess.run(
                 [
@@ -492,7 +638,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             original_check = HELPER.require_file_identity
@@ -562,7 +708,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             freeze_validator_pair(fixture)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             self.plan_one(preplan, view, "R1", prompt)
@@ -588,7 +734,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -621,7 +767,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -651,7 +797,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -688,7 +834,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -732,7 +878,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             self.assertTrue(result.stdout.startswith("FAIL\n"), result.stdout)
             self.assertIn("external Stage-O process SHA-256 anchor", result.stdout)
 
-    def test_public_cli_preplan_final_process_verify_promote_set_e2e(self) -> None:
+    def test_preplan_final_process_verify_promote_set_e2e_with_receipt_gate(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             round_root = base / "round"
@@ -744,7 +890,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             prompt_root.mkdir()
             planned: dict[str, tuple[Path, Path, dict[str, object]]] = {}
             for target in fixture.targets:
-                view = base / f"view-{target}"
+                view = planned_sa_view(base, target)
                 prompt = prompt_root / f"SA-{target}.txt"
                 metadata = self.plan_one(preplan, view, target, prompt)
                 planned[target] = (view, prompt, metadata)
@@ -789,22 +935,16 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 self.assertEqual(
                     plan_metadata["prompt_sha256"], verify_metadata["prompt_sha256"]
                 )
-                result = self.run_helper(
-                    "promote",
-                    "--view-root",
-                    str(view),
-                    "--round-root",
-                    str(round_root),
-                    "--prompt",
-                    str(prompt),
-                    "--target",
+                metadata = HELPER.promote(
+                    view,
+                    round_root,
+                    prompt,
                     target,
-                    "--expected-input-commitment-sha256",
+                    expected_process_hash,
                     input_commitment,
+                    *sa_receipt_arguments(base),
+                    Path(sys.executable),
                 )
-                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
-                self.assertTrue(result.stdout.startswith("PROMOTED\n"), result.stdout)
-                metadata = json.loads(result.stdout.splitlines()[1])
                 self.assertEqual("PROMOTED", metadata["status"])
                 for suffix in ("md", "csv"):
                     source = view / f"SA-{target}.{suffix}"
@@ -860,7 +1000,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -962,7 +1102,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1000,7 +1140,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1036,7 +1176,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1088,7 +1228,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1126,7 +1266,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1188,7 +1328,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1234,7 +1374,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1289,7 +1429,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1384,7 +1524,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1420,7 +1560,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1469,7 +1609,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1630,7 +1770,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1673,6 +1813,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         "R1",
                         expected_process_hash,
                         input_commitment,
+                        *sa_receipt_arguments(base),
                         Path(sys.executable),
                     )
 
@@ -1688,7 +1829,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1729,6 +1870,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         "R1",
                         expected_process_hash,
                         input_commitment,
+                        *sa_receipt_arguments(base),
                         Path(sys.executable),
                     )
 
@@ -1745,7 +1887,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1792,6 +1934,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                         "R1",
                         expected_process_hash,
                         input_commitment,
+                        *sa_receipt_arguments(base),
                         Path(sys.executable),
                     )
 
@@ -1813,7 +1956,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1867,6 +2010,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                             "R1",
                             expected_process_hash,
                             input_commitment,
+                            *sa_receipt_arguments(base),
                             Path(sys.executable),
                         )
 
@@ -1883,7 +2027,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -1936,6 +2080,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                             "R1",
                             expected_process_hash,
                             input_commitment,
+                            *sa_receipt_arguments(base),
                             Path(sys.executable),
                         )
 
@@ -1953,7 +2098,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                 fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
                 preplan = base / "preplan.json"
                 write_process(preplan, stable_preplan_process(fixture))
-                view = base / "view-R1"
+                view = planned_sa_view(base, "R1")
                 prompt = base / "prompts" / "SA-R1.txt"
                 prompt.parent.mkdir()
                 metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -2002,6 +2147,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                             "R1",
                             expected_process_hash,
                             input_commitment,
+                            *sa_receipt_arguments(base),
                             Path(sys.executable),
                         )
 
@@ -2017,7 +2163,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
             fixture = SEMANTIC_TEST.SemanticAcceptanceFixture(round_root)
             preplan = base / "preplan.json"
             write_process(preplan, stable_preplan_process(fixture))
-            view = base / "view-R1"
+            view = planned_sa_view(base, "R1")
             prompt = base / "prompts" / "SA-R1.txt"
             prompt.parent.mkdir()
             metadata = self.plan_one(preplan, view, "R1", prompt)
@@ -2068,6 +2214,7 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     "R1",
                     expected_process_hash,
                     input_commitment,
+                    *sa_receipt_arguments(base),
                     Path(sys.executable),
                 )
             self.assertIn("status is not PASS", str(caught.exception))

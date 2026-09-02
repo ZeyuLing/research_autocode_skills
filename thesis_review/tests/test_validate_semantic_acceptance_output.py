@@ -1105,36 +1105,41 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
                 any("PDF extraction runtime" in error for error in errors), errors
             )
 
-    def test_ai_public_endpoint_and_duplicate_receipt_endpoints_fail(self) -> None:
+    def test_every_sa_public_endpoint_must_be_exactly_none(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             fixture = SemanticAcceptanceFixture(root)
-            fixture.write_acceptance("AI", root)
-            report = root / "SA-AI.md"
-            report.write_text(
-                report.read_text(encoding="utf-8").replace(
-                    "public_endpoints=[none]",
-                    f"public_endpoints=[{fixture.endpoint}]",
-                ),
-                encoding="utf-8",
-            )
-            errors, _ = MODULE.validate_actor(root, "AI", SHARED)
-            self.assertTrue(any("SA-AI public_endpoints" in error for error in errors), errors)
+            for target in fixture.targets:
+                with self.subTest(target=target, mode="positive"):
+                    fixture.write_acceptance(target, root)
+                    self.assertEqual(
+                        set(),
+                        MODULE.target_public_endpoints(
+                            root, fixture.process, target, SHARED, []
+                        ),
+                    )
+                    errors, _ = MODULE.validate_actor(root, target, SHARED)
+                    self.assertEqual([], errors)
 
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            fixture = SemanticAcceptanceFixture(root)
-            fixture.write_acceptance("R3", root)
-            report = root / "SA-R3.md"
-            report.write_text(
-                report.read_text(encoding="utf-8").replace(
-                    f"public_endpoints=[{fixture.endpoint}]",
-                    f"public_endpoints=[{fixture.endpoint}; {fixture.endpoint}]",
-                ),
-                encoding="utf-8",
-            )
-            errors, _ = MODULE.validate_actor(root, "R3", SHARED)
-            self.assertTrue(any("duplicate-free" in error for error in errors), errors)
+            for target in ("R1", "R3", "AI"):
+                with self.subTest(target=target, mode="forged"):
+                    fixture.write_acceptance(target, root)
+                    report = root / f"SA-{target}.md"
+                    report.write_text(
+                        report.read_text(encoding="utf-8").replace(
+                            "public_endpoints=[none]",
+                            f"public_endpoints=[{fixture.endpoint}]",
+                        ),
+                        encoding="utf-8",
+                    )
+                    errors, _ = MODULE.validate_actor(root, target, SHARED)
+                    self.assertTrue(
+                        any(
+                            "all SA public_endpoints must be exactly [none]" in error
+                            for error in errors
+                        ),
+                        errors,
+                    )
 
     def test_page_anchor_bounds_extra_csv_cell_and_render_subdirectory_fail(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2558,7 +2563,7 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
                 errors,
             )
 
-    def test_target_report_cannot_self_authorize_an_extra_endpoint(self) -> None:
+    def test_target_report_endpoint_is_not_sa_authority(self) -> None:
         extra_endpoint = "https://unrecorded.example/source"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -2573,16 +2578,25 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
             )
             fixture.write_acceptance("R3", root)
             acceptance_report = root / "SA-R3.md"
+            self.assertIn(
+                "public_endpoints=[none]",
+                acceptance_report.read_text(encoding="utf-8"),
+            )
+            errors, _ = MODULE.validate_actor(root, "R3", SHARED)
+            self.assertEqual([], errors)
             acceptance_report.write_text(
                 acceptance_report.read_text(encoding="utf-8").replace(
-                    f"public_endpoints=[{fixture.endpoint}]",
-                    f"public_endpoints=[{fixture.endpoint}; {extra_endpoint}]",
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{extra_endpoint}]",
                 ),
                 encoding="utf-8",
             )
             errors, _ = MODULE.validate_actor(root, "R3", SHARED)
             self.assertTrue(
-                any("public endpoints outside target authority" in error for error in errors),
+                any(
+                    "all SA public_endpoints must be exactly [none]" in error
+                    for error in errors
+                ),
                 errors,
             )
 

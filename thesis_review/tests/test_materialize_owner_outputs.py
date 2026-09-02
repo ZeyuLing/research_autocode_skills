@@ -34,6 +34,12 @@ CHAIR_MATERIALIZED_FILES = (
     "91-revision-ledger.md",
     "92-new-evidence-or-experiments.md",
 )
+CHAIR_GATE_FILES = (
+    *CHAIR_MATERIALIZED_FILES,
+    "91-revision-ledger.csv",
+    "91-ai-actionable-ledger.csv",
+    "92-new-evidence-or-experiments.csv",
+)
 
 
 def load_materializer_module():
@@ -82,6 +88,42 @@ def changed_files(
 
 
 class MaterializeOwnerOutputsTests(unittest.TestCase):
+    def stage_closed_gate_view(self, source_root: Path, actor_id: str) -> Path:
+        """Copy exactly one Stage-C/S actor universe into a private view."""
+
+        module = fixture_module.VALIDATOR_MODULE
+        process = module.parse_strict_json_object(
+            (source_root / "00-process-parameters.json").read_text(encoding="utf-8")
+        )
+        reviewer_count = 5 if process["degree_level"] == "doctorate" else 3
+        opened = module.canonical_stage_opened_inputs(
+            process, reviewer_count, actor_id, source_root
+        )
+        outputs = CHAIR_GATE_FILES if actor_id == "C" else tuple(STAGE_S_FILES)
+        view_root = source_root / f".stage-{actor_id.lower()}-private-view"
+        self.assertFalse(os.path.lexists(view_root))
+        view_root.mkdir()
+
+        reference_names = set(module.SKILL_REFERENCE_FILES)
+        for relative_name in (*opened, *outputs):
+            relative = Path(relative_name)
+            if relative_name == "SKILL.md":
+                source = SKILL_ROOT / "SKILL.md"
+            elif relative_name in reference_names:
+                source = SKILL_ROOT / "references" / relative_name
+            elif relative.parts[:2] == ("rules", "scripts"):
+                source = SKILL_ROOT / "scripts" / relative.name
+            else:
+                source = source_root / relative
+            self.assertTrue(source.is_file(), relative_name)
+            destination = view_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+        expected_files = set(opened) | set(outputs)
+        self.assertEqual(expected_files, set(file_hashes(view_root)))
+        return view_root
+
     def install_stage_s_rule_inputs(self, root: Path) -> None:
         shutil.copy2(SKILL_ROOT / "SKILL.md", root / "SKILL.md")
         for filename in (
@@ -543,13 +585,67 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
                 self.assertEqual(expected_receipt, parsed, path.name)
             self.assertEqual(1, len(set(receipts)), receipts)
 
-            scoped = self.run_gate(CHAIR_VALIDATOR, root)
-            self.assertEqual(0, scoped.returncode, scoped.stdout + scoped.stderr)
-            self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+            view_root = self.stage_closed_gate_view(root, "C")
+            try:
+                scoped = self.run_gate(CHAIR_VALIDATOR, view_root)
+                self.assertEqual(
+                    0, scoped.returncode, scoped.stdout + scoped.stderr
+                )
+                self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+            finally:
+                shutil.rmtree(view_root)
 
             second = self.run_materializer(root, "C")
             self.assertEqual(0, second.returncode, second.stdout + second.stderr)
             self.assertEqual(after_first, file_hashes(root))
+
+    def test_chair_never_materializes_governing_url_metadata_as_an_endpoint(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.build_adversarial_chair_fixture(root)
+            endpoint = "https://example.edu/official-rule"
+            process_path = root / "00-process-parameters.json"
+            process = fixture_module.VALIDATOR_MODULE.parse_strict_json_object(
+                process_path.read_text(encoding="utf-8")
+            )
+            process["governing_rule_urls"] = [endpoint]
+            process_path.write_text(json.dumps(process), encoding="utf-8")
+
+            result = self.run_materializer(root, "C")
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            for path, label in (
+                (
+                    root / "90-chair-synthesis.md",
+                    "Chair input-receipt/access declaration",
+                ),
+                (
+                    root / "91-revision-ledger.md",
+                    "Input-receipt/access declaration",
+                ),
+                (
+                    root / "92-new-evidence-or-experiments.md",
+                    "Input-receipt/access declaration",
+                ),
+            ):
+                _, receipt = self.parsed_receipt(path, label)
+                self.assertEqual(["none"], receipt["public_endpoints"], path.name)
+
+            chair = root / "90-chair-synthesis.md"
+            chair.write_text(
+                chair.read_text(encoding="utf-8").replace(
+                    "public_endpoints=[none]",
+                    f"public_endpoints=[{endpoint}]",
+                    1,
+                ),
+                encoding="utf-8",
+            )
+            before = file_hashes(root)
+            rejected = self.run_materializer(root, "C")
+            self.assertNotEqual(0, rejected.returncode)
+            self.assertIn("outside the current C allowlist", rejected.stdout)
+            self.assertEqual(before, file_hashes(root))
 
     def test_stage_s_materializer_rebuilds_only_three_outputs_with_adversarial_values_canonical_receipt_is_idempotent_and_passes_scoped_gate(
         self,
@@ -633,9 +729,15 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
                 parsed_receipt,
             )
 
-            scoped = self.run_gate(SUMMARY_VALIDATOR, root)
-            self.assertEqual(0, scoped.returncode, scoped.stdout + scoped.stderr)
-            self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+            view_root = self.stage_closed_gate_view(root, "S")
+            try:
+                scoped = self.run_gate(SUMMARY_VALIDATOR, view_root)
+                self.assertEqual(
+                    0, scoped.returncode, scoped.stdout + scoped.stderr
+                )
+                self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+            finally:
+                shutil.rmtree(view_root)
 
             second = self.run_materializer(root, "S")
             self.assertEqual(0, second.returncode, second.stdout + second.stderr)
@@ -681,11 +783,17 @@ class MaterializeOwnerOutputsTests(unittest.TestCase):
                     self.assertEqual(1, path.stat().st_nlink, filename)
                     self.assertEqual(expected[filename], path.read_bytes(), filename)
 
-                scoped = self.run_gate(SUMMARY_VALIDATOR, root)
-                self.assertEqual(
-                    0, scoped.returncode, scoped.stdout + scoped.stderr
-                )
-                self.assertTrue(scoped.stdout.startswith("PASS\n"), scoped.stdout)
+                view_root = self.stage_closed_gate_view(root, "S")
+                try:
+                    scoped = self.run_gate(SUMMARY_VALIDATOR, view_root)
+                    self.assertEqual(
+                        0, scoped.returncode, scoped.stdout + scoped.stderr
+                    )
+                    self.assertTrue(
+                        scoped.stdout.startswith("PASS\n"), scoped.stdout
+                    )
+                finally:
+                    shutil.rmtree(view_root)
 
                 second = self.run_materializer(root, "S")
                 self.assertEqual(0, second.returncode, second.stdout + second.stderr)

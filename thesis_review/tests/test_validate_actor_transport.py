@@ -219,6 +219,10 @@ class Fixture:
         self.thread_id = str(first_event.get("thread_id", "thread-one"))
         self.launch_id = str(uuid.uuid4())
         self.prompt_sha256 = sha256_file(self.prompt)
+        self.process_sha256 = "a" * 64
+        self.process_seal_sha256 = "b" * 64
+        self.input_commitment_sha256 = "c" * 64
+        self.output_commitment_sha256 = "d" * 64
         self.argv = [
             str(self.executable.resolve()),
             "exec",
@@ -228,6 +232,8 @@ class Fixture:
             "--json",
             "--ignore-user-config",
             "--ignore-rules",
+            "--sandbox",
+            "workspace-write",
             "-C",
             str(self.workspace.resolve()),
             "-",
@@ -243,6 +249,10 @@ class Fixture:
             "prompt_path": str(self.prompt.resolve()),
             "prompt_bytes": self.prompt.stat().st_size,
             "prompt_sha256": self.prompt_sha256,
+            "process_sha256": self.process_sha256,
+            "process_seal_sha256": self.process_seal_sha256,
+            "input_commitment_sha256": self.input_commitment_sha256,
+            "output_commitment_sha256": self.output_commitment_sha256,
             "executable_path": str(self.executable.resolve()),
             "executable_sha256": sha256_file(self.executable),
             "argv": list(self.argv),
@@ -288,6 +298,53 @@ class ValidateActorTransportTests(unittest.TestCase):
             self.assertEqual(0, result["collaboration_events"])
             self.assertEqual(0, result["nested_model_processes"])
             self.assertEqual(fixture.launch_id, result["launch_id"])
+
+    def test_terminal_output_and_record_hash_external_anchors_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            record_sha256 = sha256_file(fixture.record_path)
+            result = MODULE.validate_log(
+                fixture.log,
+                fixture.actor,
+                fixture.record_path,
+                fixture.prompt_sha256,
+                fixture.launch_id,
+                fixture.process_sha256,
+                fixture.process_seal_sha256,
+                fixture.input_commitment_sha256,
+                fixture.output_commitment_sha256,
+                record_sha256,
+            )
+            self.assertEqual(
+                fixture.output_commitment_sha256,
+                result["output_commitment_sha256"],
+            )
+            with self.assertRaisesRegex(MODULE.TransportError, "output_commitment"):
+                MODULE.validate_log(
+                    fixture.log,
+                    fixture.actor,
+                    fixture.record_path,
+                    fixture.prompt_sha256,
+                    fixture.launch_id,
+                    fixture.process_sha256,
+                    fixture.process_seal_sha256,
+                    fixture.input_commitment_sha256,
+                    "e" * 64,
+                    record_sha256,
+                )
+            with self.assertRaisesRegex(MODULE.TransportError, "external hash anchor"):
+                MODULE.validate_log(
+                    fixture.log,
+                    fixture.actor,
+                    fixture.record_path,
+                    fixture.prompt_sha256,
+                    fixture.launch_id,
+                    fixture.process_sha256,
+                    fixture.process_seal_sha256,
+                    fixture.input_commitment_sha256,
+                    fixture.output_commitment_sha256,
+                    "f" * 64,
+                )
 
     def test_exact_nine_event_recoverable_transport_smoke_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -369,14 +426,11 @@ class ValidateActorTransportTests(unittest.TestCase):
             fixture.refresh_record()
             fixture.validate()
 
-    def test_optional_global_search_and_explicit_safe_exec_flags_pass(self) -> None:
+    def test_optional_global_search_and_skip_git_flag_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(Path(directory))
             fixture.argv.insert(1, "--search")
-            fixture.argv[-1:-1] = [
-                "--skip-git-repo-check",
-                "--dangerously-bypass-approvals-and-sandbox",
-            ]
+            fixture.argv[-1:-1] = ["--skip-git-repo-check"]
             fixture.refresh_record()
             fixture.validate()
 
@@ -602,6 +656,34 @@ class ValidateActorTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.TransportError, "nested Codex/model"):
                 fixture.validate()
 
+    def test_python_process_api_nested_model_commands_are_rejected_full_transport(
+        self,
+    ) -> None:
+        commands = (
+            (
+                "python -c \"import subprocess; "
+                "subprocess.run(['codex','exec','-'])\""
+            ),
+            (
+                "python -c \"from subprocess import run; "
+                "run(['claude','--print','prompt'])\""
+            ),
+            (
+                "cmd.exe /c python -c \"import subprocess; "
+                "subprocess.Popen(['gemini','--help'])\""
+            ),
+            r"python C:\tools\codex.py --help",
+        )
+        for command in commands:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                events = clean_events()
+                events[2] = command_event(command, item_id="item_python_nested")
+                fixture = Fixture(Path(directory), events)
+                with self.assertRaisesRegex(
+                    MODULE.TransportError, "nested Codex/model"
+                ):
+                    fixture.validate()
+
     def test_windows_shims_and_package_runners_cannot_start_nested_codex(self) -> None:
         commands = (
             r"C:\tools\codex.cmd exec --json -",
@@ -721,6 +803,31 @@ class ValidateActorTransportTests(unittest.TestCase):
                 events = clean_events()
                 events.insert(-1, command_event(command, item_id="item_legal_command"))
                 Fixture(Path(directory), events).validate()
+
+    def test_command_scanners_do_not_scan_plain_text_or_quoted_search_patterns(
+        self,
+    ) -> None:
+        commands = (
+            "python -c \"print('codex exec; curl https://example.com')\"",
+            r'rg -n "curl https://example.com" paper.txt',
+            r'echo "subprocess.run([\'codex\']); Invoke-WebRequest"',
+        )
+        for command in commands:
+            with self.subTest(command=command), tempfile.TemporaryDirectory() as directory:
+                events = clean_events()
+                events[2] = command_event(command, item_id="item_safe_text")
+                agent_message = events[-2]
+                assert isinstance(agent_message, dict)
+                item = agent_message.get("item")
+                assert isinstance(item, dict)
+                item["text"] = (
+                    "Quoted thesis prose may literally mention curl, codex exec, "
+                    "or subprocess.run without executing any of them."
+                )
+                fixture = Fixture(Path(directory), events)
+                fixture.actor = "AI"
+                fixture.refresh_record()
+                fixture.validate()
 
     def test_nested_codex_in_exec_command_arguments_is_rejected(self) -> None:
         events = clean_events()
@@ -934,6 +1041,67 @@ class ValidateActorTransportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             Fixture(Path(directory), events).validate()
 
+    def test_no_endpoint_actor_rejects_command_level_public_network_full_transport(
+        self,
+    ) -> None:
+        commands = (
+            "curl https://example.com/source",
+            "wget https://example.com/source",
+            'powershell -Command "Invoke-WebRequest https://example.com/source"',
+            "cmd.exe /c curl.exe https://example.com/source",
+            (
+                "python -c \"import subprocess; "
+                "subprocess.run(['wget','https://example.com/source'])\""
+            ),
+        )
+        for actor in ("AI", "SA-AI", "S"):
+            for command in commands:
+                with (
+                    self.subTest(actor=actor, command=command),
+                    tempfile.TemporaryDirectory() as directory,
+                ):
+                    events = clean_events()
+                    events[2] = command_event(
+                        command, item_id="item_public_network_command"
+                    )
+                    fixture = Fixture(Path(directory), events)
+                    fixture.actor = actor
+                    fixture.refresh_record()
+                    with self.assertRaisesRegex(
+                        MODULE.TransportError, "public network"
+                    ):
+                        fixture.validate()
+
+    def test_no_endpoint_actor_rejects_web_search_even_without_search_flag(self) -> None:
+        events = clean_events()
+        events.insert(
+            -1,
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_web_search",
+                    "type": "web_search",
+                    "query": "forbidden external research",
+                    "action": {"type": "search"},
+                },
+            },
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            fixture.actor = "S"
+            fixture.refresh_record()
+            with self.assertRaisesRegex(MODULE.TransportError, "public network"):
+                fixture.validate()
+
+    def test_no_endpoint_actor_rejects_search_argv(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory))
+            fixture.actor = "AI"
+            fixture.argv.insert(1, "--search")
+            fixture.refresh_record()
+            with self.assertRaisesRegex(MODULE.TransportError, "public_endpoints"):
+                fixture.validate()
+
     def test_observed_duplicate_web_search_ids_are_narrowly_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fixture = Fixture(Path(directory))
@@ -1032,13 +1200,14 @@ class ValidateActorTransportTests(unittest.TestCase):
             "user config": "--ignore-user-config",
             "rules": "--ignore-rules",
             "workspace": "-C",
+            "sandbox": "--sandbox",
             "stdin": "-",
         }
         for label, missing in cases.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
                 fixture = Fixture(Path(directory))
                 index = fixture.argv.index(missing)
-                if missing == "-C":
+                if missing in {"-C", "--sandbox"}:
                     del fixture.argv[index : index + 2]
                 else:
                     del fixture.argv[index]
@@ -1082,6 +1251,8 @@ class ValidateActorTransportTests(unittest.TestCase):
             "review": ["review", "--uncommitted"],
             "profile": ["--profile", "untrusted"],
             "model": ["--model", "another-model"],
+            "sandbox bypass": ["--dangerously-bypass-approvals-and-sandbox"],
+            "danger sandbox": ["--sandbox", "danger-full-access"],
         }
         for label, injected in injections.items():
             with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
