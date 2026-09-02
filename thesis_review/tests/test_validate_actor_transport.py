@@ -232,6 +232,7 @@ class Fixture:
             "--json",
             "--ignore-user-config",
             "--ignore-rules",
+            "--approve-for-me",
             "--sandbox",
             "workspace-write",
             "-C",
@@ -1199,6 +1200,7 @@ class ValidateActorTransportTests(unittest.TestCase):
             "ephemeral": "--ephemeral",
             "user config": "--ignore-user-config",
             "rules": "--ignore-rules",
+            "approval": "--approve-for-me",
             "workspace": "-C",
             "sandbox": "--sandbox",
             "stdin": "-",
@@ -1252,6 +1254,7 @@ class ValidateActorTransportTests(unittest.TestCase):
             "profile": ["--profile", "untrusted"],
             "model": ["--model", "another-model"],
             "sandbox bypass": ["--dangerously-bypass-approvals-and-sandbox"],
+            "duplicate approval": ["--approve-for-me"],
             "danger sandbox": ["--sandbox", "danger-full-access"],
         }
         for label, injected in injections.items():

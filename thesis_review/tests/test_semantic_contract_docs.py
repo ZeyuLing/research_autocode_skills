@@ -302,6 +302,10 @@ class SemanticContractDocumentationTests(unittest.TestCase):
                 self.assertIn("--ephemeral", text)
                 self.assertIn("--ignore-user-config", text)
                 self.assertIn("--ignore-rules", text)
+                self.assertIn("--approve-for-me", text)
+                self.assertIn(
+                    "--dangerously-bypass-approvals-and-sandbox", text
+                )
                 self.assertIn("--expected-prompt-sha256", text)
                 self.assertIn("--expected-launch-id", text)
                 self.assertIn("exit code", text)

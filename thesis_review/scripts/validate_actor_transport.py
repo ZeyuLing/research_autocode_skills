@@ -66,6 +66,7 @@ REQUIRED_EXEC_FLAGS = (
     "--ephemeral",
     "--ignore-user-config",
     "--ignore-rules",
+    "--approve-for-me",
 )
 OPTIONAL_EXEC_FLAGS = (
     "--skip-git-repo-check",

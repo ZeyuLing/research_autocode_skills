@@ -431,12 +431,15 @@ grammar:
 ```
 
 `<closed-exec-items-in-any-order>` contains exactly once each of `--json`,
-`--ephemeral`, `--ignore-user-config`, and `--ignore-rules`; exactly one
+`--ephemeral`, `--ignore-user-config`, `--ignore-rules`, and the
+policy-respecting `--approve-for-me`; exactly one
 `-C <actor-workspace>` pair; exactly one of `--disable multi_agent`,
 `--disable=multi_agent`, or `-c features.multi_agent=false`; and, optionally,
 at most once `--skip-git-repo-check`. It also contains exactly one
-`--sandbox workspace-write` pair; no approval/sandbox bypass is admissible. If
-present, the sole `--search`
+`--sandbox workspace-write` pair. The approval flag does not relax that
+sandbox, user-config, or rule isolation;
+`--dangerously-bypass-approvals-and-sandbox` and every other approval/sandbox
+bypass remain forbidden. If present, the sole `--search`
 occurs before `exec`. The sole stdin marker `-` is last. No other flag,
 configuration override, positional argument, subcommand, model/profile/image/
 add-directory option, or second `exec` is permitted.

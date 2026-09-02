@@ -132,6 +132,7 @@ class LaunchReviewActorTests(unittest.TestCase):
         self.assertEqual(argv.count("multi_agent"), 1)
         self.assertEqual(argv.count("--sandbox"), 1)
         self.assertIn("workspace-write", argv)
+        self.assertEqual(argv.count("--approve-for-me"), 1)
         self.assertNotIn("--dangerously-bypass-approvals-and-sandbox", argv)
         self.assertNotIn("--model", argv)
 

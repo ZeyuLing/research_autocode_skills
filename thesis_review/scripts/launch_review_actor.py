@@ -459,6 +459,7 @@ def build_argv(
             "--ephemeral",
             "--ignore-user-config",
             "--ignore-rules",
+            "--approve-for-me",
             "--disable",
             "multi_agent",
             "--skip-git-repo-check",
