@@ -267,6 +267,31 @@ def actor_view_contract(
     )
 
 
+def actor_input_commitment(
+    workspace: Path, actor: str, opened: list[str]
+) -> str:
+    """Recompute an actor input anchor with the actor's canonical schema.
+
+    Semantic-acceptance actors bind a stronger envelope than the general
+    Stage-O actors.  The runner and launcher must select the same schema at
+    every preflight, lease, and postflight check; otherwise identical SA input
+    bytes produce incomparable digests.
+    """
+
+    if actor.startswith("SA-"):
+        semantic = load_module(
+            SCRIPT_ROOT / "build_semantic_acceptance_prompt.py",
+            "thesis_review_launcher_semantic_input_commitment",
+        )
+        result = semantic.capture_opened_input_commitment(workspace, opened)
+        if not isinstance(result, dict):
+            raise ContractError("SA input commitment builder returned a non-object")
+        return canonical_hash(
+            str(result.get("sha256", "")), "SA actor-view input commitment SHA-256"
+        )
+    return input_commitment(workspace, opened)
+
+
 def preflight_actor_workspace_binding(
     workspace: Path,
     run_root: Path,
@@ -297,13 +322,14 @@ def preflight_actor_workspace_binding(
         "thesis_review_launcher_view_closure",
     )
     prelaunch_tree = closed_view_snapshot(workspace, opened, validator)
-    commitment = input_commitment(workspace, opened)
+    commitment = actor_input_commitment(workspace, actor, opened)
     if commitment != expected_input_commitment_sha256:
         raise ContractError(
             "actor-view input commitment differs from the external staging anchor"
         )
     return {
         "process": process,
+        "actor": actor,
         "process_identity": process_identity,
         "opened": opened,
         "outputs": outputs,
@@ -324,7 +350,10 @@ def postflight_actor_workspace_binding(binding: dict[str, Any]) -> None:
     outputs = binding["outputs"]
     if file_identity(workspace / "00-process-parameters.json") != binding["process_identity"]:
         raise ContractError("actor-view process identity or bytes changed across launch")
-    if input_commitment(workspace, opened) != binding["input_commitment_sha256"]:
+    if (
+        actor_input_commitment(workspace, binding["actor"], opened)
+        != binding["input_commitment_sha256"]
+    ):
         raise ContractError("actor-view input commitment changed across launch")
     closed_view_snapshot(
         workspace, [*opened, *outputs], binding["validator"]
@@ -364,7 +393,9 @@ def verify_actor_input_leases(binding: dict[str, Any]) -> None:
     if current != binding["prelaunch_tree"]:
         raise ContractError("actor inputs changed while immutable leases were acquired")
     if (
-        input_commitment(binding["workspace"], binding["opened"])
+        actor_input_commitment(
+            binding["workspace"], binding["actor"], binding["opened"]
+        )
         != binding["input_commitment_sha256"]
     ):
         raise ContractError("actor input commitment changed before process creation")

@@ -102,6 +102,174 @@ class FakeProcess:
 
 
 class LaunchReviewActorTests(unittest.TestCase):
+    def test_sa_input_commitment_matches_semantic_builder_not_general_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            opened = ["00-process-parameters.json", "R1-comprehensive-review.md"]
+            for index, relative in enumerate(opened):
+                (workspace / relative).write_text(
+                    f"frozen-{index}\n", encoding="utf-8"
+                )
+            semantic = MODULE.load_module(
+                SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py",
+                "test_launcher_semantic_input_commitment",
+            )
+            expected = semantic.capture_opened_input_commitment(
+                workspace, opened
+            )["sha256"]
+
+            actual = MODULE.actor_input_commitment(workspace, "SA-R1", opened)
+
+            self.assertEqual(actual, expected)
+            self.assertNotEqual(actual, MODULE.input_commitment(workspace, opened))
+
+    def test_non_sa_actors_keep_general_input_commitment_schema(self) -> None:
+        workspace = Path("C:/review/views/actor")
+        opened = ["thesis.pdf"]
+        with mock.patch.object(
+            MODULE, "input_commitment", return_value=INPUT_COMMITMENT_SHA256
+        ) as general, mock.patch.object(MODULE, "load_module") as loader:
+            for actor in ["P", "R1", "R5", "AI", "C", "S"]:
+                with self.subTest(actor=actor):
+                    self.assertEqual(
+                        MODULE.actor_input_commitment(workspace, actor, opened),
+                        INPUT_COMMITMENT_SHA256,
+                    )
+            self.assertEqual(general.call_count, 6)
+            loader.assert_not_called()
+
+    def test_sa_preflight_accepts_semantic_anchor_and_rejects_general_anchor(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            actor = "SA-R1"
+            prompt_sha256 = "E" * 64
+            process_path = workspace / "00-process-parameters.json"
+            report_path = workspace / "R1-comprehensive-review.md"
+            process_path.write_text(
+                json.dumps({"actor_prompt_sha256": {actor: prompt_sha256}}),
+                encoding="utf-8",
+            )
+            report_path.write_text("frozen report\n", encoding="utf-8")
+            opened = [process_path.name, report_path.name]
+            process_sha256 = MODULE.file_identity(process_path)[4]
+            semantic = MODULE.load_module(
+                SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py",
+                "test_launcher_sa_preflight_semantic_contract",
+            )
+            semantic_anchor = semantic.capture_opened_input_commitment(
+                workspace, opened
+            )["sha256"]
+            general_anchor = MODULE.input_commitment(workspace, opened)
+
+            def load_contract(path: Path, _name: str):
+                if path.name == "build_semantic_acceptance_prompt.py":
+                    return semantic
+                if path.name == "validate_review_bundle.py":
+                    return object()
+                raise AssertionError(path)
+
+            common_patches = (
+                mock.patch.object(
+                    MODULE,
+                    "actor_view_contract",
+                    return_value=(opened, ["acceptance.json"]),
+                ),
+                mock.patch.object(MODULE, "verify_process_seal_binding"),
+                mock.patch.object(
+                    MODULE, "closed_view_snapshot", return_value={"closed": True}
+                ),
+                mock.patch.object(MODULE, "load_module", side_effect=load_contract),
+            )
+            with common_patches[0], common_patches[1], common_patches[2], common_patches[3]:
+                binding = MODULE.preflight_actor_workspace_binding(
+                    workspace,
+                    workspace,
+                    actor,
+                    prompt_sha256,
+                    process_sha256,
+                    PROCESS_SEAL_SHA256,
+                    semantic_anchor,
+                )
+            self.assertEqual(binding["actor"], actor)
+            self.assertEqual(binding["input_commitment_sha256"], semantic_anchor)
+
+            with mock.patch.object(
+                MODULE,
+                "actor_view_contract",
+                return_value=(opened, ["acceptance.json"]),
+            ), mock.patch.object(
+                MODULE, "verify_process_seal_binding"
+            ), mock.patch.object(
+                MODULE, "closed_view_snapshot", return_value={"closed": True}
+            ), mock.patch.object(
+                MODULE, "load_module", side_effect=load_contract
+            ), self.assertRaisesRegex(
+                MODULE.ContractError, "external staging anchor"
+            ):
+                MODULE.preflight_actor_workspace_binding(
+                    workspace,
+                    workspace,
+                    actor,
+                    prompt_sha256,
+                    process_sha256,
+                    PROCESS_SEAL_SHA256,
+                    general_anchor,
+                )
+
+    def test_sa_lease_recheck_rejects_changed_input_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            relative = "R1-comprehensive-review.md"
+            target = workspace / relative
+            target.write_text("before\n", encoding="utf-8")
+            commitment = MODULE.actor_input_commitment(
+                workspace, "SA-R1", [relative]
+            )
+            binding = {
+                "workspace": workspace,
+                "actor": "SA-R1",
+                "opened": [relative],
+                "validator": object(),
+                "prelaunch_tree": {"closed": True},
+                "input_commitment_sha256": commitment,
+            }
+            target.write_text("after\n", encoding="utf-8")
+            with mock.patch.object(
+                MODULE, "closed_view_snapshot", return_value={"closed": True}
+            ), self.assertRaisesRegex(
+                MODULE.ContractError, "commitment changed before process creation"
+            ):
+                MODULE.verify_actor_input_leases(binding)
+
+    def test_sa_postflight_rejects_changed_input_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            process_path = workspace / "00-process-parameters.json"
+            report_path = workspace / "R1-comprehensive-review.md"
+            process_path.write_text("{}\n", encoding="utf-8")
+            report_path.write_text("before\n", encoding="utf-8")
+            process_identity = MODULE.file_identity(process_path)
+            commitment = MODULE.actor_input_commitment(
+                workspace, "SA-R1", [report_path.name]
+            )
+            binding = {
+                "workspace": workspace,
+                "run_root": workspace,
+                "actor": "SA-R1",
+                "opened": [report_path.name],
+                "outputs": [],
+                "validator": object(),
+                "process_identity": process_identity,
+                "input_commitment_sha256": commitment,
+                "expected_process_sha256": PROCESS_SHA256,
+                "expected_seal_sha256": PROCESS_SEAL_SHA256,
+            }
+            report_path.write_text("after\n", encoding="utf-8")
+            with self.assertRaisesRegex(
+                MODULE.ContractError, "input commitment changed across launch"
+            ):
+                MODULE.postflight_actor_workspace_binding(binding)
+
     @unittest.skipUnless(os.name == "nt", "deny-write lease is Windows-specific")
     def test_windows_input_lease_blocks_swap_or_overwrite(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

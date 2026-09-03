@@ -1826,7 +1826,15 @@ def _execute_prepare_actor(
             argparse.Namespace(round_root=round_root, view_root=view_root, target=actor[3:])
         )
         opened = list(staged["opened"])
-        commitment = manager.input_commitment(view_root, opened)
+        # SA promotion and the semantic prompt verifier intentionally use a
+        # stronger, SA-specific commitment envelope (schema + view root +
+        # relative paths + file identities).  The general Stage-O commitment
+        # serializes a different record shape, so using it here produces a
+        # different digest for identical bytes and makes every real SA phase
+        # fail before launch.
+        commitment = semantic.capture_opened_input_commitment(view_root, opened)[
+            "sha256"
+        ]
         outputs = _actor_outputs(process, actor, manager, semantic)
     elif actor in {"C", "S"}:
         staged = manager.command_stage_clean(

@@ -524,6 +524,73 @@ class StageORunnerLedgerTests(unittest.TestCase):
 
 
 class StageORunnerCommandTests(unittest.TestCase):
+    def test_sa_prepare_uses_semantic_input_commitment_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            state = bootstrapped()
+            state["config"]["round_root"] = str(base / "run" / "round")
+            state["config"]["views_root"] = str(base / "run" / "views")
+            Path(state["config"]["views_root"]).mkdir(parents=True)
+            actor = "SA-R1"
+            launch_root = base / "control" / actor / str(uuid.uuid4())
+            allocation = {
+                "outputs_absent": True,
+                "launch_id": str(uuid.uuid4()),
+                "jsonl_path": str(launch_root / "actor.jsonl"),
+                "stderr_path": str(launch_root / "actor.stderr"),
+                "launch_record_path": str(launch_root / "launch-record.json"),
+                "scratch_dir": str(base / "scratch" / actor),
+            }
+            stored = state["config"]["prompt_plans"][actor]
+            opened = ["00-process-parameters.json", "R1-comprehensive-review.md"]
+            semantic_commitment = digest("semantic-sa-input")
+            manager = mock.Mock()
+            manager.command_stage_sa.return_value = {"opened": opened}
+            manager.input_commitment.return_value = digest("general-input")
+            semantic = mock.Mock()
+            semantic.capture_opened_input_commitment.return_value = {
+                "sha256": semantic_commitment
+            }
+
+            def load_module(filename: str, _module_name: str):
+                if filename == "manage_stage_o_workspace.py":
+                    return manager
+                if filename == "build_semantic_acceptance_prompt.py":
+                    return semantic
+                raise AssertionError(filename)
+
+            with mock.patch.object(
+                MODULE, "_load_module", side_effect=load_module
+            ), mock.patch.object(
+                MODULE, "_process_from_state", return_value={}
+            ), mock.patch.object(
+                MODULE, "_assert_outputs_absent"
+            ), mock.patch.object(
+                MODULE, "_read_plan_again", return_value=(stored, {})
+            ), mock.patch.object(
+                MODULE, "_actor_outputs", return_value=["acceptance.json"]
+            ), mock.patch.object(
+                MODULE,
+                "_verify_prepared_prompt",
+                return_value={"prompt_sha256": stored["prompt_sha256"]},
+            ) as verify:
+                result = MODULE._execute_prepare_actor(state, actor, allocation)
+
+            self.assertEqual(
+                result["input_commitment_sha256"], semantic_commitment
+            )
+            semantic.capture_opened_input_commitment.assert_called_once_with(
+                Path(state["config"]["views_root"]) / actor, opened
+            )
+            manager.input_commitment.assert_not_called()
+            verify.assert_called_once_with(
+                state,
+                actor,
+                Path(state["config"]["views_root"]) / actor,
+                Path(allocation["scratch_dir"]),
+                semantic_commitment,
+            )
+
     def test_only_reviewer_actors_receive_search_capability(self) -> None:
         for actor in MODULE.actor_sequence("doctorate"):
             self.assertEqual(
