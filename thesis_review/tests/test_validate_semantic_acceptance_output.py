@@ -1357,6 +1357,30 @@ class ValidateSemanticAcceptanceOutputTests(unittest.TestCase):
                 errors,
             )
 
+    def test_template_diversity_rejects_repetition_across_hundreds_of_rows(self) -> None:
+        repeated = (
+            "Independent semantic validation checks the permitted evidence and "
+            "confirms the same generic bounded support relation."
+        )
+        templated_rows = [
+            {
+                "TargetUnitID": f"C{index:04d}-S01",
+                "TargetUnitType": "citation-pair",
+                "SemanticBasis": f"{repeated} C{index:04d}-S01.",
+            }
+            for index in range(300)
+        ]
+        templated_errors: list[str] = []
+        MODULE.validate_template_diversity(templated_rows, templated_errors)
+        self.assertEqual(12, MODULE.template_cluster_threshold(len(templated_rows)))
+        self.assertTrue(
+            any(
+                "repeated identity-stripped SemanticBasis" in error
+                for error in templated_errors
+            ),
+            templated_errors,
+        )
+
     def test_unit_type_is_bound_to_its_authoritative_target_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

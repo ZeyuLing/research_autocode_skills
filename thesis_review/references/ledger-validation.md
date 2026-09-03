@@ -467,10 +467,20 @@ object with the exact ordered keys `gate_disposition_profile`,
 `coherence_result`; each value exactly equals the validator's canonical JSON
 projection string for the frozen report.
 After URL, hash, IDs, numbers, and whitespace are normalized, the same basis may
-not be copied across twelve or more units of one type. This mechanical alarm is
-only a minimum: a smaller repeated template, title interpolation, a generic
-“checked and supported” assertion, or the target actor's own rationale copied
-without independent comparison remains a semantic acceptance failure.
+not be copied across twelve or more rows in the complete CSV, including across
+unit types or working-batch boundaries. Required canonical JSON keys, marker
+values, and exact target bindings may repeat; actor-authored evidence, search,
+comparison, and reasoning text may not be replaced by a shared narrative frame.
+IDs, pages, URLs, quoted titles, hashes, numbers, and a rotating synonym/token
+bank do not create row-specific reasoning. The acceptor first re-checks each
+exact unit and its permitted evidence, then writes the actual proposition or
+visible content, source/record/status or concrete access limitation, relevant
+counter-evidence or boundary, and independent disposition reason. It runs the
+scoped validator only after the complete row universe is present. This
+mechanical alarm is only a minimum: a smaller repeated template, title
+interpolation, a generic “checked and supported” assertion, padding with unique
+tokens, or the target actor's own rationale copied without independent
+comparison remains a semantic acceptance failure.
 
 Each Markdown acceptance binds its exact target-artifact list and hashes, CSV
 row count, failure count, prompt hash, PDF start/end hash, fresh-context

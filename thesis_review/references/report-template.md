@@ -601,6 +601,24 @@ identity-only source match, or copied target rationale is a failure.
 Neither `EvidenceAnchor` nor `SemanticBasis` may assign a grade, direct the
 Chair or defense decision, or create/add/invent a thesis finding.
 
+For a large acceptance CSV, the actor may work in bounded in-memory batches but
+must complete the canonical row universe before running the scoped validator.
+Every non-projection row begins from a fresh check of that exact unit: capture its actual
+proposition or visible content, exact page/source/record/status or concrete
+access limitation, relevant counter-evidence or boundary where applicable, and independent
+disposition reason. Required JSON keys, marker values, and exact target bindings
+may repeat. Narrative evidence/reasoning may not reuse a sentence frame while
+changing only an ID, page, URL, quoted title, hash, number, or rotating token
+bank—even across batches—because those identity slots are normalized before
+the complete CSV is checked for repeated signatures, long shingles, residual
+skeletons, and fuzzy near-duplicate clusters. Citation-pair prose states the
+occurrence-specific proposition and source-support boundary; page prose states
+distinctive rendered facts and any relevant neighboring-page relationship;
+bibliography prose retains the closed cues but makes the comparison specific to
+that record and field. A verdict row uses the exact required closed projection
+without added narrative prose. Padding with unique tokens is not independent
+reasoning.
+
 The acceptance threshold is reasonable support and admissibility, not personal
 concurrence. A row may pass when the acceptor would choose a different
 severity, weight, emphasis, or final recommendation, so long as the target

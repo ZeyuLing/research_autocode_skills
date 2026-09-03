@@ -40,7 +40,7 @@ ACCEPTANCE_DIRECTORY = "06-semantic-acceptance"
 TARGET_RE = re.compile(r"(?:R[1-5]|AI)\Z")
 HEX64_RE = re.compile(r"[0-9A-Fa-f]{64}\Z")
 CONTROL_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}\Z")
-PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v5"
+PROMPT_SCHEMA = "thesis-review-semantic-acceptance-prompt-v6"
 VERIFICATION_SCHEMA = "thesis-review-semantic-acceptance-verification-v3"
 PROMOTION_SCHEMA = "thesis-review-semantic-acceptance-promotion-v3"
 INPUT_COMMITMENT_SCHEMA = "thesis-review-semantic-acceptance-inputs-v1"
@@ -1307,6 +1307,13 @@ Follow the staged thesis-review skill and its governing references. Perform only
 Acceptance standard:
 Judge reasonable support and admissibility, not concurrence. A target conclusion remains admissible when concrete permitted evidence supports it and its inference and requested action are proportionate, even if you would assign a different severity, weight, emphasis, or final recommendation. Such a reasonable scholarly disagreement is not by itself a failure. Fail a unit only when it lacks reasonable permitted-evidence support, exceeds that evidence, omits decisive counter-evidence, is internally inconsistent, or cannot be checked within the closed authority. Never rewrite an honest semantic judgment merely to obtain PASS.
 
+Large-row SemanticBasis discipline:
+Build the complete CSV in canonical target-unit order. You may construct it incrementally within the two authorized outputs, but a partial batch is invalid and the scoped validator is run only after every required row is present. Before drafting each row, re-check that exact target unit and its permitted evidence, then form a unit-specific fact capsule: the actual proposition or visible content, the exact page/source/record/status or concrete access limitation, relevant counter-evidence or boundary where applicable, and the independent reason for this disposition. Write the capsule only into the two authorized outputs; do not create a notes or batch file.
+
+Required canonical JSON keys, marker values, and exact target bindings must remain exact and may repeat. Actor-authored evidence, search, comparison, and reasoning text must instead follow the facts of the individual unit. For a citation pair, state the occurrence-specific proposition in substantive prose, the source-stated claim and locator (or the exact source-specific access/content limitation), its support boundary or counter-evidence, and why that target disposition is reasonably supportable. For a page, state distinctive visible content and the actual numbering, float attachment, clipping, blank-page, or neighbor-page relationship checked. For a bibliography field, preserve the mandatory rendered/authority/verdict cues, then give the record-and-field-specific comparison and consequence; do not reuse one field-level stock sentence across references. For actor-authored report and AI units other than closed-projection verdict rows, name the concrete PDF evidence, counter-evidence, and search resolution appropriate to that unit. A verdict row uses only its required closed canonical projection and adds no narrative prose.
+
+Never copy a narrative sentence frame and substitute only an ID, page, URL, title, quoted text, hash, number, or rotating synonym/token bank, including across batch boundaries. The validator normalizes those identity slots and examines the complete CSV: in a large file, any 12-row identity-stripped, repeated-shingle, singleton-stripped, or fuzzy near-duplicate cluster fails. This is a semantic safeguard, not a word-variation exercise. Do not pad rows with unique tokens. If the scoped validator identifies a mechanical schema or diversity error attributable to your own SA pair, re-check the named rows against their actual evidence, correct only your two outputs, preserve every honest pass/fail judgment, and rerun. If the error is attributable to a frozen input, stop without editing it.
+
 Private SA view root:
 {view_root}
 
@@ -1328,7 +1335,7 @@ Use exactly this environment override:
 {environment_json}
 The bound executable is the same canonical file identity as the Python interpreter that planned and verified this prompt. The `-B` argument and `PYTHONDONTWRITEBYTECODE=1` override are mandatory. Before freezing, execute exactly that argument vector with that environment override; do not substitute `python`, `py`, a WindowsApps alias, another executable, or a changed runtime.
 
-The scoped command has two admissible completed outcomes. `PASS` with exit 0 means the pair is mechanically valid and every target unit is semantically admissible; freeze the private pair for Stage-O promotion. `VALID-FAIL` with exit 3 means the pair is mechanically valid but contains at least one honest semantic failure; freeze and preserve that private pair for Stage O to hash-verify and quarantine the entire retry, and do not revise it to seek PASS. Any other output/exit combination is a mechanical or staged-input failure: stop without modifying any target artifact. A `VALID-FAIL` pair must never be promoted or used to materialize the semantic-acceptance gate. Leave no __pycache__ directory or .pyc file.
+The scoped command has two admissible completed outcomes. `PASS` with exit 0 means the pair is mechanically valid and every target unit is semantically admissible; freeze the private pair for Stage-O promotion. `VALID-FAIL` with exit 3 means the pair is mechanically valid but contains at least one honest semantic failure; freeze and preserve that private pair for Stage O to hash-verify and quarantine the entire retry, and do not revise it to seek PASS. Any other output/exit combination is a mechanical or staged-input failure: repair and rerun only when the diagnostic is attributable to your own two SA outputs; otherwise stop. Never modify a frozen target artifact or other input. A `VALID-FAIL` pair must never be promoted or used to materialize the semantic-acceptance gate. Leave no __pycache__ directory or .pyc file.
 """
     return text.replace("\r\n", "\n").encode("utf-8")
 

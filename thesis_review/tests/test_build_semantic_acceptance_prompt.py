@@ -16,6 +16,7 @@ from pathlib import Path
 
 SKILL_ROOT = Path(__file__).resolve().parents[1]
 HELPER_PATH = SKILL_ROOT / "scripts" / "build_semantic_acceptance_prompt.py"
+STAGE_O_RUNNER_PATH = SKILL_ROOT / "scripts" / "stage_o_runner.py"
 ACTOR_CONTRACT_PATH = SKILL_ROOT / "scripts" / "actor_prompt_contract.py"
 VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_semantic_acceptance_output.py"
 SHARED_VALIDATOR_PATH = SKILL_ROOT / "scripts" / "validate_review_bundle.py"
@@ -465,6 +466,53 @@ class BuildSemanticAcceptancePromptTests(unittest.TestCase):
                     self.assertIn(
                         "Never rewrite an honest semantic judgment merely to obtain PASS.",
                         prompt,
+                    )
+                    self.assertIn(
+                        "Prompt schema: thesis-review-semantic-acceptance-prompt-v6",
+                        prompt,
+                    )
+                    self.assertIn("Large-row SemanticBasis discipline:", prompt)
+                    self.assertIn(
+                        "Build the complete CSV in canonical target-unit order",
+                        prompt,
+                    )
+                    self.assertIn("a partial batch is invalid", prompt)
+                    self.assertIn(
+                        "Required canonical JSON keys, marker values, and exact target bindings must remain exact and may repeat",
+                        prompt,
+                    )
+                    self.assertIn("including across batch boundaries", prompt)
+                    self.assertIn(
+                        "any 12-row identity-stripped, repeated-shingle, singleton-stripped, or fuzzy near-duplicate cluster fails",
+                        prompt,
+                    )
+                    self.assertIn("For a citation pair", prompt)
+                    self.assertIn("For a page", prompt)
+                    self.assertIn("For a bibliography field", prompt)
+                    self.assertIn(
+                        "A verdict row uses only its required closed canonical projection",
+                        prompt,
+                    )
+                    self.assertIn("Do not pad rows with unique tokens", prompt)
+                    self.assertIn(
+                        "preserve every honest pass/fail judgment, and rerun",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "repair and rerun only when the diagnostic is attributable to your own two SA outputs",
+                        prompt,
+                    )
+                    self.assertIn(
+                        "Never modify a frozen target artifact or other input",
+                        prompt,
+                    )
+                    self.assertNotIn(
+                        "failure: stop without modifying any target artifact",
+                        prompt,
+                    )
+                    self.assertIn(
+                        f'SEMANTIC_PROMPT_SCHEMA = "{HELPER.PROMPT_SCHEMA}"',
+                        STAGE_O_RUNNER_PATH.read_text(encoding="utf-8"),
                     )
                     self.assertIn(
                         "`VALID-FAIL` with exit 3",
