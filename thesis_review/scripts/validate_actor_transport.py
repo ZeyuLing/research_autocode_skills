@@ -1039,54 +1039,100 @@ def _completed_nonempty_agent_message(event: dict[str, Any]) -> bool:
     return isinstance(text, str) and bool(text.strip()) and not failure_evidence(event)
 
 
+def _successful_recovery_progress(event: dict[str, Any]) -> bool:
+    """Recognize one non-error event proving that the turn resumed."""
+
+    if failure_evidence(event):
+        return False
+    if event.get("type") not in {"item.started", "item.updated", "item.completed"}:
+        return False
+    item = event.get("item")
+    return isinstance(item, dict) and item.get("type") != "error"
+
+
 def recoverable_transport_error_indices(
     events: Sequence[dict[str, Any]], turn_started_index: int, turn_completed_index: int
 ) -> frozenset[int]:
-    """Recognize one closed WebSocket retry sequence with proven recovery."""
+    """Recognize every closed WebSocket retry sequence with proven recovery.
 
+    Codex can recover more than once in a long turn, and a direct recovery can
+    resume before exhausting ``n/n`` retries.  A partial direct sequence is
+    accepted only when it starts at attempt 1, advances consecutively with one
+    stable total/reason, is followed immediately by a non-error item event,
+    and the turn later emits a non-empty completed agent message.  A fallback
+    sequence may begin after an unlogged earlier attempt, but must reach the
+    declared final attempt and be followed by the exact HTTPS fallback event.
+    Any malformed or unproven sequence remains ordinary failure evidence.
+    """
+
+    recoverable: set[int] = set()
+    last_agent_message_index = max(
+        (
+            index
+            for index in range(turn_started_index + 1, turn_completed_index)
+            if _completed_nonempty_agent_message(events[index])
+        ),
+        default=-1,
+    )
     cursor = turn_started_index + 1
-    while cursor < turn_completed_index and _recoverable_reconnect(events[cursor]) is None:
-        cursor += 1
-    reconnect_indices: list[int] = []
-    attempts: list[int] = []
-    total_attempts: int | None = None
-    reconnect_reason: str | None = None
+    retry_run_count = 0
     while cursor < turn_completed_index:
-        reconnect = _recoverable_reconnect(events[cursor])
-        if reconnect is None:
-            break
-        attempt, total, reason = reconnect
-        if total_attempts is None:
-            total_attempts = total
-            reconnect_reason = reason
-        if total != total_attempts or reason != reconnect_reason:
-            return frozenset()
-        reconnect_indices.append(cursor)
-        attempts.append(attempt)
-        cursor += 1
+        first = _recoverable_reconnect(events[cursor])
+        if first is None:
+            cursor += 1
+            continue
 
-    if not reconnect_indices or total_attempts is None:
-        return frozenset()
-    if attempts != list(range(attempts[0], attempts[0] + len(attempts))):
-        return frozenset()
-    if attempts[-1] != total_attempts:
-        return frozenset()
-    if cursor >= turn_completed_index:
-        return frozenset()
-    if _completed_nonempty_agent_message(events[cursor]):
-        return frozenset(reconnect_indices)
-    if not _recoverable_fallback(events[cursor]):
-        return frozenset()
-    fallback_index = cursor
+        is_first_retry_run = retry_run_count == 0
+        retry_run_count += 1
+        reconnect_indices: list[int] = []
+        attempts: list[int] = []
+        total_attempts = first[1]
+        reconnect_reason = first[2]
+        consistent = True
+        while cursor < turn_completed_index:
+            reconnect = _recoverable_reconnect(events[cursor])
+            if reconnect is None:
+                break
+            attempt, total, reason = reconnect
+            if total != total_attempts or reason != reconnect_reason:
+                consistent = False
+            reconnect_indices.append(cursor)
+            attempts.append(attempt)
+            cursor += 1
 
-    post_fallback_agent_message = False
-    for event in events[fallback_index + 1 : turn_completed_index]:
-        if _completed_nonempty_agent_message(event):
-            post_fallback_agent_message = True
-            break
-    if not post_fallback_agent_message:
-        return frozenset()
-    return frozenset([*reconnect_indices, fallback_index])
+        consecutive = attempts == list(
+            range(attempts[0], attempts[0] + len(attempts))
+        )
+        later_agent_message = last_agent_message_index >= cursor
+        if (
+            consistent
+            and consecutive
+            and cursor < turn_completed_index
+            and _recoverable_fallback(events[cursor])
+        ):
+            if (
+                attempts[-1] == total_attempts
+                and (attempts[0] == 1 or is_first_retry_run)
+                and later_agent_message
+            ):
+                recoverable.update(reconnect_indices)
+                recoverable.add(cursor)
+            cursor += 1
+            continue
+
+        if (
+            consistent
+            and consecutive
+            and attempts[0] == 1
+            and cursor < turn_completed_index
+            and _successful_recovery_progress(events[cursor])
+            and later_agent_message
+        ):
+            recoverable.update(reconnect_indices)
+        # Re-evaluate the recovery/progress boundary on the next iteration so
+        # a later, independent retry sequence can still be classified.
+
+    return frozenset(recoverable)
 
 
 def _first_executable(segment: str, *, dialect: str) -> tuple[str, str]:

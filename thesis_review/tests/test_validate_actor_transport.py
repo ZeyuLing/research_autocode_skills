@@ -373,6 +373,135 @@ class ValidateActorTransportTests(unittest.TestCase):
             self.assertEqual(5, result["recoverable_transport_error_events"])
             self.assertEqual(0, result["exit_code"])
 
+    def test_multiple_sequences_and_partial_direct_file_change_recovery_pass(self) -> None:
+        reason = (
+            "stream disconnected before completion: Transport error: "
+            "network error: error decoding response body"
+        )
+        for attempts, expected_events, expected_recoverable in (
+            ([1], 12, 6),
+            ([1, 2], 13, 7),
+        ):
+            with self.subTest(attempts=attempts), tempfile.TemporaryDirectory() as directory:
+                events = exact_recoverable_smoke_events()
+                retries = [
+                    {
+                        "type": "error",
+                        "message": f"Reconnecting... {attempt}/5 ({reason})",
+                    }
+                    for attempt in attempts
+                ]
+                file_change = {
+                    "id": "item_recovered",
+                    "type": "file_change",
+                    "changes": [{"path": "audit.csv", "kind": "update"}],
+                }
+                events[-2:-2] = [
+                    *retries,
+                    {
+                        "type": "item.started",
+                        "item": {**file_change, "status": "in_progress"},
+                    },
+                    {
+                        "type": "item.completed",
+                        "item": {**file_change, "status": "completed"},
+                    },
+                ]
+                fixture = Fixture(Path(directory), events)
+                result = fixture.validate()
+                self.assertEqual(expected_events, result["events"])
+                self.assertEqual(
+                    expected_recoverable,
+                    result["recoverable_transport_error_events"],
+                )
+                self.assertEqual(0, result["exit_code"])
+
+    def test_partial_direct_recovery_must_start_at_attempt_one(self) -> None:
+        events = clean_events("01a061dc-9061-7eb0-ac70-941d9df2cf07")
+        events[3:3] = [
+            {"type": "error", "message": "Reconnecting... 2/5 (request timed out)"},
+            command_event("python -V", item_id="item_recovered"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
+
+    def test_split_retry_cannot_hide_late_missing_prefix_behind_fallback(self) -> None:
+        events = exact_recoverable_smoke_events()
+        events[-2:-2] = [
+            {"type": "error", "message": "Reconnecting... 1/5 (connection reset)"},
+            {"type": "error", "message": "Reconnecting... 2/5 (connection reset)"},
+            command_event("python -V", item_id="item_gap"),
+            {"type": "error", "message": "Reconnecting... 3/5 (connection reset)"},
+            {"type": "error", "message": "Reconnecting... 4/5 (connection reset)"},
+            {"type": "error", "message": "Reconnecting... 5/5 (connection reset)"},
+            {
+                "type": "item.completed",
+                "item": {
+                    "id": "item_late_fallback",
+                    "type": "error",
+                    "message": (
+                        "Falling back from WebSockets to HTTPS transport. "
+                        "connection reset"
+                    ),
+                },
+            },
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
+
+    def test_valid_first_recovery_does_not_excuse_later_malformed_run(self) -> None:
+        cases = {
+            "gap": [
+                "Reconnecting... 1/5 (connection reset)",
+                "Reconnecting... 3/5 (connection reset)",
+            ],
+            "duplicate": [
+                "Reconnecting... 1/5 (connection reset)",
+                "Reconnecting... 1/5 (connection reset)",
+            ],
+            "reason change": [
+                "Reconnecting... 1/5 (connection reset)",
+                "Reconnecting... 2/5 (request timed out)",
+            ],
+            "total change": [
+                "Reconnecting... 1/5 (connection reset)",
+                "Reconnecting... 2/4 (connection reset)",
+            ],
+        }
+        for label, messages in cases.items():
+            with self.subTest(label=label), tempfile.TemporaryDirectory() as directory:
+                events = exact_recoverable_smoke_events()
+                events[-2:-2] = [
+                    *({"type": "error", "message": message} for message in messages),
+                    command_event("python -V", item_id="item_after_malformed"),
+                ]
+                fixture = Fixture(Path(directory), events)
+                with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                    fixture.validate()
+
+    def test_fallback_before_declared_final_attempt_is_rejected(self) -> None:
+        events = exact_recoverable_smoke_events()
+        del events[5]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
+
+    def test_recovery_requires_later_not_merely_earlier_agent_message(self) -> None:
+        events = clean_events("01a061dc-9061-7eb0-ac70-941d9df2cf07")
+        events[-1:-1] = [
+            {"type": "error", "message": "Reconnecting... 1/5 (request timed out)"},
+            command_event("python -V", item_id="item_recovered"),
+        ]
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Fixture(Path(directory), events)
+            with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
+                fixture.validate()
+
     def test_direct_recovery_rejects_gap_duplicate_or_reason_change(self) -> None:
         replacements = {
             "gap": "Reconnecting... 4/5 (request timed out)",
@@ -408,7 +537,7 @@ class ValidateActorTransportTests(unittest.TestCase):
             with self.assertRaisesRegex(MODULE.TransportError, "failure/error"):
                 fixture.validate()
 
-    def test_direct_recovery_requires_immediate_nonempty_agent_message(self) -> None:
+    def test_direct_recovery_requires_immediate_progress_and_later_agent_message(self) -> None:
         variants: list[tuple[str, list[object]]] = []
 
         empty = exact_direct_recovery_events()
