@@ -2,6 +2,20 @@
 
 # PaperJury
 
+## Conference review update (0.6)
+
+Default mock review now verifies live venue rules, runs independent whole-paper
+reviewers with diverse research/career backgrounds and individual scores, then
+delegates the final decision to a fresh meta reviewer. Inputs are a frozen
+PDF-only packet: no author chat, old reviews, code or orchestrator verdict.
+See [the current entry point](SKILL.md) and
+[conference review protocol](references/conference-review.md).
+The courtroom workflows documented below are retained only as opt-in hardening,
+not the default conference-review path.
+
+Validation: `node --test tests/*.test.js` and
+`python -m unittest discover -s tests -p test_conference_packet.py`.
+
 > A pre-submission AI review stress-test for research papers.
 
 <p align="center">

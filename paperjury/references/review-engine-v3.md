@@ -1,5 +1,11 @@
 # Review engine v3 -- the orchestration protocol (BUILT)
 
+> Legacy opt-in courtroom hardening only. Default conference REVIEW uses
+> `conference-review.md`: independent scored full-paper reviews and a fresh
+> meta reviewer. The clerk/local jury below cannot replace that meta reviewer.
+> Inherit the host model unless the user chooses another; historical model
+> names below are not runtime requirements.
+
 The courtroom per-issue adjudication engine, v3 (design rationale:
 `docs/REVIEW_ENGINE_V3_DESIGN.md`). This is the OPERATIONAL protocol: how the
 ORCHESTRATOR (the main session, driven across turns by `/goal` in auto) sequences
