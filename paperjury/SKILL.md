@@ -71,8 +71,11 @@ role prompts, and validates outputs. It does not generate reviews or start agent
 use the host's real fresh-agent mechanism. See `--help`.
 
 Each reviewer may read only exact packet inputs and their own output directory.
-The meta reviewer additionally receives the raw current-round reviews. A prompt
-allowlist is not an OS sandbox; state the actual isolation used. Restart a
+The meta reviewer additionally receives the raw current-round reviews.
+Host-required generic skill/tool instructions are a process-only exception;
+record their use separately and never treat them as scientific paper evidence.
+This exception does not include project guides, memory, source, or author notes.
+An input allowlist is not an OS sandbox; state the actual isolation used. Restart a
 contaminated role cleanly rather than asking it to forget leaked context. If
 independent agents are unavailable, report the limitation; do not simulate their
 independence inside one conversation.
