@@ -2,12 +2,17 @@
 
 # PaperJury
 
-## 会议审稿模式更新（0.6）
+## 独立评分更新（0.7）
 
 默认审稿先实时核对会议规则，再由背景和资历不同的独立审稿人阅读全文、
 各自打分，最后交给全新上下文的 meta reviewer 给出最终分数和意见。
 输入仅含冻结 PDF、正文/附录/图表和会议规则，不含作者会话、旧审稿、代码
-或主代理的判断。参见 [当前入口](SKILL.md) 与
+或主代理的判断。审稿人卡片现在明确研究经历、贡献与证据偏好、对范围和
+不确定性的判断，以及平衡自身偏好的条件；在审稿前冻结，每人只看自己的卡片。
+每人先完成不含分数的评议，再在独立一轮中拿到数字评分标准。分数必须绑定
+此前冻结的论据，并解释为什么相邻档位不如当前档位合适。面板诊断区分同分
+和理由复写：允许证据支持的真实一致，不强制分歧、不为拉开分数反复重跑。
+参见 [当前入口](SKILL.md) 与
 [会议审稿协议](references/conference-review.md)。下文法庭式流程仅保留为
 显式选择的逐问题强化模式，不再代替会议式审稿。
 
@@ -108,7 +113,9 @@ git clone https://github.com/u7079256/paperjury "$env:USERPROFILE\.claude\skills
 ### Review（偶尔）
 
 - **触发方式：** 用户想给论文挑问题、做审查：review / critique / 审稿 / 评审 / mock-review，或迭代草稿、逐一解决评审者提出的问题。
-- **行为：** 启动对抗式评审引擎（`references/review-engine-v3.md`）。
+- **行为：** 独立阅读全文，先形成评议、再定分，由全新 meta reviewer 汇总
+  （`references/conference-review.md`）。法庭式逐问题强化仅在显式选择时使用
+  `references/review-engine-v3.md`。
 - **范围子触发：** `full`（整篇）或 `passage`（某一节 / 段落 / claim）。
 
 ### Auto（自动迭代）
@@ -189,7 +196,9 @@ git clone https://github.com/u7079256/paperjury "$env:USERPROFILE\.claude\skills
 
 ### Reviewer
 
-panel 是 N 个领域专家 holistic reviewer（默认 3 个，范围 2-4），运行时按论文 subfield 分配，共享一个资深 reviewer gatekeeper 内核：严苛、精确、建设性；把致命缺陷与可修补小问题分开；能跨 section 推理。当某个 reviewer slot 无法确认（headless）时，该 slot 退回通用 gatekeeper（一个坏 slot 不拖垮整个 panel）；通用回退 lens 为：
+以下仅描述显式选择的旧法庭式逐问题强化流程。默认带分数的会议审稿使用上文的私有背景卡片和两阶段流程，不共享 gatekeeper 内核，也不继承作者侧记忆。
+
+旧法庭式 panel 是 N 个领域专家 holistic reviewer（默认 3 个，范围 2-4），运行时按论文 subfield 分配，共享一个资深 reviewer gatekeeper 内核：严苛、精确、建设性；把致命缺陷与可修补小问题分开；能跨 section 推理。当某个 reviewer slot 无法确认（headless）时，该 slot 退回通用 gatekeeper（一个坏 slot 不拖垮整个 panel）；通用回退 lens 为：
 
 - **Theory / Foundations**：定义、证明缺口、记号、不变性 / 最优性 / 一般性 claim。
 - **Empirical / Benchmark**：baseline 公平性 / 新旧、metric 正确性、数据集划分、方差、ablation 覆盖、cherry-picking。

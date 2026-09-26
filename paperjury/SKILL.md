@@ -2,12 +2,12 @@
 name: paperjury
 description: >-
   Review CS-conference papers using current venue rules, independent whole-paper
-  reviewers with varied backgrounds and individual scores, and a fresh meta
+  reviewers with distinct research priorities, evidence-first individual scores, and a fresh meta
   reviewer who owns the final recommendation. Also supports author-requested
   LaTeX edits and explicitly authorized review-revise workflows.
 license: MIT
 metadata:
-  version: 0.6.0
+  version: 0.7.0
   author: Yiran Wang
 ---
 
@@ -42,22 +42,34 @@ Read [conference-review.md](references/conference-review.md) and
    figures, tables and references, plus faithful text/renders and venue rules.
    Exclude source comments, code, chat, prior reviews, ledgers, private experiment
    explanations and title suggestions. Do not read old reviews before this round.
-3. **Diverse holistic reviewers.** Default to three plausible backgrounds with
-   different career stages and research experience. Every reviewer reads the
-   whole paper and assesses every venue criterion. Expertise is a tendency, not
-   a fence. Announce the panel; do not pause unless a material choice is missing.
-4. **Independent full reviews and scores.** Start fresh agents with no inherited
-   chat, e.g. `fork_context:false`. Give each the same packet, rules and only
-   their persona. Each provides strengths, weaknesses, questions, venue-required
-   dimension scores, overall recommendation and confidence. No target score,
-   forced disagreement, issue quota or parent-supplied concerns.
+3. **Freeze substantive reviewer differences.** Before any reviews, choose three
+   plausible backgrounds and write `panel.json` using
+   [reviewer-personas.md](references/reviewer-personas.md). Different research
+   experience should lead to different contribution/evidence priorities and
+   scope/uncertainty judgments, with a counterweight to each lens. Career titles
+   alone are insufficient. Every role still evaluates the whole paper on every
+   venue criterion. Freeze profile hashes in the packet; each sees only its own
+   profile. Never assign desired ratings, strict/lenient roles or score ranges.
+4. **Independent evidence, then scores.** Start fresh agents with no inherited
+   chat (on this host, `fork_turns="none"`; use the host's actual equivalent).
+   `assessment-prompt` gives each the paper, substantive venue criteria and its
+   profile, without the numeric rating menu. Each writes an unscored assessment.
+   After validating it, send `score-prompt` to that same reviewer with the full
+   rubric. The score pass binds the assessment hash and preserves its findings;
+   it explains decisive evidence, tradeoffs, adjacent rating choices and
+   confidence. Keep peers, author context and parent-supplied concerns excluded
+   throughout. No issue quota, forced spread or score-target reruns.
 5. **Integrity checks.** Check hashes, allowed scores, required fields, paper
    anchors and honest coverage. Return incomplete delivery to its reviewer with
-   the whole paper available. Do not replace their judgment with parent analysis.
+   the whole paper available. Run `audit-panel` after all reviews are sealed.
+   Equal scores are valid; inspect duplicated reasoning and actual context
+   leakage, not a desired variance. Do not replace their judgment with parent analysis.
 6. **Fresh meta reviewer.** A separate new agent receives the same full paper,
    rules and complete unedited reviews. No parent summary, chat, author answers,
    old scores or ledger. They alone synthesize disagreements, final verdict,
-   final score and priorities; no mechanical average. If the real venue has no
+   final score and priorities; no mechanical average. Compare decisive reasons
+   even when ratings match: numerical agreement need not mean evidential
+   agreement. If the real venue has no
    numeric meta score, label this number a simulation summary on the stated scale.
 7. **Relay, do not take over.** Present individual scores and the meta review,
    attributed to its author, with full reports. The parent handles transport and

@@ -1,9 +1,17 @@
 # paperjury — agent guide (install, invocation, and the technical model)
 
+> Routing update, 0.7: default REVIEW is the evidence-first independent conference
+> protocol in [SKILL.md](../SKILL.md) and
+> [conference-review.md](../references/conference-review.md). Freeze substantive
+> reviewer cards, collect unscored assessments, then ask those same isolated roles
+> for evidence-bound ratings. The courtroom engine described below is legacy
+> opt-in hardening/AUTO documentation, not the default scoring workflow.
+> In a routing conflict, the current SKILL.md takes precedence over this guide.
+
 > Audience: a coding agent (e.g. Claude Code) that has been asked to install or use
 > paperjury / paperjury. This document is optimized for **unambiguous machine
-> parsing**, not for human readability. It is the authoritative "how to drive this skill"
-> reference. If a statement here conflicts with marketing copy in `README.md`, this file
+> parsing**, not for human readability. It is the legacy courtroom operating
+> reference. For explicitly requested courtroom workflows, if a statement here conflicts with marketing copy, this file
 > and the files it cites win. Source-of-truth files are cited inline; read them when you
 > need the full contract.
 

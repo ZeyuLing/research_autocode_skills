@@ -2,6 +2,20 @@
 
 All notable changes to PaperJury are documented in this file.
 
+## [0.7.0] - 2026-09-26
+
+- Freeze substantive reviewer profiles before a round; job titles alone no
+  longer satisfy panel diversity. Keep cards private to their assigned roles.
+- Add an unscored evidence pass followed by rubric-based scoring in the same
+  isolated reviewer context. Bind assessments by hash and preserve their findings.
+- Require scores to cite decisive factors and explain adjacent allowed choices
+  and confidence, without assigning desired ratings or reviewer strictness.
+- Add panel diagnostics that distinguish identical numbers from copied reasoning;
+  equal scores remain valid and never cause variance-targeted reruns.
+- Clarify default conference versus legacy courtroom routing in guides/workflows.
+- New packet preparation requires `--panel`; old packets remain readable through
+  the legacy `reviewer-prompt` path.
+
 ## [0.5.0] - 2026-06-05
 
 ### Added

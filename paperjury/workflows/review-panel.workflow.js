@@ -1,4 +1,6 @@
 // review-panel.workflow.js  -- the fan-out engine for the paperjury skill.
+// LEGACY OPT-IN ONLY: produces adversarial issue lists, not independent ratings.
+// Default scored REVIEW uses references/conference-review.md and conference_packet.py.
 //
 // Under ultracode this runs the STRONG form: loop-until-dry panels with
 // adversarial verification. With ultracode off, pass {maxRounds:1, verify:false}
@@ -276,7 +278,7 @@ return { issues, refuted: refutedLog, dropped_no_criterion: droppedNoCriterion, 
 
 // NOTE: this single-pass panel is the QUICK-CHECK path. The courtroom engine
 // (per-issue charge -> screen -> trial -> three-way routing -> recall) is now BUILT
-// and is the default for review mode: see references/review-engine-v3.md and the
+// for explicitly requested courtroom hardening: see references/review-engine-v3.md and the
 // workflows/{reading-check,coverage-auditor,trial,polish,recall-audit,drafter}.workflow.js.
 // DISCUSSION-PHASE VARIANT (separate run, after the author gives direction):
 // pass args = { contested: [ { persona, ownReport, authorResponseSlice, issueIds } ] }

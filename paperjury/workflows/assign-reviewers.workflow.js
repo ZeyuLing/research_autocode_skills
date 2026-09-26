@@ -1,4 +1,6 @@
 // assign-reviewers.workflow.js -- v3 reviewer ASSIGNMENT (review-engine-v3.md §3.1).
+// LEGACY OPT-IN ONLY: this shared gatekeeper core is not the default conference
+// panel. Scored REVIEW uses conference_packet.py and frozen private role cards.
 // A program chair assigns reviewers whose expertise matches the paper's subfields; v3
 // mirrors that. One agent reads the whole paper, names the N most relevant subfields,
 // and writes a template-constrained DOMAIN OVERLAY per slot; the persona_prompt =

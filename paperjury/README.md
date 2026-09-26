@@ -2,12 +2,20 @@
 
 # PaperJury
 
-## Conference review update (0.6)
+## Independent scoring update (0.7)
 
 Default mock review now verifies live venue rules, runs independent whole-paper
 reviewers with diverse research/career backgrounds and individual scores, then
 delegates the final decision to a fresh meta reviewer. Inputs are a frozen
 PDF-only packet: no author chat, old reviews, code or orchestrator verdict.
+Reviewer cards now specify research experience, contribution/evidence priorities,
+scope and uncertainty judgments, and a counterweight to each perspective. They
+are frozen before the review, and each reviewer sees only their own card.
+Reviewers first write an unscored assessment, then receive the numeric rubric in
+a separate turn. The score must cite the sealed findings and explain why the
+neighboring rating labels fit less well. Panel diagnostics report identical
+ratings and copied reasoning separately: genuine agreement remains valid and
+never triggers forced disagreement or score-target reruns.
 See [the current entry point](SKILL.md) and
 [conference review protocol](references/conference-review.md).
 The courtroom workflows documented below are retained only as opt-in hardening,
@@ -113,7 +121,9 @@ Most writing tools only push your paper forward: they draft and they polish. Non
 ### Review (occasional)
 
 - **Trigger:** ask for the paper to be critiqued or hardened: review / critique / 审稿 / 评审 / mock-review, or iterating a draft to clear reviewer-raised issues.
-- **Behavior:** runs the courtroom review engine (`references/review-engine-v3.md`).
+- **Behavior:** runs independent evidence-first full-paper reviews and a fresh
+  meta review (`references/conference-review.md`). Courtroom hardening uses
+  `references/review-engine-v3.md` only when explicitly requested.
 - **Scope sub-trigger:** `full` (whole paper) or `passage` (one section / paragraph / claim).
 
 ### Auto (unattended)
@@ -184,7 +194,11 @@ Also present: `review-panel.workflow.js`: a quick simple 3-lens panel (fast path
 
 ---
 
-## The three primitives: Skill + Workflow + Memory
+## Legacy courtroom architecture: Skill + Workflow + Memory
+
+This section describes opt-in issue hardening. Default scored reviews use the
+private profiles and two-pass protocol above; they do not share the gatekeeper
+core or inherit author-side memory.
 
 1. **Skill (entry point + methodology):** the protocol, the reviewer assignment, the consensus gate, the writing toolkit, the human gates. Detail in `references/review-engine-v3.md`, `references/reviewer-personas.md`, `references/writing-toolkit.md`.
 
