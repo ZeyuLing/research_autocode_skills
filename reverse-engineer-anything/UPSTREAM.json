@@ -1,0 +1,10 @@
+{
+  "repository": "https://github.com/morluto/rea",
+  "revision": "988494abdbb27fb91ca6bd80362c9f1a332f86c3",
+  "path": ".agents/skills/reverse-engineer-anything",
+  "package": "rea-agents",
+  "package_version": "6.5.0",
+  "skill_version": "42",
+  "license": "MIT",
+  "vendored_on": "2026-10-17"
+}

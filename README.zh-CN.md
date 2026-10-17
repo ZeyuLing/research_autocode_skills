@@ -254,6 +254,7 @@ Copy-Item -Recurse -Force ai-literature-survey (Join-Path $skillRoot 'ai-literat
 | [autorun](autorun/) | 使用 SQLite 状态和验收评审调度、执行 TODO 队列 |
 | [full-auto](full-auto/) | 对边界明确的任务执行规划、实现、自检和修复 |
 | [generate-docs](generate-docs/) | 增量生成分层项目文档 |
+| [reverse-engineer-anything](reverse-engineer-anything/) | REA 逆向工程：基于证据分析二进制、JavaScript/Electron 应用、软件包与运行行为 |
 | [pua](pua/) | 提供 Agent 主动性、失败恢复和多语言压力模式 |
 
 训练和推理不绑定固定集群。工具应先检查当前环境；只有用户明确提供并授权外部计算后端时，才可以使用。

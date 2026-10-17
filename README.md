@@ -244,6 +244,7 @@ Inside an `idea2paper` run, its `imagegen`-only figure contract takes precedence
 | [autorun](autorun/) | Schedule and execute TODO queues with SQLite state and acceptance review |
 | [full-auto](full-auto/) | Run a bounded task through planning, execution, self-review, and repair |
 | [generate-docs](generate-docs/) | Generate incremental, layered project documentation |
+| [reverse-engineer-anything](reverse-engineer-anything/) | REA workflows for evidence-backed reverse engineering of binaries, JavaScript/Electron apps, packages, and runtime behavior |
 | [pua](pua/) | Add high-agency behavior, failure recovery, and multilingual pressure modes |
 
 Training and inference are not bound to a fixed cluster. These tools should inspect the current environment and use an external compute backend only when the user has explicitly provided and authorized it.
