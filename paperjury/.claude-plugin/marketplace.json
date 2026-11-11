@@ -9,7 +9,7 @@
       "name": "paperjury",
       "source": "./",
       "description": "Independent whole-paper CS-conference mock reviews with evidence-first individual ratings and a fresh meta review; author-requested LaTeX edits and opt-in courtroom hardening.",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "author": {
         "name": "Yiran Wang"
       },

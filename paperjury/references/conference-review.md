@@ -91,7 +91,7 @@ No default borderline recommendation or formula averaging dimension scores.
 
 Keep the unscored and scored passes private until every reviewer has sealed
 their score. The host may validate finished roles while others work, but must not
-transmit an early verdict to another role. Record actual model/context isolation
+transmit an early verdict to another role. Use different evidence-gathering routes inside the profiles: for example tracing a claim, mapping a contribution, or reconstructing a comparison. All still read the whole paper. Record actual model/context isolation
 when available; prompt-level input restrictions do not establish an OS sandbox.
 All roles using one model may still share systematic biases.
 
@@ -123,22 +123,27 @@ not prove contamination. A known contaminated context must be replaced cleanly.
 Never force a minimum score spread, random perturbation, or acceptance/rejection
 quota. Do not keep selecting panels until the ratings look diverse.
 
-## Meta review
+## Meta review: paper-first, then peers
 
-Use `meta-prompt PACKET OUTPUT PROMPT_FILE REVIEW1 REVIEW2 REVIEW3`; launch a separate fresh
-agent. Supply every complete raw review and the same paper/rules, not a deduplicated
-parent summary. No author conversation, prior scores, ledger or synthetic rebuttal.
+For new packets with `meta_protocol: paper-first-v1`, run
+`meta-initial-prompt PACKET OUTPUT PROMPT_FILE` and start a fresh agent with only
+that prompt and its allowlisted paper/rules. The reviewer writes
+`OUTPUT/initial_assessment.json`. Run `validate-initial PACKET INITIAL_JSON`;
+record its digest before revealing peers. An initial file alone cannot prove
+review-blind timing: record the actual tool/agent sequence in the round log.
 
-They deliver an independent assessment, agreements/disagreements, evidence-based
-adjudication, final recommendation, final score and ordered priorities. If no
-official meta score exists, identify the requested number as a simulation summary.
-Meta admission rejects duplicated identities and any missing roster member.
-Run `validate-meta PACKET META_JSON` before delivery to check final score/label,
-official-versus-simulation status, round/rules identity, roster and paper anchors.
-Return malformed output to the same meta reviewer without rewriting its decision.
-No arithmetic average decides acceptance. Preserve uncertainty and unresolved
-disagreements. The meta reviewer may ask reviewers questions, but the parent
-must not answer from private context.
+Then generate `meta-prompt PACKET OUTPUT PROMPT_FILE REVIEW1 REVIEW2 REVIEW3
+--initial INITIAL_JSON` and send it to the **same** meta agent. The helper admits
+exactly the roster, validates inputs, and embeds all raw reviews plus the saved
+baseline. Do not send parent summaries, overlap diagnostics, chat or rebuttals.
+
+The meta reviewer independently adjudicates arguments, explicitly reports what
+changed from the baseline, and makes a justified recommendation. Same-model
+agreement is not independent confirmation. Do not mechanically average scores.
+Run `validate-meta PACKET META_JSON --initial INITIAL_JSON`; this verifies the
+baseline digest and update explanation in addition to existing checks. Return
+malformed output to the same role without steering its decision. Keep original
+baseline unchanged. Packets without this meta protocol retain their original API; create a new packet for a new round instead of rewriting archived manifests.
 
 ## Delivery
 

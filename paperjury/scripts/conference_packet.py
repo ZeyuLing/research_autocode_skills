@@ -75,6 +75,8 @@ def validate_rules(spec):
                 "form_status", "meta_score"):
         if not spec.get(key):
             raise ValueError(f"Rules missing {key}")
+    if not isinstance(spec["score_fields"], dict) or "rating" not in spec["score_fields"]:
+        raise ValueError("Rules must declare score_fields.rating")
     if spec["form_status"] not in ("verified_current", "historical_fallback", "unverified"):
         raise ValueError("Unknown form verification status")
     if not isinstance(spec["meta_score"].get("official"), bool):
@@ -133,7 +135,7 @@ def prepare(pdf, rules, out, reviewers=None, panel=None):
     if len(list((out / "renders").glob("*.png"))) != len(pages):
         raise ValueError("PDF text/render page counts differ")
     manifest = {"round_id": str(uuid.uuid4()), "reviewer_roster": reviewers,
-                "review_protocol": PROTOCOL, "reviewer_profile_sha256": profile_hashes,
+                "meta_protocol": "paper-first-v1", "review_protocol": PROTOCOL, "reviewer_profile_sha256": profile_hashes,
                 "page_count": len(pages), "paper_sha256": digest(out / "paper.pdf"),
                 "rules_sha256": digest(out / "rules.json"),
                 "files": {str(p.relative_to(out)).replace("\\", "/"): digest(p)
@@ -280,6 +282,9 @@ direction; include only factors that matter. For an omission, anchor the relevan
 claim or described protocol instead of fabricating a quote for nonexistent text.
 Use explicit 'none' in genuinely empty strengths/weaknesses/questions fields.
 Give concise findings and supporting explanations, not a private reasoning trace.
+Record execution={{model: actual model identifier if known else "unknown",
+context: "fresh", tools_used: [actual tools], access_limitations: []}}.
+Follow the investigation route in your evidence_lens, then cover all criteria.
 Stop after the unscored assessment; the host will validate and freeze it before
 sending the rating instructions to you. Do not read any other review.
 """
@@ -542,18 +547,68 @@ def audit_panel(packet, reviews):
     return {"valid": True, "reviewer_ids": [report["reviewer_id"] for report in documents],
             "rating_counts": dict(counts), "all_ratings_equal": len(counts) == 1,
             "exact_reasoning_matches": duplicates,
+            "execution": {d["reviewer_id"]: d.get("execution", {"model": "unknown"}) for d in documents},
             "interpretation": "Equal ratings are valid. Exact text matches warrant access/provenance inspection, not automatic rejection or rescoring. This is not a test of statistical independence or human-like variance.",
             "next_action": "Preserve the sealed reviews; have the meta reviewer compare decisive evidence and tradeoffs. Never rerun merely to change score dispersion."}
 
 
-def meta_prompt(packet, output, reviews, prompt_file=None):
+def meta_initial_prompt(packet, output, prompt_file=None):
+    validate_output_paths(packet, output, prompt_file)
+    return common_prompt(packet) + f"""
+You are a NEW independent meta reviewer, in the paper-only phase. No peer reviews
+or scores are supplied yet. Read the whole paper and save your independent
+assessment to {Path(output).resolve().as_posix()}/initial_assessment.json.
+JSON fields: paper_sha256, round_id, rules_sha256, coverage, evidence (same audit
+schemas as below), assessment (your substantive assessment), decisive_questions,
+tentative_rating (an allowed rating value), rating_reason.
+coverage={{pages_read:[all pages], sections:[names], figures_tables_inspected:[IDs], limitations:[]}}
+evidence=[{{page:integer, quote:short exact PDF text quote}}].
+Treat this as a provisional baseline, not a position to defend. Do not inspect
+peer reviews or other outputs. Tell the parent when the baseline is ready and
+wait for the second-phase prompt. You must not edit this saved baseline later.
+"""
+
+
+def validate_initial(packet, report):
+    packet, manifest, rules = packet_info(packet)
+    data = read_json(report)
+    if not isinstance(data, dict):
+        return ["initial assessment must be an object"]
+    errors = audit_fields(packet, manifest, data)
+    for key in ("assessment", "decisive_questions", "rating_reason"):
+        if not nonempty(data.get(key)):
+            errors.append(f"missing initial assessment field: {key}")
+    score = data.get("tentative_rating")
+    if isinstance(score, bool) or score not in rules["score_fields"]["rating"]["allowed"]:
+        errors.append("invalid tentative rating")
+    return errors
+
+
+def meta_prompt(packet, output, reviews, prompt_file=None, initial=None):
     validate_output_paths(packet, output, prompt_file)
     _, manifest, _ = packet_info(packet)
+    if manifest.get("meta_protocol") == "paper-first-v1" and initial is None:
+        raise ValueError("Run paper-only meta phase and supply --initial before revealing reviews")
+    if initial is not None:
+        if Path(initial).resolve().is_relative_to(Path(packet).resolve()):
+            raise ValueError("Initial assessment must be outside the frozen packet")
+        errors = validate_initial(packet, initial)
+        if errors:
+            raise ValueError(f"Invalid initial assessment: {errors}")
     panel_documents(packet, reviews)
     output = Path(output).resolve().as_posix()
     text = common_prompt(packet)
+    if initial is not None:
+        text += ("\nContinue as the SAME meta reviewer who wrote this paper-only baseline. "
+                 "Preserve it unchanged. Peer evidence may change your mind; explain which "
+                 "arguments do so. Agreement among same-model reviewers is correlated "
+                 "evidence, not independent confirmation. Include initial_assessment_sha256 "
+                 "and assessment_update (what changed or why unchanged) in your final JSON.\n"
+                 + "Baseline SHA256: " + digest(initial) + "\n"
+                 + "--- SAVED PAPER-ONLY BASELINE ---\n"
+                 + Path(initial).read_text(encoding="utf-8-sig") + "\n")
     text += f"""
-You are a NEW independent META REVIEWER / area-chair simulation, not a panel
+You are the independent META REVIEWER / area-chair simulation, not a panel
 reviewer or the parent conversation. Your only additional inputs are the complete
 raw reviews below. The parent has supplied no scientific summary or verdict.
 Independently read the full paper and the reviews, check their evidence, resolve
@@ -590,7 +645,7 @@ COMPLETE UNEDITED REVIEW JSON DOCUMENTS FOLLOW:
     return text
 
 
-def validate_meta(packet, report):
+def validate_meta(packet, report, initial=None):
     packet, manifest, rules = packet_info(packet)
     data = read_json(report)
     if not isinstance(data, dict):
@@ -608,6 +663,15 @@ def validate_meta(packet, report):
     expected = "official" if rules["meta_score"]["official"] else "simulation_summary"
     if data.get("score_status") != expected:
         errors.append("incorrect official/simulation meta score designation")
+    if manifest.get("meta_protocol") == "paper-first-v1":
+        if initial is None:
+            errors.append("initial assessment required to validate meta provenance")
+        else:
+            errors.extend(validate_initial(packet, initial))
+            if data.get("initial_assessment_sha256") != digest(initial):
+                errors.append("initial assessment hash mismatch")
+        if not nonempty(data.get("assessment_update")):
+            errors.append("missing assessment_update")
     ids = data.get("reviewer_ids", [])
     if (not isinstance(ids, list) or any(not isinstance(item, str) or not item.strip() for item in ids)
             or len(ids) != len(set(ids)) or set(ids) != set(manifest["reviewer_roster"])):
@@ -641,13 +705,21 @@ def main():
     p = sub.add_parser("validate-review")
     p.add_argument("packet")
     p.add_argument("report")
+    p = sub.add_parser("meta-initial-prompt")
+    for arg in ("packet", "output", "prompt_file"):
+        p.add_argument(arg)
+    p = sub.add_parser("validate-initial")
+    p.add_argument("packet")
+    p.add_argument("report")
     p = sub.add_parser("validate-meta")
     p.add_argument("packet")
     p.add_argument("report")
+    p.add_argument("--initial")
     p = sub.add_parser("meta-prompt")
     for arg in ("packet", "output", "prompt_file"):
         p.add_argument(arg)
     p.add_argument("reviews", nargs="+")
+    p.add_argument("--initial")
     a = parser.parse_args()
     if a.command == "prepare":
         print(json.dumps(prepare(a.pdf, a.rules, a.out, a.reviewers, a.panel), indent=2))
@@ -670,11 +742,18 @@ def main():
         errors = validate_review(a.packet, a.report)
         print(json.dumps({"valid": not errors, "errors": errors}, indent=2))
         raise SystemExit(bool(errors))
+    elif a.command == "meta-initial-prompt":
+        write(a.prompt_file, meta_initial_prompt(a.packet, a.output, a.prompt_file))
+        print(a.prompt_file)
+    elif a.command == "validate-initial":
+        errors = validate_initial(a.packet, a.report)
+        print(json.dumps({"valid": not errors, "errors": errors}, indent=2))
+        raise SystemExit(bool(errors))
     elif a.command == "meta-prompt":
-        write(a.prompt_file, meta_prompt(a.packet, a.output, a.reviews, a.prompt_file))
+        write(a.prompt_file, meta_prompt(a.packet, a.output, a.reviews, a.prompt_file, a.initial))
         print(a.prompt_file)
     elif a.command == "validate-meta":
-        errors = validate_meta(a.packet, a.report)
+        errors = validate_meta(a.packet, a.report, a.initial)
         print(json.dumps({"valid": not errors, "errors": errors}, indent=2))
         raise SystemExit(bool(errors))
 

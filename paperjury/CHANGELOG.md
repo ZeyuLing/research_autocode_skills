@@ -2,6 +2,15 @@
 
 All notable changes to PaperJury are documented in this file.
 
+## [0.8.0] - 2026-11-11
+
+- Preserve 0.7's frozen private profiles and hash-bound unscored/scored reviewer passes.
+- Require new rounds to save a paper-only meta assessment before peer opinions;
+  validate its digest and explain changes in the final meta assessment.
+- Record actual execution provenance and evidence-gathering routes without
+  forcing score dispersion. Reject a missing rating contract during preparation.
+- Preserve archived packet validation and add meta-phase regression tests.
+
 ## [0.7.0] - 2026-09-26
 
 - Freeze substantive reviewer profiles before a round; job titles alone no

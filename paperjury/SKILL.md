@@ -7,7 +7,7 @@ description: >-
   LaTeX edits and explicitly authorized review-revise workflows.
 license: MIT
 metadata:
-  version: 0.7.0
+  version: 0.8.0
   author: Yiran Wang
 ---
 
@@ -64,8 +64,10 @@ Read [conference-review.md](references/conference-review.md) and
    the whole paper available. Run `audit-panel` after all reviews are sealed.
    Equal scores are valid; inspect duplicated reasoning and actual context
    leakage, not a desired variance. Do not replace their judgment with parent analysis.
-6. **Fresh meta reviewer.** A separate new agent receives the same full paper,
-   rules and complete unedited reviews. No parent summary, chat, author answers,
+6. **Paper-first meta reviewer.** A separate new agent first receives only the
+   paper and rules and saves an independent baseline. Validate and hash it before
+   giving that same agent complete unedited reviews. Preserve the baseline and
+   explain what changed or why judgment stayed unchanged. No parent summary, chat, author answers,
    old scores or ledger. They alone synthesize disagreements, final verdict,
    final score and priorities; no mechanical average. Compare decisive reasons
    even when ratings match: numerical agreement need not mean evidential

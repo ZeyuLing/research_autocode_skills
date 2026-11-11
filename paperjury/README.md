@@ -2,6 +2,13 @@
 
 # PaperJury
 
+## PaperJury 0.8.0
+
+Retains evidence-first two-pass reviewers and adds a paper-only meta baseline
+before peer reviews. New meta commands: `meta-initial-prompt`, `validate-initial`,
+then `meta-prompt --initial` / `validate-meta --initial`. See the
+[protocol](references/conference-review.md). Equal scores remain valid.
+
 ## Independent scoring update (0.7)
 
 Default mock review now verifies live venue rules, runs independent whole-paper

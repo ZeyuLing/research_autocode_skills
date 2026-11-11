@@ -42,6 +42,56 @@ class PacketTests(unittest.TestCase):
         p.write(self.path, json.dumps(self.review))
         return p.validate_review(self.root, self.path)
 
+    def enable_meta_baseline(self):
+        manifest = p.read_json(self.root / "manifest.json")
+        manifest["meta_protocol"] = "paper-first-v1"
+        p.write(self.root / "manifest.json", json.dumps(manifest))
+        initial = {k: self.review[k] for k in ("paper_sha256", "round_id", "rules_sha256", "coverage", "evidence")}
+        initial.update(assessment="Independent assessment", decisive_questions="None",
+                       tentative_rating=6, rating_reason="Paper evidence")
+        path = self.root.parent / "initial.json"
+        p.write(path, json.dumps(initial))
+        return path
+
+    def test_meta_baseline_gate_and_complete_raw_reviews(self):
+        initial = self.enable_meta_baseline()
+        self.check()
+        with self.assertRaisesRegex(ValueError, "paper-only"):
+            p.meta_prompt(self.root, self.root.parent / "meta", [self.path])
+        text = p.meta_prompt(self.root, self.root.parent / "meta", [self.path], initial=initial)
+        self.assertIn(self.path.read_text(), text)
+        self.assertIn(p.digest(initial), text)
+        before = p.meta_initial_prompt(self.root, self.root.parent / "meta")
+        self.assertNotIn(self.path.read_text(), before)
+        self.assertEqual(p.validate_initial(self.root, initial), [])
+
+    def test_wrong_round_baseline_rejected(self):
+        initial = self.enable_meta_baseline();self.check()
+        data = p.read_json(initial);data["round_id"] = "old"
+        p.write(initial, json.dumps(data))
+        with self.assertRaisesRegex(ValueError, "identity mismatch"):
+            p.meta_prompt(self.root, self.root.parent / "meta", [self.path], initial=initial)
+
+    def test_final_meta_binds_unchanged_baseline(self):
+        initial = self.enable_meta_baseline()
+        meta = {k: self.review[k] for k in ("paper_sha256", "round_id", "rules_sha256", "coverage", "evidence")}
+        meta.update(final_rating=6, rating_label="Label 6", reviewer_ids=["R1"], score_status="simulation_summary",
+                    initial_assessment_sha256=p.digest(initial), assessment_update="Unchanged with reasons")
+        for key in ("decision", "decisive_reasons", "agreements", "disagreements", "reviewer_assessment",
+                    "ordered_priorities", "uncertainties", "meta_review_zh"):
+            meta[key] = "Declared content"
+        path = self.root.parent / "meta.json";p.write(path, json.dumps(meta))
+        self.assertEqual(p.validate_meta(self.root, path, initial), [])
+        self.assertTrue(p.validate_meta(self.root, path))
+        data = p.read_json(initial);data["assessment"] = "changed after peers"
+        p.write(initial, json.dumps(data))
+        self.assertIn("initial assessment hash mismatch", p.validate_meta(self.root, path, initial))
+
+    def test_missing_rating_contract_rejected(self):
+        self.rules["score_fields"] = {"confidence": self.rules["score_fields"]["rating"]}
+        with self.assertRaisesRegex(ValueError, "score_fields.rating"):
+            p.validate_rules(self.rules)
+
     def test_valid(self):
         self.assertEqual(self.check(), [])
 

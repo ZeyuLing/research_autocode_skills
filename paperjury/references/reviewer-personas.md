@@ -65,8 +65,11 @@ until a spread appears. Genuine agreement is an acceptable outcome.
 
 ## Meta reviewer
 
-A separate fresh agent, not the parent and not a panel reviewer, reads the whole
-packet and every raw review. They decide which arguments matter, check whether
+A separate fresh agent first reads the full packet without peer reviews and
+writes `initial_assessment.json`. Validate and hash it before providing that same
+agent every complete raw review. Preserve the baseline and explicitly explain
+any change in the final judgment. A baseline is not a position to defend.
+Same-model agreement is correlated evidence, not independent confirmation. They decide which arguments matter, check whether
 concerns are supported or answered elsewhere, and explain disagreements. Neither
 reviewer confidence nor numerical majority substitutes for evidence.
 
